@@ -17,6 +17,7 @@ Choose *More info* › *Run anyway*. The SHA-256 of the setup file is listed bel
 - Poster hover tilt stuttered when the pointer moved slowly; it now eases every frame.
 
 ### New
+- **New app icon:** the shelf of spines inside a vault dial, on the taskbar, desktop shortcut, setup wizard and in the app.
 - **Black Out** button in the player (and the B key): black out your other monitors while watching, or leave them
   on. Remembered between sessions.
 - **Insights** opens in its own window instead of a panel above the catalog.

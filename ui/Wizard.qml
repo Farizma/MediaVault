@@ -46,8 +46,7 @@ Rectangle {
 
                 RowLayout {
                     spacing: 14
-                    Rectangle { width: 44; height: 44; radius: 13; color: Theme.blue
-                        Text { anchors.centerIn: parent; text: "MV"; color: Theme.onBlue; font.pixelSize: 15; font.weight: Font.ExtraBold } }
+                    Image { Layout.preferredWidth: 44; Layout.preferredHeight: 44; source: "brand/icon-128.png"; sourceSize: Qt.size(88, 88); smooth: true; mipmap: true }
                     ColumnLayout {
                         Layout.fillWidth: true
                         spacing: 2

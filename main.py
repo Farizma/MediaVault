@@ -285,6 +285,8 @@ def main() -> int:
     from PySide6.QtWidgets import QApplication, QMessageBox
 
     qapp = QApplication(sys.argv[:1])
+    from PySide6.QtGui import QIcon
+    qapp.setWindowIcon(QIcon(str(Path(__file__).resolve().parent / "ui" / "brand" / "icon-256.png")))  # taskbar, title bars
     qapp.setApplicationName("Media Vault")
 
     def send_to_primary() -> bool:

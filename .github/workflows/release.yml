@@ -29,14 +29,19 @@ jobs:
         run: |
           $v = (Select-String -Path version.py -Pattern '^VERSION = "(.+)"').Matches[0].Groups[1].Value
           "version=$v" >> $env:GITHUB_OUTPUT
-          gh release view "v$v" --repo $env:GITHUB_REPOSITORY *> $null
+          $published = gh release view "v$v" --repo $env:GITHUB_REPOSITORY --json publishedAt --jq .publishedAt 2>$null
           $exists = $LASTEXITCODE -eq 0
           $global:LASTEXITCODE = 0
-          # a push to main only builds when this version has no release yet; tags and manual runs always build
-          $go = ($env:GITHUB_REF_TYPE -eq "tag") -or ($env:GITHUB_EVENT_NAME -eq "workflow_dispatch") -or (-not $exists)
+          # A push to main builds when this version has no release yet. A release of the same version published less
+          # than a day ago is rebuilt and replaced (a fix landed right after it); an older one is left alone, so
+          # people who installed it are never handed different files under the same version number.
+          $fresh = $exists -and ((Get-Date).ToUniversalTime() - [datetime]::Parse($published).ToUniversalTime()).TotalHours -lt 24
+          $replace = $fresh -and ($env:GITHUB_REF_TYPE -ne "tag")
+          $go = ($env:GITHUB_REF_TYPE -eq "tag") -or ($env:GITHUB_EVENT_NAME -eq "workflow_dispatch") -or (-not $exists) -or $replace
           "build=$($go.ToString().ToLower())" >> $env:GITHUB_OUTPUT
           "exists=$($exists.ToString().ToLower())" >> $env:GITHUB_OUTPUT
-          Write-Host "version $v, release exists: $exists, build: $go"
+          "replace=$($replace.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          Write-Host "version $v, release exists: $exists (published $published), replace: $replace, build: $go"
 
       - uses: actions/setup-python@v5
         if: steps.plan.outputs.build == 'true'
@@ -95,7 +100,7 @@ jobs:
           path: dist/MediaVault_v*_setup.exe
 
       - name: Publish release
-        if: steps.plan.outputs.build == 'true' && (startsWith(github.ref, 'refs/tags/') || steps.plan.outputs.exists == 'false')
+        if: steps.plan.outputs.build == 'true' && (startsWith(github.ref, 'refs/tags/') || steps.plan.outputs.exists == 'false' || steps.plan.outputs.replace == 'true')
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -106,6 +111,11 @@ jobs:
           $notes = (Get-Content RELEASE_NOTES.md -Raw) + "`n`nSHA-256 of MediaVault_v${v}_setup.exe: ``$hash``"
           Set-Content release-notes.txt $notes
           $tag = "v$v"
+          if ("${{ steps.plan.outputs.replace }}" -eq "true") {
+            # same version, rebuilt from this commit: the tag moves here and the release is made again
+            gh release delete $tag --cleanup-tag --yes
+            $global:LASTEXITCODE = 0
+          }
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release upload $tag $setup --clobber

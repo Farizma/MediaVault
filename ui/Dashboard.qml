@@ -728,8 +728,7 @@ Item {
                 spacing: 16
                 Row {
                     spacing: 10
-                    Rectangle { width: 32; height: 32; radius: 10; color: Theme.blue
-                        Text { anchors.centerIn: parent; text: "MV"; color: Theme.onBlue; font.pixelSize: 13; font.weight: Font.ExtraBold } }
+                    Image { width: 32; height: 32; source: "brand/icon-128.png"; sourceSize: Qt.size(64, 64); smooth: true; mipmap: true }
                     Text { anchors.verticalCenter: parent.verticalCenter; text: "Media Vault"; color: "#FFFFFF"; font.pixelSize: 16; font.weight: Font.ExtraBold; font.letterSpacing: -0.3
                         visible: dash.width > 1080 }
                 }

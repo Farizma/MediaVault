@@ -1,6 +1,6 @@
 """Build the Windows EXE, sign it, and wrap it in an installer. Run on Windows:  python build_installer.py
 
-  1. icon.ico   drawn with Pillow if missing
+  1. icon.ico   the committed app icon (ui/brand/icon.svg, rendered at 16-256 px); a fallback is drawn if missing
   2. PyInstaller one-folder build  ->  dist/MediaVault/MediaVault.exe
   3. signing    only if MV_SIGN_SHA1 (certificate thumbprint) or MV_SIGN_PFX + MV_SIGN_PASSWORD is set
   4. installer  Inno Setup (iscc) on installer.iss  ->  dist/MediaVault_v<version>_setup.exe

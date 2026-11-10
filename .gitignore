@@ -4,5 +4,4 @@ build/
 dist/
 *.spec
 bin/
-icon.ico
 release-notes.txt

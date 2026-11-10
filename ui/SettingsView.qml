@@ -823,12 +823,7 @@ Item {
                             id: appCol
                             anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: 14 }
                             spacing: 14
-                            Rectangle {    // the app icon: blue-green square with a play triangle, as in the installer
-                                width: 44; height: 44; radius: 11
-                                gradient: Gradient { orientation: Gradient.Horizontal
-                                    GradientStop { position: 0; color: "#0A7AFF" } GradientStop { position: 1; color: "#30C758" } }
-                                Text { anchors.centerIn: parent; anchors.horizontalCenterOffset: 2; text: "\u25B6"; color: "white"; font.pixelSize: 17 }
-                            }
+                            Image { width: 44; height: 44; source: "brand/icon-128.png"; sourceSize: Qt.size(88, 88); smooth: true; mipmap: true }   // the app icon
                             ColumnLayout {
                                 Layout.fillWidth: true
                                 spacing: 2
