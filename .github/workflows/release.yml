@@ -1,0 +1,87 @@
+# Builds MediaVault_v<version>_setup.exe on Windows and publishes it as a GitHub release.
+# Runs when a tag v<version> is pushed (the tag must match version.py), or by hand from the Actions tab.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows-setup:
+    runs-on: windows-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+
+      - name: Check the tag matches version.py
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: python
+        run: |
+          import os, sys
+          sys.path.insert(0, ".")
+          from version import VERSION
+          tag = os.environ["GITHUB_REF_NAME"].lstrip("v")
+          if tag != VERSION:
+              sys.exit(f"tag v{tag} does not match version.py ({VERSION})")
+
+      - name: Tests
+        run: python -m unittest tests.test_core tests.test_qml_static tests.test_round8 tests.test_round9 tests.test_round10 tests.test_round11 tests.test_release -v
+
+      - name: Install Inno Setup
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+
+      - name: Build EXE and setup
+        run: python build_installer.py
+
+      - name: Smoke test the build
+        shell: pwsh
+        run: |
+          $v = python -c "from version import VERSION; print(VERSION)"
+          $setup = "dist\MediaVault_v${v}_setup.exe"
+          if (-not (Test-Path $setup)) { throw "setup not built: $setup" }
+          if (-not (Test-Path "dist\MediaVault\MediaVault.exe")) { throw "MediaVault.exe not built" }
+          # silent per-user install into a temp folder, then check the files landed, then uninstall
+          $dir = "$env:RUNNER_TEMP\mv-install"
+          Start-Process $setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/CURRENTUSER", "/DIR=`"$dir`"", "/NORESTART" -Wait
+          if (-not (Test-Path "$dir\MediaVault.exe")) { throw "silent install did not put MediaVault.exe in $dir" }
+          Start-Process "$dir\unins000.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES" -Wait
+          Get-FileHash $setup -Algorithm SHA256 | Format-List
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MediaVault-setup
+          path: dist/MediaVault_v*_setup.exe
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = python -c "from version import VERSION; print(VERSION)"
+          $setup = "dist\MediaVault_v${v}_setup.exe"
+          $hash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLower()
+          $notes = (Get-Content RELEASE_NOTES.md -Raw) + "`n`nSHA-256 of MediaVault_v${v}_setup.exe: ``$hash``"
+          Set-Content release-notes.txt $notes
+          gh release view $env:GITHUB_REF_NAME 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:GITHUB_REF_NAME $setup --clobber
+          } else {
+            gh release create $env:GITHUB_REF_NAME $setup --title "Media Vault $v" --notes-file release-notes.txt
+          }

@@ -1,0 +1,6 @@
+"""Media Vault's own version, and where its releases live. The release workflow builds from the tag v<VERSION>."""
+VERSION = "1.0.0"
+REPO = "Farizma/MediaVault"
+RELEASES_API = f"https://api.github.com/repos/{REPO}/releases/latest"
+RELEASES_PAGE = f"https://github.com/{REPO}/releases"
+SETUP_NAME = "MediaVault_v{version}_setup.exe"

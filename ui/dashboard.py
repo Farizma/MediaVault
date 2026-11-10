@@ -1,0 +1,1165 @@
+"""Library models and the `Backend` controller that Dashboard.qml talks to."""
+import logging
+import os
+import random
+import re
+import sys
+import threading
+from pathlib import Path
+
+from PySide6.QtCore import Property, QAbstractListModel, QModelIndex, QObject, Qt, QTimer, Signal, Slot
+
+import database as db
+from utils import backup_manager, health, hw_accelerator, media_probe, scraper, streaming
+from PIL import Image, ImageOps
+
+from . import dvd_box, file_url, pick_folder, pick_image
+
+log = logging.getLogger(__name__)
+BILLBOARD_SIZE = 8  # titles in the recommended carousel
+SETTINGS = {"tmdb_key", "omdb_key", "night_mode", "reduce_motion", "upscale_level", "show_insights", "core", "theme",
+            "custom_accent", "custom_highlight", "auto_credits",
+            "fanart_key", "animated_theme", "detail_order", "group_collections", "discord", "discord_detail", "discord_app_id"}
+
+
+def art_item(card: dict) -> dict:
+    """What a card's box art belongs to: a box set has its own (keyed by collection), everything else its file."""
+    key = card.get("key", "")
+    if key.startswith("set:"):
+        return scraper.collection_item(key[4:], card.get("collection_name") or card["title"])
+    return card
+
+
+def duration_clock(seconds) -> str:
+    s = int(seconds or 0)
+    return f"{s // 3600}:{s % 3600 // 60:02d}:{s % 60:02d}" if s >= 3600 else f"{s // 60}:{s % 60:02d}"
+
+
+def duration_label(seconds) -> str:
+    if not seconds:
+        return ""
+    h, m = divmod(int(seconds) // 60, 60)
+    return f"{h}h {m:02d}m" if h else f"{m}m"
+
+
+_TINTS: dict[str, str] = {}
+
+
+def tint_of(path: str) -> str:
+    """The most vivid strong colour of an image (for animated themes), '#RRGGBB'; '' if unreadable. Cached."""
+    if path in _TINTS:
+        return _TINTS[path]
+    import colorsys
+    try:
+        with Image.open(path) as im:
+            small = im.convert("RGB").resize((48, 48))
+        best, score = None, -1.0
+        for count, rgb in small.quantize(8).convert("RGB").getcolors(64) or []:
+            h, l, sat = colorsys.rgb_to_hls(*(c / 255 for c in rgb))
+            w = count * (sat + 0.05) * (1 - abs(l - 0.5) * 1.6)   # vivid, not too dark or too light
+            if w > score:
+                best, score = rgb, w
+        out = "#%02X%02X%02X" % best if best else ""
+    except Exception:
+        out = ""
+    _TINTS[path] = out
+    return out
+
+
+def conn_has_path(path: str) -> bool:
+    return bool(db.conn().execute("SELECT 1 FROM media_items WHERE file_path=?", (db.norm(path),)).fetchone())
+
+
+def billboard_deck(cards: list[dict], keep: list[str], size: int = BILLBOARD_SIZE) -> dict:
+    """Random picks for the recommended carousel. Unfinished titles first; finished ones only fill a short deck.
+    Titles from `keep` that are still unfinished stay, in order, so a library refresh does not reshuffle."""
+    fresh = [c for c in cards if not c["is_completed"]]
+    by_key = {c["key"]: c for c in fresh}
+    deck = [by_key[k] for k in keep if k in by_key][:size]
+    rest = [c for c in fresh if c["key"] not in {d["key"] for d in deck}]
+    deck += random.sample(rest, min(len(rest), size - len(deck)))
+    if len(deck) < size:  # tab where (almost) everything is watched: still show something
+        done = [c for c in cards if c["is_completed"]]
+        deck += random.sample(done, min(len(done), size - len(deck)))
+    items = []
+    for c in deck:
+        art = next((p for p in (scraper.fanart_path(c), scraper.cover_path(c)) if p.exists()), None)
+        length = f"{c['episodes']} episodes" if c["episodes"] else duration_label(c["duration"])
+        meta = " · ".join(x for x in ((c["release_date"] or "")[:4], c["resolution"], c["codec"],
+                                      c["audio_layout"], length) if x)
+        items.append({"key": c["key"], "title": c["title"], "meta": meta, "synopsis": c["synopsis"] or "",
+                      "art": file_url(art) if art else ""})
+    return {"visible": bool(items), "items": items}
+
+
+CUSTOM_ART = {"front": scraper.custom_front_path, "back": scraper.custom_back_path, "spine": scraper.custom_spine_path,
+              "disc": scraper.custom_disc_path}
+
+
+def save_box_art(img, items: list[dict], face: str) -> None:
+    """Centre-crop to the face's shape (2:3 cover, or a 22:300 spine) and save as the custom art of each item."""
+    size = dvd_box.SPINE_W_H if face == "spine" else (500, 500) if face == "disc" else dvd_box.FRONT_W_H
+    img = ImageOps.exif_transpose(img).convert("RGB")
+    if face == "spine" and img.width > img.height:  # spines are often scanned lying down
+        img = img.rotate(-90, expand=True)
+    img = ImageOps.fit(img, size, Image.Resampling.LANCZOS)
+    for item in filter(None, items):
+        scraper.save_webp(img, CUSTOM_ART[face](item), box=size)
+
+
+# ------------------------------------------------------------------ models
+
+SORTS = [("title", "Title"), ("added", "Recently added"), ("year", "Year"), ("rating", "Your rating"),
+         ("length", "Length"), ("unwatched", "Unwatched first")]
+QUALITIES = [("4k", "4K UHD"), ("1080", "1080p HD"), ("720", "720p"), ("sd", "SD")]
+
+
+def quality_of(resolution: str | None) -> str:
+    """'3840x1606', '1920x800', '2160p' ... -> 4k / 1080 / 720 / sd ("" if unknown). Width decides, so scope films
+    (wide and short) land in the right class."""
+    nums = [int(n) for n in re.findall(r"\d{3,4}", resolution or "")]
+    if not nums:
+        return ""
+    width = nums[0] if "x" in (resolution or "").lower() and len(nums) > 1 else nums[0] * 16 // 9
+    return "4k" if width >= 3200 else "1080" if width >= 1800 else "720" if width >= 1200 else "sd"
+
+
+def library_view(cards: list[dict], index: dict, query: str = "", sort: str = "title", genre: str = "",
+                 quality: str = "", unwatched: bool = False) -> list[dict]:
+    """Search (every word must appear in the title, synopsis, tags, genres, notes, year or format), filter, sort."""
+    words = query.lower().split()
+    out = []
+    for c in cards:
+        info = index.get(c["uuid"], {})
+        if unwatched and c["is_completed"]:
+            continue
+        if genre and genre not in info.get("genres", ()):
+            continue
+        if quality and quality_of(c["resolution"]) != quality:
+            continue
+        if words:
+            hay = " ".join((c["title"], c.get("synopsis") or "", " ".join(info.get("tags", ())), " ".join(info.get("genres", ())),
+                            info.get("note", ""), (c.get("release_date") or "")[:4], c.get("codec") or "", c.get("resolution") or "",
+                            os.path.basename(c["file_path"]))).lower()
+            if not all(w in hay for w in words):
+                continue
+        out.append(c)
+    title = lambda c: c["title"].lower()
+    keys = {
+        "added": lambda c: (c.get("added_at") or "", title(c)),
+        "year": lambda c: ((c.get("release_date") or "")[:4], title(c)),
+        "rating": lambda c: (index.get(c["uuid"], {}).get("rating", 0), title(c)),
+        "length": lambda c: (c["duration"] or 0, title(c)),
+    }
+    if sort in keys:
+        out.sort(key=keys[sort], reverse=True)   # newest, latest, highest, longest first
+    elif sort == "unwatched":
+        out.sort(key=lambda c: (bool(c["is_completed"]), bool(c["last_position"]), title(c)))
+    return out
+
+
+class LibraryModel(QAbstractListModel):
+    """One row per card. QML's GridView only creates delegates for what is on screen and recycles them."""
+    KEY, TITLE, META, POSTER, PROGRESS, DONE, BADGE, VIDEO, DURATION, OFFLINE, SPINE, YEAR, DISC = (Qt.UserRole + i for i in range(1, 14))
+    NAMES = {KEY: b"key", TITLE: b"title", META: b"meta", POSTER: b"poster", PROGRESS: b"progress",
+             DONE: b"done", BADGE: b"badge", VIDEO: b"videoUrl", DURATION: b"durationMs",
+             OFFLINE: b"offline", SPINE: b"spine", YEAR: b"year", DISC: b"disc"}
+    FIELDS = {KEY: "key", TITLE: "title", META: "meta", POSTER: "poster", PROGRESS: "progress", DONE: "done",
+              BADGE: "badge", VIDEO: "video", DURATION: "duration_ms", OFFLINE: "offline", SPINE: "spine", YEAR: "year",
+              DISC: "disc"}
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._rows: list[dict] = []
+        self.view: dict = {}           # search / sort / filters (Dashboard.setView)
+        self.spines = False            # look up spine art only while the shelf view is on (it costs file checks)
+
+    def roleNames(self):
+        return self.NAMES
+
+    def rowCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(self._rows)
+
+    def data(self, index, role=Qt.DisplayRole):
+        if not index.isValid() or not 0 <= index.row() < len(self._rows):
+            return None
+        field = self.FIELDS.get(role)
+        return self._rows[index.row()][field] if field else None
+
+    def _row(self, card: dict, online: bool) -> dict:
+        art = art_item(card)
+        poster = scraper.cover_path(art)
+        if art is not card and not poster.exists():
+            poster = scraper.cover_path(card)        # box set without its own poster: the first film's
+        shows, films = card["episodes"], card.get("films", 0)
+        if films:
+            progress = card["watched"] / films
+        elif card["last_position"] and card["duration"] and not card["is_completed"]:
+            progress = min(1.0, card["last_position"] / card["duration"])
+        else:
+            progress = card["watched"] / shows if shows else 0.0
+        meta = " · ".join(x for x in ((card["release_date"] or "")[:4], card["resolution"] if not films else "",
+                                      duration_label(card["duration"]) if not (shows or films) else "") if x)
+        spine = scraper.spine_path(art) if (self.spines and online) else None
+        return {"key": card["key"], "title": card["title"], "meta": meta,
+                "poster": file_url(poster) if online and poster.exists() else "", "progress": progress,
+                "done": bool(card["is_completed"]), "badge": f"{shows} episodes" if shows else f"{films} films" if films else "",
+                "video": file_url(card["file_path"], bust=False), "duration_ms": int((card["duration"] or 0) * 1000),
+                "offline": not online, "spine": file_url(spine) if spine else "", "year": (card["release_date"] or "")[:4],
+                "disc": self._disc(art) if online else ""}
+
+    @staticmethod
+    def _disc(card) -> str:
+        """Disc art only (your own or scraped); the card falls back to its poster itself, without more file checks."""
+        for p in (scraper.custom_disc_path(card), scraper.disc_path(card)):
+            if p.exists():
+                return file_url(p)
+        return ""
+
+    def reload(self, dir_id) -> list[dict]:
+        """Refresh the cards (searched, filtered, sorted by `view`). Returns ALL of the tab's cards, unfiltered,
+        so the billboard picks from the whole tab without a second query."""
+        cards = db.list_library(dir_id)
+        online = {d["id"]: os.path.isdir(d["folder_path"]) for d in db.list_directories()}   # one check per folder
+        shown = library_view(cards, db.search_index(), **self.view) if self.view else cards
+        rows = [self._row(c, online.get(c["parent_directory_id"], True)) for c in shown]
+        if [r["key"] for r in rows] == [r["key"] for r in self._rows]:
+            self._rows = rows  # same cards: refresh in place so the grid keeps its scroll position
+            if rows:
+                self.dataChanged.emit(self.index(0), self.index(len(rows) - 1))
+            return cards
+        self.beginResetModel()
+        self._rows = rows
+        self.endResetModel()
+        return cards
+
+
+class TabsModel(QAbstractListModel):
+    ID, NAME = Qt.UserRole + 1, Qt.UserRole + 2
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._rows = [(-1, "All")]
+
+    def roleNames(self):
+        return {self.ID: b"tabId", self.NAME: b"name"}
+
+    def rowCount(self, parent=QModelIndex()):
+        return 0 if parent.isValid() else len(self._rows)
+
+    def data(self, index, role=Qt.DisplayRole):
+        if not index.isValid():
+            return None
+        tab_id, name = self._rows[index.row()]
+        return tab_id if role == self.ID else name if role == self.NAME else None
+
+    def reload(self):
+        self.beginResetModel()
+        self._rows = [(-1, "All")] + [(d["id"], d["tab_name"]) for d in db.list_directories()]
+        self.endResetModel()
+
+
+# ------------------------------------------------------------------ controller
+
+class Dashboard(QObject):
+    """Exposed to QML as `Backend`."""
+    needsSetupChanged = Signal()
+    billboardChanged = Signal()
+    insightsChanged = Signal()
+    insightsVisibleChanged = Signal()
+    libraryChanged = Signal()          # emit from any thread: the UI refreshes on the GUI thread
+    toast = Signal(str)
+    raiseWindow = Signal()
+    thumbnailsReady = Signal(int)
+    boxArtChanged = Signal(str)        # key whose covers changed: the open detail view reloads its textures
+    offlineChanged = Signal()
+    streamChanged = Signal()
+    devicesFound = Signal("QVariantList")
+    folderPicked = Signal(str, str)
+    componentsChecked = Signal("QVariantList")   # Settings > Components, after a check or an update
+    appUpdateProgress = Signal(float)            # 0..1 while the new setup.exe downloads; -1 = failed              # path, suggested tab name
+    matchResults = Signal(str, "QVariantList")   # key, candidates
+    matchFailed = Signal(str, str)               # key, reason
+    matchApplied = Signal(str, str)              # old key, new key (a film can join or leave a box set)
+    _thumbnailsDone = Signal(str, object)
+
+    def __init__(self, app, library: LibraryModel, tabs: TabsModel, frames: dvd_box.FrameProvider, parent=None):
+        super().__init__(parent)
+        self.app, self.library, self.tabs, self.frames = app, library, tabs, frames
+        self._needs_setup = True
+        self._tab = -1
+        self._billboard, self._insights = {"visible": False, "items": []}, {}
+        self._bb_keys: list[str] = []  # the carousel deck; kept across refreshes so it does not reshuffle
+        self._ignored_now: dict[str, set] = {}   # Library health: hidden until Media Vault restarts
+        self._offline: list[str] = []
+        self.stream = streaming.StreamServer()
+        self._devices: list = []
+        self._insights_visible = False
+        self._thumbs: list = []
+        self.libraryChanged.connect(self.reload)
+        self._thumbnailsDone.connect(self._store_thumbnails)
+
+    # -- properties
+    @Property(bool, notify=needsSetupChanged)
+    def needsSetup(self):
+        return self._needs_setup
+
+    @needsSetup.setter
+    def needsSetup(self, value):
+        if value != self._needs_setup:
+            self._needs_setup = value
+            self.needsSetupChanged.emit()
+
+    @Property("QVariantMap", notify=billboardChanged)
+    def billboard(self):
+        return self._billboard
+
+    @Property("QVariantMap", notify=insightsChanged)
+    def insights(self):
+        return self._insights
+
+    @Property("QVariantList", notify=offlineChanged)
+    def offlineFolders(self):
+        """Names of watched folders that cannot be reached right now (drive unplugged, share not mounted)."""
+        return self._offline
+
+    @Property(bool, notify=insightsVisibleChanged)
+    def insightsVisible(self):
+        return self._insights_visible
+
+    @Property(str, constant=True)
+    def deviceInfo(self):
+        h = self.app.engine.hw
+        return f"{h.backend.upper()} core" + (f" ({h.gpus[0]})" if h.gpus else "")
+
+    @Property(bool, constant=True)
+    def rtx(self):
+        return self.app.engine.hw.rtx
+
+    # -- refresh
+    @Slot()
+    def reload(self):
+        if self._needs_setup:
+            return
+        self.tabs.reload()
+        self._refresh_billboard(self.library.reload(None if self._tab < 0 else self._tab))
+        offline = [d["tab_name"] for d in db.list_directories() if not os.path.isdir(d["folder_path"])]
+        if offline != self._offline:
+            self._offline = offline
+            self.offlineChanged.emit()
+        self._refresh_insights()
+
+    @Slot(str, str, str, str, bool)
+    def setView(self, query: str, sort: str, genre: str, quality: str, unwatched: bool):
+        """Search box and filter bar. Billboard and tabs are not affected."""
+        self.library.view = {"query": query[:200], "sort": sort if sort in dict(SORTS) else "title", "genre": genre,
+                             "quality": quality if quality in dict(QUALITIES) else "", "unwatched": bool(unwatched)}
+        self.library.reload(None if self._tab < 0 else self._tab)
+
+    @Slot(bool)
+    def setShelf(self, on: bool):
+        self.library.spines = on
+        self.library.reload(None if self._tab < 0 else self._tab)
+
+    @Slot(result="QVariantMap")
+    def viewOptions(self):
+        """Choices for the filter bar: sorts, qualities, and the genres found in the library."""
+        genres = sorted({g for info in db.search_index().values() for g in info["genres"]}, key=str.lower)
+        return {"sorts": [{"value": v, "label": l} for v, l in SORTS],
+                "qualities": [{"value": "", "label": "Any quality"}] + [{"value": v, "label": l} for v, l in QUALITIES],
+                "genres": [{"value": "", "label": "All genres"}] + [{"value": g, "label": g} for g in genres]}
+
+    @Slot(int)
+    def selectTab(self, tab_id: int):
+        self._tab = tab_id
+        self._bb_keys = []  # new tab, new random picks
+        self._refresh_billboard(self.library.reload(None if tab_id < 0 else tab_id))
+
+    def start(self):
+        self._insights_visible = db.get_setting("show_insights") == "1"
+        self.insightsVisibleChanged.emit()
+        self.needsSetup = False  # switches Main.qml from the wizard to the dashboard
+        self.reload()
+
+    def _refresh_billboard(self, cards: list[dict]):
+        self._billboard = billboard_deck(cards, self._bb_keys)
+        self._bb_keys = [i["key"] for i in self._billboard["items"]]
+        self.billboardChanged.emit()
+
+    def _refresh_insights(self):
+        excluded = db.excluded_tags()
+        data = db.analytics(excluded)
+        h, m = divmod(data["total_minutes"], 60)
+        self._insights = {
+            "total": f"{h}h {m:02d}m",
+            "days": [{"label": d[8:], "minutes": mins} for d, mins in data["days"]],
+            "genres": [{"name": n, "minutes": mins, "rating": r or 0} for n, mins, r in data["genres"]],
+            "tags": [{"name": t, "hidden": t in excluded} for t in db.user_tags()],
+        }
+        self.insightsChanged.emit()
+
+    @Slot()
+    def toggleInsights(self):
+        self._insights_visible = not self._insights_visible
+        db.set_setting("show_insights", "1" if self._insights_visible else "0")
+        self.insightsVisibleChanged.emit()
+
+    @Slot(str)
+    def toggleTag(self, tag: str):
+        now = set(db.excluded_tags())
+        now.symmetric_difference_update({tag})
+        db.set_excluded_tags(now)
+        self._refresh_insights()
+
+    # -- playing
+    def _target(self, key: str) -> dict | None:
+        if key.startswith("show:") or key.startswith("set:"):
+            items = db.episodes_in(key[5:]) if key.startswith("show:") else db.films_in_set(key[4:])
+            return db.next_up(items) if items else None
+        return db.get_media(key)
+
+    def _art_items(self, key: str) -> list[dict]:
+        """Items whose box art a change applies to: the box set itself, else every file of the card."""
+        if key.startswith("set:"):
+            films = db.films_in_set(key[4:])
+            return [scraper.collection_item(key[4:], films[0]["collection_name"] if films else "")]
+        return [i for i in (db.get_media(u) for u in db.uuids_for(key)) if i]
+
+    @Slot(str)
+    def play(self, key: str):
+        item = self._target(key)
+        if item:
+            self.app.play(item["file_path"])
+
+    # -- detail view
+    @Slot(str, result="QVariantMap")
+    def detail(self, key: str):
+        item = self._target(key)
+        if not item:
+            return {}
+        eps = db.episodes_in(key[5:]) if key.startswith("show:") else []
+        films = db.films_in_set(key[4:]) if key.startswith("set:") else []
+        if eps:
+            item = {**item, "title": db.series_title(eps[0]["title"])}
+        art = item
+        if films:
+            name = films[0]["collection_name"] or item["title"]
+            item = {**item, "title": name, "release_date": films[0]["release_date"],
+                    "synopsis": " \u00B7 ".join(f'{f["title"]} ({(f["release_date"] or "")[:4]})' if f["release_date"] else f["title"]
+                                             for f in films)}
+            art = {**scraper.collection_item(key[4:], name), "synopsis": item["synopsis"]}
+        tex = dvd_box.box_textures(art)
+        facts = [{"label": l, "value": v} for l, v in (
+            ("Resolution", item["resolution"]), ("Codec", item["codec"]), ("File type", os.path.splitext(item["file_path"])[1].lower()),
+            ("Audio", item["audio_layout"]),
+            ("Frame rate", f"{item['frame_rate']:g} fps" if item.get("frame_rate") else ""),
+            ("Length", duration_label(item["duration"]))) if v]
+        if films:
+            facts = [{"label": "Films", "value": str(len(films))},
+                     {"label": "Length", "value": duration_label(sum(f["duration"] or 0 for f in films))}]
+        resume = item["last_position"] > 10 and not item["is_completed"]
+        return {
+            "key": key, "isShow": bool(eps), "isSet": bool(films), "kind": "show" if eps or item["media_type"] == "show" else "movie",
+            "canMatch": not films and item["media_type"] != "clip", "title": item["title"], "synopsis": item["synopsis"] or "",
+            "year": (item["release_date"] or "")[:4], "facts": facts, "cover": tex["front"], "back": tex["back"],
+            "customFront": tex["customFront"], "customBack": tex["customBack"],
+            "spine": tex["spine"], "customSpine": tex["customSpine"],
+            "disc": file_url(scraper.disc_art(art)) if scraper.disc_art(art) else "",
+            "customDisc": scraper.custom_disc_path(art).exists(),
+            "rating": db.get_rating(item["uuid"]), "note": db.get_note(item["uuid"]),
+            "tags": [{"name": t, "genre": t.startswith("genre:")} for t in db.tags_for(item["uuid"])
+                     if not t.startswith("rating:")],
+            "playLabel": "Resume" if resume else "Play",
+            "resume": resume and not films,
+            "resumeAt": duration_clock(item["last_position"]) if resume else "",
+            "score": item.get("score") if not films else None,
+            "order": db.detail_order(),
+            "slides": self._slides(key, art, films) if films else [],
+            "cast": [] if films else self._cast(item),
+            "boxSet": ({"key": f"set:{item['collection_id']}", "name": item.get("collection_name") or ""}
+                       if not films and not eps and item.get("collection_id") is not None else {}),
+            "canSet": not films and item["media_type"] == "movie",
+            "episodes": [{"uuid": e["uuid"], "title": e["title"] + (f' ({e["release_date"][:4]})' if films and e["release_date"] else ""),
+                          "done": bool(e["is_completed"]),
+                          "progress": min(1.0, e["last_position"] / e["duration"]) if e["duration"] and not e["is_completed"] else 0}
+                         for e in (eps or films)],
+        }
+
+    # -- fix match: search TMDB by hand, then re-pull details and art for the chosen title
+    @Slot(str, str, str)
+    def searchMatch(self, key: str, query: str, year: str):
+        kind = "show" if key.startswith("show:") else "movie"
+
+        def work():
+            try:
+                self.matchResults.emit(key, scraper.tmdb_search(kind, query.strip(), year.strip(), scraper.api_keys()["tmdb"]))
+            except scraper.ScrapeError as e:
+                self.matchFailed.emit(key, str(e))
+        if query.strip():
+            threading.Thread(target=work, daemon=True, name="match-search").start()
+
+    @Slot(str, int)
+    def applyMatch(self, key: str, tmdb_id: int):
+        threading.Thread(target=self._apply_match, args=(key, tmdb_id), daemon=True, name="match-apply").start()
+
+    def _apply_match(self, key: str, tmdb_id: int):
+        show = key.startswith("show:")
+        items = [i for i in (db.get_media(u) for u in db.uuids_for(key)) if i]
+        if not items:
+            return
+        keys = scraper.api_keys()
+        try:
+            hit = scraper.tmdb_details("show" if show else "movie", tmdb_id, keys["tmdb"])
+        except scraper.ScrapeError as e:
+            self.matchFailed.emit(key, str(e))
+            return
+        own = items[0].get("collection_id") is not None and items[0]["collection_id"] < 0   # a set you made stays
+        cid, cname = (items[0]["collection_id"], items[0]["collection_name"]) if own else (hit["collection_id"], hit["collection_name"])
+        db.set_match([i["uuid"] for i in items], hit["release_date"], hit["synopsis"], hit["tmdb_id"],
+                     None if show else cid, None if show else cname, hit["genres"])
+        if hit.get("score") is not None:
+            db.set_score([i["uuid"] for i in items], hit["score"])
+        if hit.get("cast"):
+            db.set_cast(db.cast_owner(items[0]), hit["cast"])
+            scraper.save_person_photos(hit["cast"])
+        if show:
+            db.rename_series(key[5:], hit["title"])
+        else:
+            db.update_media(key, title=hit["title"])
+        db.clear_failed([db.file_hash(i["file_path"]) for i in items])
+        cache = {}
+        for i in items:
+            try:
+                if hit["poster_url"]:
+                    if hit["poster_url"] not in cache:
+                        cache[hit["poster_url"]] = scraper.fetch_image(hit["poster_url"])
+                    scraper.save_webp(cache[hit["poster_url"]], scraper.poster_path(i))
+                if not show:
+                    scraper.disc_path(i).unlink(missing_ok=True)         # the old title's disc
+                    url = scraper.disc_url(hit["tmdb_id"], keys["fanart"])
+                    if url:
+                        scraper.save_webp(scraper.fetch_image(url), scraper.disc_path(i), box=(500, 500))
+            except Exception:
+                log.warning("fix match art failed for %s", i["file_path"], exc_info=True)
+        if hit.get("collection_id") and hit.get("collection_poster_url") and not show:
+            scraper.save_collection_poster(hit["collection_id"], hit["collection_poster_url"], cache)
+        new_key = key
+        self.toast.emit(f"Matched to {hit['title']}" + (f" ({hit['release_date'][:4]})" if hit.get("release_date") else ""))
+        self.libraryChanged.emit()
+        self.boxArtChanged.emit(key)
+        self.matchApplied.emit(key, new_key)
+
+    @staticmethod
+    def _cast(item) -> list[dict]:
+        out = []
+        for p in db.get_cast(db.cast_owner(item)):
+            photo = scraper.person_photo_path(p["person_id"]) if p["person_id"] else None
+            out.append({"name": p["name"], "role": p["role"], "photo": file_url(photo) if photo and photo.exists() else ""})
+        return out
+
+    # -- box sets you edit: add a film to a set (or a new one), take it out, or ungroup a whole set
+    @Slot(result="QVariantList")
+    def boxSets(self):
+        return [{"key": f"set:{b['id']}", "id": b["id"], "name": b["name"] or "Untitled", "films": b["films"]} for b in db.box_sets()]
+
+    @Slot(str, int, str, result=str)
+    def addToSet(self, key: str, cid: int, name: str) -> str:
+        """cid 0 = a new set called `name`. Returns the set's key."""
+        if key.startswith(("show:", "set:")):
+            return ""
+        if cid == 0:
+            name = name.strip()
+            if not name:
+                return ""
+            cid = db.new_set_id()
+        else:
+            name = next((b["name"] for b in db.box_sets() if b["id"] == cid), name)
+        db.add_to_set([key], cid, name)
+        self.toast.emit(f"Added to {name}")
+        self.libraryChanged.emit()
+        return f"set:{cid}"
+
+    @Slot(str)
+    def removeFromSet(self, uuid: str):
+        db.remove_from_set([uuid])
+        self.libraryChanged.emit()
+
+    @Slot(str)
+    def ungroupSet(self, key: str):
+        if key.startswith("set:"):
+            db.remove_from_set(db.uuids_for(key))
+            self.libraryChanged.emit()
+
+    @staticmethod
+    def _slide(key, item, label, uuid=""):
+        tex = dvd_box.box_textures(item)
+        disc = scraper.disc_art(item)
+        return {"key": key, "uuid": uuid, "label": label, "title": item["title"],
+                "year": (item.get("release_date") or "")[:4], "cover": tex["front"], "back": tex["back"],
+                "spine": tex["spine"], "disc": file_url(disc) if disc else "",
+                "customFront": tex["customFront"], "customBack": tex["customBack"], "customSpine": tex["customSpine"],
+                "customDisc": scraper.custom_disc_path(item).exists()}
+
+    def _slides(self, key, art, films) -> list[dict]:
+        """Box set carousel in View More: the set's own box first (it is what flew out of the card), then each film."""
+        n = len(films)
+        return [self._slide(key, {**art, "release_date": films[0]["release_date"]}, "Box set")] + [
+            self._slide(f["uuid"], f, f"Film {i + 1} of {n}", f["uuid"]) for i, f in enumerate(films)]
+
+    @Slot(str, bool)
+    def playFrom(self, key: str, from_start: bool):
+        """Play a card, an episode or a film (uuid); from_start ignores where you stopped last time."""
+        item = self._target(key)
+        if item:
+            self.app.play(item["file_path"], from_start)
+
+    @Slot(result="QVariantList")
+    def detailSections(self):
+        names = dict(db.DETAIL_SECTIONS)
+        return [{"id": k, "label": names[k]} for k in db.detail_order()]
+
+    @Slot(str)
+    def playEpisode(self, uuid: str):
+        item = db.get_media(uuid)
+        if item:
+            self.app.play(item["file_path"])
+
+    @Slot(str, str)
+    def setTitle(self, key: str, text: str):
+        text = text.strip()
+        if not text:
+            return
+        if key.startswith("show:"):
+            db.rename_series(key[5:], text)
+        elif key.startswith("set:"):
+            db.rename_collection(key[4:], text)
+        else:
+            db.update_media(key, title=text)
+
+    @Slot(str, str)
+    def setSynopsis(self, key: str, text: str):
+        db.set_synopsis_many(db.uuids_for(key), text)
+
+    @Slot(str, str)
+    def addTag(self, key: str, name: str):
+        for u in db.uuids_for(key):
+            db.add_tag(u, name)
+        self._refresh_insights()
+
+    @Slot(str, str)
+    def removeTag(self, key: str, name: str):
+        db.remove_tag_many(db.uuids_for(key), name)
+        self._refresh_insights()
+
+    @Slot(str, int)
+    def setRating(self, key: str, stars: int):
+        db.set_rating_many(db.uuids_for(key), stars)
+
+    @Slot(str, str)
+    def setNote(self, key: str, text: str):
+        item = self._target(key)
+        if item:
+            db.set_note(item["uuid"], text)
+
+    # -- thumbnail picker: 4 frames, in RAM only
+    @Slot(str)
+    def chooseThumbnail(self, key: str):
+        item = self._target(key)
+        if not item:
+            return
+
+        def work():
+            try:
+                frames = media_probe.grab_frames(item["file_path"], item["duration"] or 0)
+            except Exception:
+                log.exception("frame grab failed")
+                frames = []
+            self._thumbnailsDone.emit(key, frames)
+        threading.Thread(target=work, daemon=True, name="frame-grab").start()
+
+    def _store_thumbnails(self, key, frames):
+        self._thumbs = list(frames)
+        self.frames.clear()
+        for i, f in enumerate(self._thumbs):
+            self.frames.set_pil(f"thumb{i}", f)
+        self.thumbnailsReady.emit(len(self._thumbs))
+
+    @Slot(str, int)
+    def useThumbnail(self, key: str, index: int):
+        item = self._target(key)
+        try:
+            if item and 0 <= index < len(self._thumbs):
+                img = self._thumbs[index]
+                w, h = img.size
+                tw = int(h * 2 / 3)
+                left = (w - tw) // 2
+                scraper.save_webp(img.crop((left, 0, left + tw, h)), scraper.poster_path(item))
+                scraper.custom_front_path(item).unlink(missing_ok=True)  # the newest choice is the one shown
+                self.toast.emit("Box art updated")
+        except Exception:
+            log.exception("saving thumbnail failed")
+            self.toast.emit("Could not save the thumbnail")
+        finally:
+            self.discardThumbnails()
+        self.reload()
+
+    @Slot()
+    def discardThumbnails(self):
+        self._thumbs = []  # the unused frames are dropped from memory here
+        self.frames.clear()
+
+    # -- custom DVD box art (for titles the scraper found nothing for, or art you prefer)
+    @Slot(str, str)
+    def pickBoxArt(self, key: str, face: str):
+        """face = "front", "back" or "spine". Opens a file dialog; the image is cropped to the face's shape and
+        saved for every episode of a series, next to the media (.vault-assets)."""
+        if face not in CUSTOM_ART:
+            return
+
+        def run():
+            path = pick_image()
+            if not path:
+                return
+            try:
+                save_box_art(Image.open(path), self._art_items(key), face)
+                self.toast.emit(f"{face.capitalize()} art updated")
+            except Exception as e:
+                log.exception("box art")
+                self.toast.emit(f"Could not use that image: {e}")
+            self.boxArtChanged.emit(key)
+        QTimer.singleShot(0, run)  # same reason as pickFolder: no modal dialog from inside a QML handler
+
+    @Slot(str, str)
+    def resetBoxArt(self, key: str, face: str):
+        if face not in CUSTOM_ART:
+            return
+        for item in self._art_items(key):
+            CUSTOM_ART[face](item).unlink(missing_ok=True)
+        self.boxArtChanged.emit(key)
+
+    # -- settings, folders, backups, updates, file types
+    @Slot(str, result=str)
+    def setting(self, key: str) -> str:
+        return db.get_setting(key, "") if key in SETTINGS else ""
+
+    @Slot(str, str)
+    def setSetting(self, key: str, value: str):
+        if key not in SETTINGS:
+            return
+        if key.startswith("custom_") and not re.match(r"^#[0-9A-Fa-f]{6}$", value):
+            return
+        db.set_setting(key, value.strip() if key.endswith("_key") else value)
+        engine = self.app.engine
+        if key == "night_mode":
+            engine.night = value == "1"
+        elif key == "upscale_level":   # "auto" or "1".."3"
+            engine.level = int(hw_accelerator.resolve(value, engine.hw.level))
+        elif key == "core":            # "auto", "mpv" or "vlc"
+            engine.core_pref = value
+        elif key == "auto_credits":
+            engine.auto_credits = value != "0"
+        elif key == "group_collections":
+            self.reload()
+        elif key.startswith("discord") and self.app.presence:
+            self.app.presence.configure()
+        elif key == "theme":
+            self.app.set_theme(value)
+        elif key in ("custom_accent", "custom_highlight"):   # picking a colour switches to the Custom theme
+            self.app.set_theme("custom")
+
+    @Slot(result="QVariantList")
+    def directories(self):
+        return [{"id": d["id"], "name": d["tab_name"], "path": d["folder_path"], "scrape": bool(d["should_scrape"]),
+                 "parts": sorted(db.scrape_opts({**d, "should_scrape": 1}))} for d in db.list_directories()]
+
+    @Slot(result="QVariantList")
+    def scrapeParts(self):
+        return [{"id": k, "label": l} for k, l in db.SCRAPE_PARTS]
+
+    @Slot(str, str, bool, str)
+    def addFolder(self, path: str, tab: str, scrape: bool, parts: str):
+        """After the folder picker: the options sheet in QML sends the chosen tab name and what to scrape."""
+        try:
+            self.app.add_directory(path, tab.strip() or None, scrape, [p for p in parts.split(",") if p])
+            self.toast.emit("Folder added. Scanning in the background.")
+        except Exception as e:
+            log.exception("add folder")
+            self.toast.emit(f"Could not add folder: {e}")
+
+    @Slot(int, str)
+    def setScrapeParts(self, dir_id: int, parts: str):
+        db.set_scrape_opts(dir_id, [p for p in parts.split(",") if p])
+
+    @Slot(int)
+    def fetchMissing(self, dir_id: int):
+        """Scrape what this folder's titles are missing (cast, photos, covers, discs, box sets, genres, synopses)
+        without touching titles or anything you edited."""
+        directory = db.get_directory(dir_id)
+        if not directory:
+            return
+
+        def work():
+            from watcher import fetch_missing
+            try:
+                n = fetch_missing(directory)
+                self.toast.emit(f"Updated {n} title{'s' if n != 1 else ''} in {directory['tab_name']}" if n else
+                                f"Nothing missing in {directory['tab_name']}")
+            except Exception as e:
+                log.exception("fetch missing")
+                self.toast.emit(f"Could not update: {e}")
+            self.libraryChanged.emit()
+        self.toast.emit(f"Looking for missing details in {directory['tab_name']}\u2026")
+        threading.Thread(target=work, daemon=True, name="fetch-missing").start()
+
+    @Slot()
+    def pickFolder(self):
+        # Opened from the event loop, not from inside the QML click handler: a modal dialog started
+        # there can fail to appear. Errors become a toast, never silence.
+        def run():
+            try:
+                path = pick_folder()
+                if path:
+                    self.folderPicked.emit(path, Path(path).name or path)   # the options sheet opens in QML
+            except Exception as e:
+                log.exception("add folder")
+                self.toast.emit(f"Could not add folder: {e}")
+        QTimer.singleShot(0, run)
+
+    @Slot(int)
+    def removeFolder(self, dir_id: int):
+        self.app.remove_directory(dir_id)
+
+    @Slot(int, str, result=str)
+    def renameTab(self, dir_id: int, name: str) -> str:
+        """Blank = the folder's own name again. Returns the name now shown."""
+        stored = db.rename_directory(dir_id, name)
+        self.tabs.reload()
+        return stored
+
+    @Slot(int, bool)
+    def setScrape(self, dir_id: int, on: bool):
+        db.set_scrape(dir_id, on)
+
+    @Slot(result="QVariantList")
+    def backups(self):
+        return [p.name for p in backup_manager.list_backups()]
+
+    @Slot()
+    def backupNow(self):
+        self.toast.emit(f"Saved {backup_manager.run_backup().name}")
+
+    @Slot()
+    def exportPortable(self):
+        """Portable backup: library, settings and all artwork in one .mvault file you can carry to another PC."""
+        def run():
+            from datetime import date
+            from PySide6.QtWidgets import QFileDialog
+            dest, _ = QFileDialog.getSaveFileName(None, "Save portable backup",
+                                                  str(Path.home() / f"Media Vault backup {date.today()}.mvault"),
+                                                  "Media Vault backup (*.mvault)")
+            if not dest:
+                return
+
+            def work():
+                try:
+                    n = backup_manager.export_portable(dest)
+                    self.toast.emit(f"Saved: {n['files']} artwork files, {n['bytes'] / 2 ** 20:.0f} MB")
+                except Exception as e:
+                    log.exception("portable export")
+                    self.toast.emit(f"Could not save the backup: {e}")
+            threading.Thread(target=work, daemon=True, name="portable-export").start()
+        QTimer.singleShot(0, run)
+
+    @Slot()
+    def importPortable(self):
+        def run():
+            from PySide6.QtWidgets import QFileDialog
+            src, _ = QFileDialog.getOpenFileName(None, "Restore portable backup", str(Path.home()),
+                                                 "Media Vault backup (*.mvault *.zip)")
+            if not src:
+                return
+            try:
+                n = backup_manager.import_portable(src)
+                self.toast.emit(f"Artwork restored ({n['art']} files). Restart Media Vault to finish restoring the library.")
+            except Exception as e:
+                log.exception("portable import")
+                self.toast.emit(f"Could not restore: {e}")
+        QTimer.singleShot(0, run)
+
+    @Slot(str)
+    def restoreBackup(self, name: str):
+        try:
+            path = backup_manager.backup_dir() / name
+            if path.parent != backup_manager.backup_dir():
+                return
+            n = backup_manager.restore_backup(path)
+            self.reload()
+            self.toast.emit(f"Restored {n['items']} titles, {n['tags']} tags, {n['notes']} notes")
+        except Exception as e:
+            log.exception("restore failed")
+            self.toast.emit(f"Could not restore: {e}")
+
+    @Slot(bool)
+    def setFileTypes(self, on: bool):
+        self.app.set_file_types(on)
+
+    @Slot()
+    def installRuntime(self):
+        def work():
+            import setup
+            try:
+                left = setup.repair(log.warning)
+            except Exception as e:
+                log.exception("repair")
+                left = [str(e)]
+            self.toast.emit("Everything is installed. Restart Media Vault." if not left
+                            else "Still missing: " + ", ".join(left) + ". See setup.log.")
+        threading.Thread(target=work, daemon=True, name="runtime").start()
+
+    @Slot()
+    def installShader(self):
+        def work():
+            try:
+                import setup
+                from utils import bin_dir
+                setup.download_shader(bin_dir())
+                self.toast.emit("Upscaling shader installed. It applies from the next video.")
+            except Exception as e:
+                log.exception("shader download")
+                self.toast.emit(f"Could not download the shader: {e}")
+        threading.Thread(target=work, daemon=True, name="shader").start()
+
+    @Slot()
+    def checkUpdates(self):
+        self.app.check_updates(manual=True)
+
+    # -- Settings > Components: the tools Media Vault uses, their versions, and updates (Media Vault's own from GitHub)
+    @Slot(result="QVariantList")
+    def components(self):
+        from utils import components
+        return components.inventory()
+
+    @Slot(result="QVariantMap")
+    def appInfo(self):
+        import version
+        from utils import components
+        return {"version": version.VERSION, "repo": version.REPO, "page": version.RELEASES_PAGE, "installed": components.frozen()}
+
+    @Slot()
+    def checkComponents(self):
+        def work():
+            from utils import components
+            try:
+                rows = components.check(components.inventory(), log.warning)
+            except Exception as e:
+                log.exception("components check")
+                self.toast.emit(f"Could not check for updates: {e}")
+                rows = components.inventory()
+            self.componentsChecked.emit(rows)
+        threading.Thread(target=work, daemon=True, name="components-check").start()
+
+    @Slot(str)
+    def updateComponent(self, component: str):
+        def work():
+            from utils import components
+            try:
+                self.toast.emit(components.update(component, log.warning))
+            except Exception as e:
+                log.exception("component update")
+                self.toast.emit(f"Could not update: {e}")
+            self.componentsChecked.emit(components.check(components.inventory(), log.warning))
+        self.toast.emit("Downloading\u2026")
+        threading.Thread(target=work, daemon=True, name="component-update").start()
+
+    @Slot(str, str)
+    def installAppUpdate(self, url: str, name: str):
+        """Download the new MediaVault_vX_setup.exe from GitHub and start it; Media Vault closes so files can be replaced."""
+        from utils import components
+        if not components.frozen():
+            self.openLink(url or self.appInfo()["page"])
+            return
+
+        def work():
+            try:
+                path = components.download_setup(url, name, lambda d, t: self.appUpdateProgress.emit(d / t if t else 0.0))
+                self.appUpdateProgress.emit(1.0)
+                components.run_setup(path)
+                QTimer.singleShot(800, self.app.quit)
+            except Exception as e:
+                log.exception("app update")
+                self.appUpdateProgress.emit(-1.0)
+                self.toast.emit(f"Could not download the update: {e}")
+        threading.Thread(target=work, daemon=True, name="app-update").start()
+
+    @Slot(str)
+    def openLink(self, url: str):
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        if url.startswith("https://"):
+            QDesktopServices.openUrl(QUrl(url))
+
+    @Slot(str, result=str)
+    def tintOf(self, url: str) -> str:
+        """Animated themes: the colour of a poster / fanart (a file:// URL from the model)."""
+        from PySide6.QtCore import QUrl
+        path = QUrl(url).toLocalFile()
+        return tint_of(path) if path else ""
+
+    # -- Streaming: browsers on the Wi-Fi, Chromecast, AirPlay
+    @Property(str, notify=streamChanged)
+    def streamUrl(self):
+        return self.stream.base_url()
+
+    @Slot(bool)
+    def setStreaming(self, on: bool):
+        """Off by default and off again at every start; a new secret link each time it is switched on."""
+        if on:
+            try:
+                self.stream.start()
+            except Exception as e:
+                log.exception("stream server")
+                self.toast.emit(f"Could not start sharing: {e}")
+        else:
+            self.stream.stop()
+        self.streamChanged.emit()
+
+    @Slot(result="QVariantMap")
+    def castSupport(self):
+        return streaming.support()
+
+    @Slot()
+    def installCastSupport(self):
+        def work():
+            import setup
+            try:
+                setup.pip_install(["pychromecast", "pyatv"], log.info)
+                self.toast.emit("AirPlay and Chromecast support installed")
+            except Exception as e:
+                log.exception("cast support install")
+                self.toast.emit(f"Could not install: {e}")
+            self.streamChanged.emit()
+        self.toast.emit("Installing AirPlay and Chromecast support\u2026")
+        threading.Thread(target=work, daemon=True, name="cast-install").start()
+
+    @Slot()
+    def findDevices(self):
+        def work():
+            found = streaming.discover()
+            self._devices = found
+            self.devicesFound.emit(found)
+        threading.Thread(target=work, daemon=True, name="cast-discover").start()
+
+    @Slot(result=str)
+    def discordStatus(self):
+        return self.app.presence.status if self.app.presence else "Off"
+
+    @Slot(result="QVariantList")
+    def devices(self):
+        return self._devices
+
+    def _cast(self, device_id: str, item: dict, start: float = 0.0):
+        if not any(d["id"] == device_id for d in self._devices):
+            return
+        ext = os.path.splitext(item["file_path"])[1].lower()
+        if ext not in streaming.CASTABLE:
+            self.toast.emit(f"{ext.upper()[1:]} files may not play on that device (MP4, MOV and WebM do)")
+        if not self.stream.running:
+            self.stream.start()
+            self.streamChanged.emit()
+        url = self.stream.file_url(item["uuid"])
+        name = next(d["name"] for d in self._devices if d["id"] == device_id)
+
+        def work():
+            try:
+                streaming.cast(device_id, url, item["title"], streaming.MIME.get(ext, "video/mp4"))
+                self.toast.emit(f"Playing on {name}")
+            except Exception as e:
+                log.exception("cast")
+                self.toast.emit(f"Could not play on {name}: {e}")
+        threading.Thread(target=work, daemon=True, name="cast").start()
+
+    @Slot(str, str)
+    def castKey(self, device_id: str, key: str):
+        item = self._target(key)
+        if item:
+            self._cast(device_id, item)
+
+    @Slot(str)
+    def castPlaying(self, device_id: str):
+        """From the player: send what is playing to the device and stop playing it here."""
+        s = self.app.engine.session
+        item = db.get_media(s.uuid) if s and s.uuid else None
+        if not item:
+            self.toast.emit("Only titles in the library can be sent to another device")
+            return
+        self._cast(device_id, item)
+        self.app.engine.stop()
+
+    @Slot(str)
+    def copyText(self, text: str):
+        from PySide6.QtGui import QGuiApplication
+        QGuiApplication.clipboard().setText(text)
+        self.toast.emit("Link copied")
+
+    @Slot()
+    def openStream(self):
+        if self.stream.running:
+            from PySide6.QtCore import QUrl
+            from PySide6.QtGui import QDesktopServices
+            QDesktopServices.openUrl(QUrl(self.stream.base_url()))
+
+    # -- Library health
+    @Slot(result="QVariantMap")
+    def health(self):
+        return health.report(quality_of, self._ignored_now)
+
+    @Slot(str, str, bool)
+    def ignoreIssue(self, kind: str, key: str, forever: bool):
+        """kind: duplicate | missing_episode | missing_art. For now = until restart; forever = saved."""
+        if kind not in ("duplicate", "missing_episode", "missing_art"):
+            return
+        if forever:
+            db.ignore_issue(kind, key)
+        else:
+            self._ignored_now.setdefault(kind, set()).add(key)
+
+    @Slot()
+    def resetIgnored(self):
+        db.unignore_all()
+        self._ignored_now.clear()
+
+    @Slot(str)
+    def showInFolder(self, path: str):
+        """Open Explorer with the file selected. Only for files the library knows (never an arbitrary path)."""
+        known = conn_has_path(path)
+        if not known:
+            return
+        if sys.platform == "win32":
+            import subprocess
+            subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
+        else:
+            from PySide6.QtCore import QUrl
+            from PySide6.QtGui import QDesktopServices
+            QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(path)))
+
+    @Slot(result="QVariantMap")
+    def hardware(self):
+        """What detect() found and what it recommends, for Settings > Playback."""
+        h = self.app.engine.hw
+        return {"gpus": list(h.gpus) or ["No display adapter reported"], "ram": h.ram_gb, "cores": h.cores,
+                "core": h.backend, "level": h.level, "why": h.why, "rtx": h.rtx}
+
+    @Slot(result="QVariantList")
+    def themes(self):
+        from . import THEMES
+        out = [{"id": t[0], "name": t[1], "tagline": t[2], "page": t[3], "surface": t[4], "accent": t[5], "highlight": t[6]}
+               for t in THEMES]
+        for t in out:  # the Custom swatches show the colours you picked
+            if t["id"] == "custom":
+                t["accent"] = db.get_setting("custom_accent") or t["accent"]
+                t["highlight"] = db.get_setting("custom_highlight") or t["highlight"]
+        return out
+
+    @Slot(result="QVariantList")
+    def levelNames(self):
+        return [hw_accelerator.LEVEL_NAMES[n] for n in (1, 2, 3)]
