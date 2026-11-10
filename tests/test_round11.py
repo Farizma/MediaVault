@@ -26,7 +26,8 @@ class LayoutOrderTests(unittest.TestCase):
         order = db.detail_order()
         self.assertEqual(order[0], "cast")
         self.assertLess(order.index("cast"), order.index("title"))
-        self.assertEqual(order[order.index("cast") + 1], "tags")       # a section you never placed follows its default neighbour
+        follows = ids[ids.index("cast") + 1]          # a section you never placed follows its default neighbour
+        self.assertEqual(order[order.index("cast") + 1], follows)
         self.assertEqual(sorted(order), sorted(ids))        # nothing lost, nothing unknown
 
 

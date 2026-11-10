@@ -13,7 +13,17 @@ Item {
     property string levelSetting: "auto"
     property color customAccent: "#30D158"
     property color customHighlight: "#0A84FF"
+    property var customColours: []                // the Custom theme: every colour, [{key, name, role, value}]
+    property var customMap: ({})                  // key -> colour (what the wheel is changing, live)
     property string editing: "custom_accent"     // which custom colour the wheel is changing
+    function customValue(k) { return customMap[k] || "#808080" }
+    function reloadCustom() {
+        var c = Backend.themes().filter(function(t) { return t.id === "custom" })[0]
+        if (!c) return
+        customColours = c.colours || []
+        var m = {}; customColours.forEach(function(x) { m[x.key] = x.value }); customMap = m
+        customAccent = c.accent; customHighlight = c.highlight
+    }
     property int section: 0
     property real shown: 0                   // 0..1: the sheet materialises (scale + fade), and dematerialises faster
     // name, icon tint, icon: fixed system colours (like macOS) so they read the same in every theme
@@ -65,6 +75,7 @@ Item {
         themes = Backend.themes()
         var c = themes.filter(function(t) { return t.id === "custom" })[0]
         if (c) { customAccent = c.accent; customHighlight = c.highlight }
+        reloadCustom()
         hw = Backend.hardware()
         coreSetting = Backend.setting("core") || "auto"
         levelSetting = Backend.setting("upscale_level") || "auto"
@@ -94,8 +105,8 @@ Item {
     Rectangle {
         id: sheet
         anchors.centerIn: parent
-        width: Math.min(980, root.width - 48)
-        height: Math.min(680, root.height - 48)
+        width: Math.min(root.width - 48, Math.max(980, Math.min(1500, root.width * 0.7)))
+        height: Math.min(root.height - 48, Math.max(680, Math.min(1100, root.height * 0.82)))
         radius: 16
         color: Theme.graphite
         border.color: Theme.line
@@ -242,43 +253,57 @@ Item {
                                 id: wheel
                                 Layout.preferredWidth: 180
                                 Layout.alignment: Qt.AlignTop
-                                color: root.editing === "custom_accent" ? root.customAccent : root.customHighlight
+                                color: root.customValue(root.editing)
                                 onPicked: (c) => {
-                                    if (root.editing === "custom_accent") root.customAccent = c; else root.customHighlight = c
+                                    var m = Object.assign({}, root.customMap); m[root.editing] = c.toString().toUpperCase(); root.customMap = m
+                                    if (root.editing === "custom_accent") root.customAccent = c
+                                    if (root.editing === "custom_highlight") root.customHighlight = c
                                     commitColour.restart()
                                 }
                                 Timer {          // the whole UI recolours, so at most ~12 times a second while dragging
                                     id: commitColour
                                     interval: 80
-                                    onTriggered: Backend.setSetting(root.editing, (root.editing === "custom_accent" ? root.customAccent : root.customHighlight).toString().toUpperCase())
+                                    onTriggered: Backend.setSetting(root.editing, root.customValue(root.editing))
                                 }
                             }
                             ColumnLayout {
                                 Layout.fillWidth: true
                                 Layout.alignment: Qt.AlignTop
                                 spacing: 8
-                                Repeater {
-                                    model: [["custom_accent", "Accent", "Progress bars, switches, watched marks"], ["custom_highlight", "Highlight", "Selection, focus, the MV badge"]]
-                                    Rectangle {
-                                        readonly property bool on: root.editing === modelData[0]
-                                        readonly property color swatch: modelData[0] === "custom_accent" ? root.customAccent : root.customHighlight
-                                        Layout.fillWidth: true
-                                        implicitHeight: 56
-                                        radius: 10
-                                        color: on ? Qt.rgba(1, 1, 1, 0.08) : "transparent"
-                                        border.color: on ? "#66FFFFFF" : Theme.line
-                                        Rectangle { id: chip; x: 12; anchors.verticalCenter: parent.verticalCenter; width: 28; height: 28; radius: 14; color: parent.swatch; border.color: "#40FFFFFF" }
-                                        Column {
-                                            anchors { left: chip.right; leftMargin: 12; right: parent.right; rightMargin: 10; verticalCenter: parent.verticalCenter }
-                                            spacing: 2
-                                            Text { text: modelData[1] + "  " + parent.parent.swatch.toString().toUpperCase(); color: "#FFFFFF"; font.pixelSize: 13; font.weight: Font.Bold }
-                                            Text { width: parent.width; text: modelData[2]; color: Theme.faint; font.pixelSize: 11; elide: Text.ElideRight }
+                                // every colour of the theme: tap one, then drag on the wheel
+                                GridLayout {
+                                    Layout.fillWidth: true
+                                    columns: customRow.width > 760 ? 3 : 2
+                                    rowSpacing: 6; columnSpacing: 6
+                                    Repeater {
+                                        model: root.customColours
+                                        Rectangle {
+                                            readonly property bool on: root.editing === modelData.key
+                                            readonly property color swatch: root.customValue(modelData.key)
+                                            Layout.fillWidth: true
+                                            Layout.preferredWidth: 1
+                                            implicitHeight: 48
+                                            radius: 10
+                                            color: on ? Qt.rgba(1, 1, 1, 0.08) : "transparent"
+                                            border.color: on ? "#66FFFFFF" : Theme.line
+                                            Rectangle { id: chip; x: 10; anchors.verticalCenter: parent.verticalCenter; width: 24; height: 24; radius: 12; color: parent.swatch; border.color: "#40FFFFFF" }
+                                            Column {
+                                                anchors { left: chip.right; leftMargin: 10; right: parent.right; rightMargin: 8; verticalCenter: parent.verticalCenter }
+                                                spacing: 1
+                                                Text { width: parent.width; text: modelData.name + "  " + parent.parent.swatch.toString().toUpperCase(); color: Theme.text; font.pixelSize: 12; font.weight: Font.Bold; elide: Text.ElideRight }
+                                                Text { width: parent.width; text: modelData.role; color: Theme.faint; font.pixelSize: 10; elide: Text.ElideRight }
+                                            }
+                                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.editing = modelData.key }
                                         }
-                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.editing = modelData[0] }
                                     }
                                 }
-                                Text { Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 11
-                                    text: "Choose Accent or Highlight, then drag on the wheel. The slider sets brightness." }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    Text { Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 11
+                                        text: "Choose a colour, then drag on the wheel; the slider sets brightness. Picking one switches to the Custom theme." }
+                                    GlassButton { small: true; label: "Reset colours"
+                                        onClicked: { root.customColours.forEach(function(c) { Backend.setSetting(c.key, "") }); root.reloadCustom() } }
+                                }
                             }
                         }
                     }
@@ -296,7 +321,7 @@ Item {
                         GlassButton { small: true; label: "Reset"; onClicked: { Backend.setSetting("detail_order", ""); layoutModel.load() } }
                     }
                     Text { Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 11
-                        text: "The order of the sections beside the box. Sections that do not apply to a title (actors for a home video, say) are skipped." }
+                        text: "The order of the sections beside the box: drag a row to move it. Sections that do not apply to a title (actors for a home video, say) are skipped." }
                     ListModel {
                         id: layoutModel
                         function load() { clear(); Backend.detailSections().forEach(function(x) { append(x) }) }
@@ -313,18 +338,51 @@ Item {
                         // rows glide to their new places
                         move: Transition { NumberAnimation { properties: "y"; duration: 240 * Theme.motion; easing.type: Easing.OutCubic } }
                         moveDisplaced: Transition { NumberAnimation { properties: "y"; duration: 240 * Theme.motion; easing.type: Easing.OutCubic } }
-                        delegate: Rectangle {
-                            width: layoutList.width; height: 40; radius: 10
-                            color: Theme.slate; border.color: Theme.line
-                            Text { x: 14; anchors.verticalCenter: parent.verticalCenter; text: (index + 1) + "."; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 11 }
-                            Text { x: 40; anchors.verticalCenter: parent.verticalCenter; text: model.label; color: Theme.text; font.pixelSize: 13; font.weight: Font.Medium }
-                            Row {
-                                anchors { right: parent.right; rightMargin: 8; verticalCenter: parent.verticalCenter }
-                                spacing: 4
-                                GlassButton { small: true; label: "\u2191"; implicitWidth: 32; enabled: index > 0; opacity: enabled ? 1 : 0.3
-                                    tip: "Move up"; onClicked: { layoutModel.move(index, index - 1, 1); layoutModel.save() } }
-                                GlassButton { small: true; label: "\u2193"; implicitWidth: 32; enabled: index < layoutModel.count - 1; opacity: enabled ? 1 : 0.3
-                                    tip: "Move down"; onClicked: { layoutModel.move(index, index + 1, 1); layoutModel.save() } }
+                        // drag a row anywhere to move it; the others glide out of the way (arrows still work)
+                        delegate: Item {
+                            id: rowWrap
+                            width: layoutList.width; height: 40
+                            z: rowDrag.drag ? 10 : 0
+                            Rectangle {
+                                id: rowCard
+                                width: parent.width; height: 40; radius: 10
+                                // while dragged it follows the pointer, wherever the list has moved its slot to
+                                y: rowDrag.drag ? rowDrag.pointerY - rowDrag.grabY - rowWrap.y : 0
+                                color: rowDrag.drag ? Theme.fillHover : Theme.slate
+                                border.color: rowDrag.drag ? Theme.blue : Theme.line
+                                scale: rowDrag.drag ? 1.02 : 1
+                                Behavior on scale { NumberAnimation { duration: 120 * Theme.motion } }
+                                Text { x: 14; anchors.verticalCenter: parent.verticalCenter; text: "\u2261"; color: Theme.faint; font.pixelSize: 16 }
+                                Text { x: 34; anchors.verticalCenter: parent.verticalCenter; text: (index + 1) + "."; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 11 }
+                                Text { x: 60; anchors.verticalCenter: parent.verticalCenter; text: model.label; color: Theme.text; font.pixelSize: 13; font.weight: Font.Medium }
+                                MouseArea {
+                                    id: rowDrag
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    preventStealing: true
+                                    cursorShape: drag ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+                                    property bool drag: false
+                                    property real grabY: 0
+                                    property real pointerY: 0
+                                    onPressed: (m) => { var p = mapToItem(layoutList, m.x, m.y); grabY = p.y - rowWrap.y; pointerY = p.y; drag = true }
+                                    onPositionChanged: (m) => {
+                                        if (!drag) return
+                                        pointerY = mapToItem(layoutList, m.x, m.y).y
+                                        var to = Math.max(0, Math.min(layoutModel.count - 1, Math.round((pointerY - grabY) / (40 + layoutList.spacing))))
+                                        if (to !== index) layoutModel.move(index, to, 1)
+                                    }
+                                    onReleased: { if (drag) { drag = false; layoutModel.save() } }
+                                    onCanceled: { drag = false; layoutModel.save() }
+                                }
+                                Tip { visible: rowDrag.containsMouse && !rowDrag.drag; delay: 700; text: "Drag to reorder" }
+                                Row {
+                                    anchors { right: parent.right; rightMargin: 8; verticalCenter: parent.verticalCenter }
+                                    spacing: 4
+                                    GlassButton { small: true; label: "\u2191"; implicitWidth: 32; enabled: index > 0; opacity: enabled ? 1 : 0.3
+                                        tip: "Move up"; onClicked: { layoutModel.move(index, index - 1, 1); layoutModel.save() } }
+                                    GlassButton { small: true; label: "\u2193"; implicitWidth: 32; enabled: index < layoutModel.count - 1; opacity: enabled ? 1 : 0.3
+                                        tip: "Move down"; onClicked: { layoutModel.move(index, index + 1, 1); layoutModel.save() } }
+                                }
                             }
                         }
                     }
@@ -409,7 +467,7 @@ Item {
                     visible: root.sectionName === "Folders"
                     Layout.fillWidth: true
                     spacing: 10
-                    Heading { title: "Folders"; sub: "Each folder is a tab, named after the folder until you rename it (clear the name to go back). Scraping fetches posters and synopses; turn it off for home videos."; Layout.rightMargin: 48 }
+                    Heading { title: "Folders"; sub: "Each folder is a tab, named after the folder until you rename it (clear the name to go back), in this order (drag the tabs in the top bar, or use the arrows). Scraping fetches posters and details; turn it off for home videos."; Layout.rightMargin: 48 }
                     Repeater {
                         model: root.folders
                         Rectangle {
@@ -442,6 +500,13 @@ Item {
                                         Text { Layout.fillWidth: true; text: modelData.path || ""; color: "#66FFFFFF"; font.family: Theme.mono; font.pixelSize: 10; elide: Text.ElideMiddle }
                                     }
                                     Toggle { id: scrapeToggle; text: "Scrape"; checked: modelData.scrape; onToggled: Backend.setScrape(modelData.id, checked) }
+                                    // tab order (the tabs can also be dragged in the top bar)
+                                    GlassButton { small: true; label: "\u2191"; implicitWidth: 30; enabled: index > 0; opacity: enabled ? 1 : 0.3
+                                        tip: "Move this tab left (or drag the tabs in the top bar)"
+                                        onClicked: { Backend.moveTab(modelData.id, index - 1); root.folders = Backend.directories() } }
+                                    GlassButton { small: true; label: "\u2193"; implicitWidth: 30; enabled: index < root.folders.length - 1; opacity: enabled ? 1 : 0.3
+                                        tip: "Move this tab right"
+                                        onClicked: { Backend.moveTab(modelData.id, index + 1); root.folders = Backend.directories() } }
                                     GlassButton { small: true; label: folderCard.open ? "Done" : "Options"; active: folderCard.open; onClicked: folderCard.open = !folderCard.open }
                                     GlassButton { small: true; label: "Remove"; onClicked: { Backend.removeFolder(modelData.id); root.folders = Backend.directories() } }
                                 }
@@ -449,6 +514,22 @@ Item {
                                     visible: folderCard.open
                                     Layout.fillWidth: true
                                     spacing: 8
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 16
+                                        Toggle { Layout.fillWidth: true; text: "Show in the All tab"; hint: "Its own tab always shows it"
+                                            checked: modelData.inAll; onToggled: Backend.toggleHidden("all_dirs", String(modelData.id)) }
+                                        Toggle { Layout.fillWidth: true; text: "Count in Insights"; hint: "Watch time and top genres"
+                                            checked: modelData.inInsights; onToggled: Backend.toggleHidden("insights_dirs", String(modelData.id)) }
+                                    }
+                                    RowLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 16
+                                        Toggle { Layout.fillWidth: true; text: "Anime"; hint: "Details from AniList instead of TMDB"
+                                            checked: modelData.anime; onToggled: Backend.setAnime(modelData.id, checked) }
+                                        GlassButton { small: true; label: "Re-tag from names"; tip: "Tags from this folder's sub-folders and file names, worked out again"
+                                            onClicked: Backend.retag(modelData.id) }
+                                    }
                                     Text { text: "WHAT TO SCRAPE"; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10; opacity: scrapeToggle.checked ? 1 : 0.4 }
                                     ScrapeParts { Layout.fillWidth: true; enabled: scrapeToggle.checked; selected: modelData.parts
                                         onEdited: (csv) => Backend.setScrapeParts(modelData.id, csv) }
@@ -465,6 +546,35 @@ Item {
                     }
                     Text { visible: root.folders.length === 0; text: "No folders yet."; color: Theme.faint; font.pixelSize: 13 }
                     GlassButton { small: true; label: "Add folder"; glyph: "+"; onClicked: Backend.pickFolder() }
+                    Caption { text: "AUTOMATIC TAGS"; Layout.topMargin: 8 }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 12
+                        Toggle {
+                            Layout.fillWidth: true
+                            text: "Tag new titles from their folders and file names"
+                            hint: "Sub-folder names (Action, Kids, ...), 4K / HDR / Dolby Vision, Blu-ray / Remux / Web, HEVC, Atmos / DTS, Director's Cut / Extended / IMAX, 3D, the decade, an anime release group"
+                            checked: Backend.setting("auto_tags") !== "0"
+                            onToggled: Backend.setSetting("auto_tags", checked ? "1" : "0")
+                        }
+                        GlassButton { small: true; label: "Tag the whole library"; onClicked: Backend.retag(-1) }
+                    }
+                    Caption { text: "TAGS HIDDEN FROM THE ALL TAB"; Layout.topMargin: 8 }
+                    Text { Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 11
+                        text: "Titles with a highlighted tag or genre stay out of All (they still show in their folder's tab). Tap to change." }
+                    Flow {
+                        id: hideFlow
+                        Layout.fillWidth: true
+                        spacing: 6
+                        property var hidden: Backend.hiddenFrom("all_tags")
+                        Repeater {
+                            model: root.visible && root.sectionName === "Folders" ? Backend.allTags() : []
+                            Pill { label: (hideFlow.hidden.indexOf(modelData.name) >= 0 ? "Hidden: " : "") + modelData.label
+                                selected: hideFlow.hidden.indexOf(modelData.name) >= 0; accent: Theme.red
+                                onClicked: { Backend.toggleHidden("all_tags", modelData.name); hideFlow.hidden = Backend.hiddenFrom("all_tags") } }
+                        }
+                        Text { visible: Backend.allTags().length === 0; text: "No tags or genres yet."; color: Theme.faint; font.pixelSize: 12 }
+                    }
                     Caption { text: "COLLECTIONS"; Layout.topMargin: 8 }
                     Toggle {
                         Layout.fillWidth: true
@@ -779,7 +889,7 @@ Item {
                                [["\u2212", "="], "Audio earlier / later (lip sync)"],
                                [["Tab"], "Skip intro, or skip credits"], [["Enter"], "Next episode now"],
                                [["I"], "Mark intro start, then end"], [["O"], "Mark where the credits start"],
-                               [["P"], "Picture in picture"], [["B"], "Black out other screens"], [["N"], "Reduce loud sounds"], [["U"], "Next upscaling level"],
+                               [["F"], "Full screen (or double-click)"], [["P"], "Picture in picture"], [["B"], "Black out other screens"], [["N"], "Reduce loud sounds"], [["U"], "Next upscaling level"],
                                [["V"], "VR view"], [["C"], "Frame as box art"], [["Shift", "C"], "Frame as fanart"],
                                [["Esc"], "Close menu, leave PiP, or back"]]
                     }

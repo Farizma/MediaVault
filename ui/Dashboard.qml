@@ -9,8 +9,8 @@ Item {
     property int currentTab: -1
     property string currentTabName: "All"
     readonly property bool overlayOpen: detail.visible || picker.visible || settings.visible || insightsSheet.visible || folderSheet.visible
-    // content column: 32 px gutters, never wider than 1520 (the web app's max-w-[1520px])
-    readonly property real gutter: Math.max(width < 1100 ? 24 : 32, (width - 1520) / 2)
+    // content column: the page uses the whole window at any size (more columns as it widens), with margins that grow a little
+    readonly property real gutter: width < 1100 ? 24 : width < 1900 ? 32 : 48
 
     // ---- the ONE preview player (singleton). It is re-pointed at whichever card is hovered.
     MediaPlayer {
@@ -49,11 +49,12 @@ Item {
         launchLead.duration = (lead || 0) * Theme.motion          // the View More box first turns to face you
         launchAnim.restart()
     }
-    function landed() {                    // the player is up: reset everything behind the black
+    function landed() {                    // the player is up: reset everything behind the black, then lift it
         launchWatchdog.stop()
         phase = "playing"
         launchKey = ""; launchT = 0
         detail.dismiss()
+        curtainOut.restart()               // the player is its own window now, so the library shows again behind it
     }
     function reveal() {                    // back from the player, or it never started
         launchWatchdog.stop()
@@ -81,8 +82,6 @@ Item {
         target: Player
         function onStateChanged() {
             if (dash.phase === "launching" && Player.state.active === true) dash.landed()
-            // picture in picture: the library is meant to be used under the small video, so lift the black
-            if (Player.state.pip === true && curtain.opacity > 0 && !curtainOut.running) curtainOut.restart()
         }
         function onClosed() { if (dash.phase !== "") dash.reveal() }
         function onError(message) { if (dash.phase !== "") dash.reveal() }
@@ -106,6 +105,10 @@ Item {
     property string genre: ""
     property string quality: ""
     property bool unwatched: false
+    property bool boxSets: Backend.setting("group_collections") !== "0"
+    property int tabDragFrom: -1          // tab being dragged (index), where it would land, and its width
+    property int tabDragTo: -1
+    property real tabDragW: 0
     property bool shelf: false
     property var opts: ({})
     property var searchField: null
@@ -381,60 +384,76 @@ Item {
                 Item {
                     width: grid.span
                     height: catalogCol.implicitHeight + 14
-                    ColumnLayout {
+                    Column {
                         id: catalogCol
                         anchors { left: parent.left; right: parent.right; top: parent.top }
                         spacing: 10
-                        RowLayout {
-                            Layout.fillWidth: true
+                        Row {
                             spacing: 12
-                            Text { Layout.alignment: Qt.AlignBaseline; text: dash.currentTabName + (dash.shelf ? " Shelf" : " Catalog"); color: "#FFFFFF"; font.pixelSize: 20; font.weight: Font.ExtraBold; font.letterSpacing: -0.4; elide: Text.ElideRight; Layout.maximumWidth: parent.width - 520 }
-                            Text { Layout.alignment: Qt.AlignBaseline; text: grid.count + (grid.count === 1 ? " title" : " titles"); color: "#66FFFFFF"; font.family: Theme.mono; font.pixelSize: 12 }
-                            Item { Layout.fillWidth: true }
-                            // Grid | Shelf
-                            Rectangle {
-                                implicitWidth: 132; implicitHeight: 32; radius: 10
-                                color: "#99000000"; border.color: Theme.line
-                                Rectangle { width: (parent.width - 6) / 2; height: parent.height - 6; y: 3; radius: 8; color: "#FFFFFF"
-                                    x: 3 + (dash.shelf ? width : 0)
-                                    Behavior on x { NumberAnimation { duration: 260 * Theme.motion; easing.type: Easing.OutCubic } } }
-                                Row {
-                                    anchors { fill: parent; margins: 3 }
-                                    Repeater {
-                                        model: ["Grid", "Shelf"]
-                                        Item {
-                                            width: parent.width / 2; height: parent.height
-                                            Text { anchors.centerIn: parent; text: modelData; font.pixelSize: 12; font.weight: Font.Bold
-                                                color: (index === 1) === dash.shelf ? "#000000" : "#B3FFFFFF" }
-                                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                                onClicked: if ((index === 1) !== dash.shelf) dash.setShelf(index === 1) }
+                            Text { id: catalogTitle; text: dash.currentTabName + (dash.shelf ? " Shelf" : " Catalog"); color: "#FFFFFF"; font.pixelSize: 20; font.weight: Font.ExtraBold; font.letterSpacing: -0.4
+                                elide: Text.ElideRight; width: Math.min(implicitWidth, catalogCol.width - 140) }
+                            Text { anchors.baseline: catalogTitle.baseline; text: grid.count + (grid.count === 1 ? " title" : " titles"); color: "#66FFFFFF"; font.family: Theme.mono; font.pixelSize: 12 }
+                        }
+                        // sort and filters on the left (they wrap on a narrow window); the view switch and search stay on the right
+                        // plain anchors, not a RowLayout: a wrapping Flow inside a layout makes Qt re-lay out forever
+                        Item {
+                            width: parent.width
+                            height: Math.max(filterFlow.height, viewTools.height)
+                            Flow {
+                                id: filterFlow
+                                anchors { left: parent.left; right: viewTools.left; rightMargin: 12; top: parent.top }
+                                spacing: 8
+                                Dropdown { prefix: "Sort: "; options: dash.opts.sorts || []; value: dash.sort; onChosen: (v) => { dash.sort = v; dash.applyView() } }
+                                Dropdown { options: dash.opts.genres || []; value: dash.genre; onChosen: (v) => { dash.genre = v; dash.applyView() } }
+                                Dropdown { options: dash.opts.qualities || []; value: dash.quality; onChosen: (v) => { dash.quality = v; dash.applyView() } }
+                                Pill { height: 32; label: "Unwatched"; selected: dash.unwatched; accent: Theme.blue; onClicked: { dash.unwatched = !dash.unwatched; dash.applyView() } }
+                                // box sets on or off, right here (also in Settings > Folders)
+                                Pill { height: 32; label: "Box sets"; selected: dash.boxSets; accent: Theme.amber
+                                    onClicked: { dash.boxSets = !dash.boxSets; Backend.setSetting("group_collections", dash.boxSets ? "1" : "0") }
+                                    Tip { visible: boxSetHover.hovered; delay: 600; text: dash.boxSets ? "Showing films of a series as one box set" : "Showing every film on its own" }
+                                    HoverHandler { id: boxSetHover } }
+                                GlassButton { small: true; label: "Clear"; visible: dash.filtered; onClicked: dash.clearView() }
+                            }
+                            Row {
+                                id: viewTools
+                                anchors { right: parent.right; top: parent.top }
+                                spacing: 12
+                                // Grid | Shelf
+                                Rectangle {
+                                    implicitWidth: 132; implicitHeight: 32; radius: 10
+                                    color: "#99000000"; border.color: Theme.line
+                                    Rectangle { width: (parent.width - 6) / 2; height: parent.height - 6; y: 3; radius: 8; color: "#FFFFFF"
+                                        x: 3 + (dash.shelf ? width : 0)
+                                        Behavior on x { NumberAnimation { duration: 260 * Theme.motion; easing.type: Easing.OutCubic } } }
+                                    Row {
+                                        anchors { fill: parent; margins: 3 }
+                                        Repeater {
+                                            model: ["Grid", "Shelf"]
+                                            Item {
+                                                width: parent.width / 2; height: parent.height
+                                                Text { anchors.centerIn: parent; text: modelData; font.pixelSize: 12; font.weight: Font.Bold
+                                                    color: (index === 1) === dash.shelf ? "#000000" : "#B3FFFFFF" }
+                                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                                    onClicked: if ((index === 1) !== dash.shelf) dash.setShelf(index === 1) }
+                                            }
                                         }
                                     }
                                 }
-                            }
-                            // search: every word must match (title, synopsis, tags, genres, notes, year, format). Ctrl+F
-                            Field {
-                                id: searchField
-                                Layout.preferredWidth: activeFocus || text !== "" ? 280 : 210
-                                Behavior on Layout.preferredWidth { NumberAnimation { duration: 220 * Theme.motion; easing.type: Easing.OutCubic } }
-                                implicitHeight: 32
-                                topPadding: 6; bottomPadding: 6; leftPadding: 30
-                                placeholderText: "Search library"
-                                text: dash.query
-                                onTextEdited: { dash.query = text; searchDebounce.restart() }
-                                Keys.onEscapePressed: { text = ""; dash.query = ""; dash.applyView(); grid.forceActiveFocus() }
-                                Component.onCompleted: dash.searchField = searchField
-                                Text { x: 11; anchors.verticalCenter: parent.verticalCenter; text: "\u2315"; color: Theme.faint; font.pixelSize: 14 }
-                            }
-                        }
-                        Flow {
-                            Layout.fillWidth: true
-                            spacing: 8
-                            Dropdown { prefix: "Sort: "; options: dash.opts.sorts || []; value: dash.sort; onChosen: (v) => { dash.sort = v; dash.applyView() } }
-                            Dropdown { options: dash.opts.genres || []; value: dash.genre; onChosen: (v) => { dash.genre = v; dash.applyView() } }
-                            Dropdown { options: dash.opts.qualities || []; value: dash.quality; onChosen: (v) => { dash.quality = v; dash.applyView() } }
-                            Pill { height: 32; label: "Unwatched"; selected: dash.unwatched; accent: Theme.blue; onClicked: { dash.unwatched = !dash.unwatched; dash.applyView() } }
-                            GlassButton { small: true; label: "Clear"; visible: dash.filtered; onClicked: dash.clearView() }
+                                // search: every word must match (title, synopsis, tags, genres, notes, year, format). Ctrl+F
+                                Field {
+                                    id: searchField
+                                    width: activeFocus || text !== "" ? 280 : 210
+                                    Behavior on width { NumberAnimation { duration: 220 * Theme.motion; easing.type: Easing.OutCubic } }
+                                    implicitHeight: 32
+                                    topPadding: 6; bottomPadding: 6; leftPadding: 30
+                                    placeholderText: "Search library"
+                                    text: dash.query
+                                    onTextEdited: { dash.query = text; searchDebounce.restart() }
+                                    Keys.onEscapePressed: { text = ""; dash.query = ""; dash.applyView(); grid.forceActiveFocus() }
+                                    Component.onCompleted: dash.searchField = searchField
+                                    Text { x: 11; anchors.verticalCenter: parent.verticalCenter; text: "\u2315"; color: Theme.faint; font.pixelSize: 14 }
+                                }
+                                                    }
                         }
                     }
                     Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.line }
@@ -493,7 +512,7 @@ Item {
                 function enter() { if (dash.stagger && Theme.motion > 0) { appear = 0; rise.restart() } }
                 SequentialAnimation {
                     id: rise
-                    PauseAnimation { duration: Math.min(index, 14) * 30 }
+                    PauseAnimation { duration: Math.max(0, Math.min(index, 14)) * 30 }
                     NumberAnimation { target: cell; property: "appear"; to: 1; duration: 320; easing.type: Easing.OutCubic }
                 }
                 opacity: appear
@@ -759,6 +778,17 @@ Item {
                                 id: tab
                                 readonly property bool on: tabId === dash.currentTab
                                 property bool editing: false
+                                // drag to reorder: this tab follows the pointer, the others slide aside to make room
+                                property real dragX: 0
+                                readonly property real shiftTarget: dash.tabDragFrom < 0 || index === dash.tabDragFrom ? 0
+                                    : (dash.tabDragFrom < dash.tabDragTo && index > dash.tabDragFrom && index <= dash.tabDragTo) ? -(dash.tabDragW + tabList.spacing)
+                                    : (dash.tabDragFrom > dash.tabDragTo && index >= dash.tabDragTo && index < dash.tabDragFrom) ? dash.tabDragW + tabList.spacing : 0
+                                property real shift: shiftTarget
+                                Behavior on shift { NumberAnimation { duration: 180 * Theme.motion; easing.type: Easing.OutCubic } }
+                                transform: Translate { x: tab.dragX + tab.shift }
+                                z: index === dash.tabDragFrom ? 3 : 1      // above the white pill (highlight, z 0) at all times
+                                scale: index === dash.tabDragFrom ? 1.04 : 1
+                                Behavior on scale { NumberAnimation { duration: 140 * Theme.motion } }
                                 onOnChanged: if (on) { tabList.currentIndex = index; dash.currentTabName = name }
                                 Component.onCompleted: if (on) { tabList.currentIndex = index; dash.currentTabName = name }
                                 width: (editing ? Math.max(120, editor.implicitWidth) : tabName.implicitWidth) + 28
@@ -784,10 +814,35 @@ Item {
                                 Rectangle { visible: tab.editing; anchors.fill: parent; radius: 10; color: "transparent"; border.color: Theme.blue; border.width: 1.5 }
                                 MouseArea {
                                     id: tabArea; anchors.fill: parent; hoverEnabled: true; enabled: !tab.editing
-                                    cursorShape: Qt.PointingHandCursor
+                                    cursorShape: dash.tabDragFrom === index ? Qt.ClosedHandCursor : Qt.PointingHandCursor
                                     acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                    preventStealing: true
+                                    property real pressX: 0
+                                    property bool dragged: false
                                     function rename() { if (tabId < 0) return; tab.editing = true; editor.text = name; editor.forceActiveFocus(); editor.selectAll() }
+                                    onPressed: (m) => { pressX = m.x; dragged = false }
+                                    onPositionChanged: (m) => {
+                                        if (!pressed || tabId < 0 || m.buttons !== Qt.LeftButton) return
+                                        var dx = m.x - pressX
+                                        if (!dragged && Math.abs(dx) < 6) return
+                                        if (!dragged) { dragged = true; dash.tabDragFrom = index; dash.tabDragTo = index; dash.tabDragW = tab.width }
+                                        tab.dragX = dx
+                                        // where it would land: count the other folder tabs whose middle is left of this tab's middle
+                                        var mid = tab.x + dx + tab.width / 2, to = 1
+                                        for (var i = 1; i < tabList.count; i++) {
+                                            var it = tabList.itemAtIndex(i)
+                                            if (i !== index && it && it.x + it.width / 2 < mid) to++
+                                        }
+                                        dash.tabDragTo = Math.min(tabList.count - 1, to)
+                                    }
+                                    onReleased: {
+                                        if (!dragged) return
+                                        var to = dash.tabDragTo
+                                        dash.tabDragFrom = -1; dash.tabDragTo = -1; tab.dragX = 0
+                                        if (to !== index) Backend.moveTab(tabId, to - 1)      // All is index 0 and never moves
+                                    }
                                     onClicked: (m) => {
+                                        if (dragged) return
                                         if (m.button === Qt.RightButton) { rename(); return }
                                         if (tab.on) return
                                         dash.stagger = true; staggerOff.restart()
@@ -796,7 +851,8 @@ Item {
                                     }
                                     onDoubleClicked: rename()
                                 }
-                                Tip { visible: tabArea.containsMouse && tabId >= 0 && !tab.editing; delay: 1200; text: "Double-click to rename"; y: parent.height + 8 }
+                                Tip { visible: tabArea.containsMouse && tabId >= 0 && !tab.editing && dash.tabDragFrom < 0; delay: 1000
+                                      text: "Drag to reorder \u00B7 double-click to rename"; y: parent.height + 8 }
                             }
                         }
                     }

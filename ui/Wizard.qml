@@ -13,7 +13,7 @@ Rectangle {
         var path = Onboarding.pickFolder()
         if (path === "") return
         for (var i = 0; i < folders.count; i++) if (folders.get(i).path === path) return
-        folders.append({ path: path, tab: Onboarding.baseName(path), scrape: true,
+        folders.append({ path: path, tab: Onboarding.baseName(path), scrape: true, anime: /anime/i.test(path),
                          parts: Backend.scrapeParts().map(function(x) { return x.id }).join(",") })
         problem = ""
     }
@@ -93,6 +93,8 @@ Rectangle {
                                     onToggled: folders.setProperty(index, "scrape", checked)
                                 }
                             }
+                            Toggle { Layout.fillWidth: true; visible: model.scrape; text: "Anime (details from AniList)"
+                                checked: model.anime; onToggled: folders.setProperty(index, "anime", checked) }
                             ScrapeParts {
                                 Layout.fillWidth: true
                                 enabled: model.scrape
@@ -144,6 +146,7 @@ Rectangle {
                         if (folders.count === 0) { root.problem = "Add at least one folder to continue."; return }
                         var out = []
                         for (var i = 0; i < folders.count; i++) out.push({ path: folders.get(i).path, tab: folders.get(i).tab, scrape: folders.get(i).scrape,
+                                                                        anime: folders.get(i).anime,
                                                                         parts: folders.get(i).parts.split(",").filter(function(p) { return p !== "" }) })
                         Onboarding.finish(JSON.stringify(out), tmdb.text, associate.checked)
                     }

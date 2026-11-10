@@ -27,7 +27,9 @@ CREATE TABLE IF NOT EXISTS scanned_directories (
     folder_path TEXT UNIQUE NOT NULL,
     tab_name TEXT NOT NULL,
     should_scrape INTEGER DEFAULT 1,
-    scrape_opts TEXT DEFAULT ''          -- what to scrape (comma list of SCRAPE_PARTS); '' = everything
+    scrape_opts TEXT DEFAULT '',         -- what to scrape (comma list of SCRAPE_PARTS); '' = everything
+    sort_order INTEGER DEFAULT 0,        -- tab order (drag the tabs, or Settings > Folders)
+    source TEXT DEFAULT 'tmdb'           -- where details come from: 'tmdb' (films and series) or 'anilist' (anime)
 );
 CREATE TABLE IF NOT EXISTS media_items (
     uuid TEXT PRIMARY KEY,
@@ -47,7 +49,8 @@ CREATE TABLE IF NOT EXISTS media_items (
     tmdb_id INTEGER,
     collection_id INTEGER,              -- TMDB collection (box set) the film belongs to
     collection_name TEXT,
-    score REAL,                         -- scraped audience rating, 0-10 (TMDB vote average / IMDb)
+    score REAL,                         -- scraped audience rating, 0-10 (TMDB vote average / IMDb / AniList)
+    anilist_id INTEGER,
     FOREIGN KEY(parent_directory_id) REFERENCES scanned_directories(id)
 );
 CREATE TABLE IF NOT EXISTS tags (
@@ -116,7 +119,7 @@ CREATE INDEX IF NOT EXISTS idx_tags_media ON tags(media_uuid);
 EDITABLE = ("title", "synopsis", "release_date")
 _TECH = ("duration", "resolution", "codec", "container", "audio_layout", "frame_rate")
 _COLS = ("uuid", "file_path", "parent_directory_id", "title", "media_type",
-         "release_date", "synopsis", "tmdb_id", "collection_id", "collection_name", "score") + _TECH
+         "release_date", "synopsis", "tmdb_id", "collection_id", "collection_name", "score", "anilist_id") + _TECH
 
 _local = threading.local()
 
@@ -196,9 +199,15 @@ def init_db() -> None:
         c.execute("ALTER TABLE media_items ADD COLUMN frame_rate REAL")  # database from an older build
     if "added_at" not in cols:
         c.execute("ALTER TABLE media_items ADD COLUMN added_at TEXT")    # older rows: left empty (sort last)
-    if "scrape_opts" not in {r["name"] for r in c.execute("PRAGMA table_info(scanned_directories)")}:
+    dir_cols = {r["name"] for r in c.execute("PRAGMA table_info(scanned_directories)")}
+    if "scrape_opts" not in dir_cols:
         c.execute("ALTER TABLE scanned_directories ADD COLUMN scrape_opts TEXT DEFAULT ''")
-    for col, kind in (("tmdb_id", "INTEGER"), ("collection_id", "INTEGER"), ("collection_name", "TEXT"), ("score", "REAL")):
+    if "source" not in dir_cols:
+        c.execute("ALTER TABLE scanned_directories ADD COLUMN source TEXT DEFAULT 'tmdb'")
+    if "sort_order" not in dir_cols:
+        c.execute("ALTER TABLE scanned_directories ADD COLUMN sort_order INTEGER DEFAULT 0")
+        c.execute("UPDATE scanned_directories SET sort_order = id")   # keep the order they were added in
+    for col, kind in (("tmdb_id", "INTEGER"), ("collection_id", "INTEGER"), ("collection_name", "TEXT"), ("score", "REAL"), ("anilist_id", "INTEGER")):
         if col not in cols:
             c.execute(f"ALTER TABLE media_items ADD COLUMN {col} {kind}")
     c.commit()
@@ -218,7 +227,7 @@ def _one(cursor) -> dict | None:
 # what a folder can scrape; a folder with scraping on gets all of them unless the user unticked some
 SCRAPE_PARTS = (("titles", "Titles and years"), ("synopsis", "Synopsis"), ("genres", "Genres"), ("score", "Star rating"),
                 ("poster", "Box art (front cover)"), ("disc", "Disc art"), ("sets", "Box sets"),
-                ("cast", "Actors"), ("photos", "Actor photos"))
+                ("cast", "Actors"), ("photos", "Actor photos"), ("gallery", "Gallery images"))
 
 
 def scrape_opts(directory: dict | None) -> set[str]:
@@ -238,19 +247,32 @@ def set_scrape_opts(dir_id: int, parts) -> None:
                   ("" if len(chosen) == len(allowed) else ",".join(chosen) or "none", dir_id))
 
 
-def add_directory(folder_path: str, tab_name: str, should_scrape: bool = True, parts=None) -> int:
+def set_source(dir_id: int, source: str) -> None:
+    with _tx() as c:
+        c.execute("UPDATE scanned_directories SET source=? WHERE id=?", ("anilist" if source == "anilist" else "tmdb", dir_id))
+
+
+def add_directory(folder_path: str, tab_name: str, should_scrape: bool = True, parts=None, source: str = "tmdb") -> int:
     folder_path = norm(folder_path)
     allowed = [k for k, _ in SCRAPE_PARTS]
     opts = "" if parts is None or set(allowed) <= set(parts) else ",".join(p for p in allowed if p in set(parts)) or "none"
     with _tx() as c:
-        c.execute("INSERT OR IGNORE INTO scanned_directories (folder_path, tab_name, should_scrape, scrape_opts) "
-                  "VALUES (?,?,?,?)", (folder_path, tab_name, int(should_scrape), opts))
+        c.execute("INSERT OR IGNORE INTO scanned_directories (folder_path, tab_name, should_scrape, scrape_opts, sort_order, source) "
+                  "VALUES (?,?,?,?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM scanned_directories), ?)",
+                  (folder_path, tab_name, int(should_scrape), opts, "anilist" if source == "anilist" else "tmdb"))
         return c.execute("SELECT id FROM scanned_directories WHERE folder_path=?",
                          (folder_path,)).fetchone()["id"]
 
 
 def list_directories() -> list[dict]:
-    return _rows(conn().execute("SELECT * FROM scanned_directories ORDER BY tab_name COLLATE NOCASE"))
+    return _rows(conn().execute("SELECT * FROM scanned_directories ORDER BY sort_order, id"))
+
+
+def set_directory_order(ids) -> None:
+    """Tabs in this order (folder ids); folders not named keep their place after them."""
+    rest = [d["id"] for d in list_directories() if d["id"] not in set(ids)]
+    with _tx() as c:
+        c.executemany("UPDATE scanned_directories SET sort_order=? WHERE id=?", [(i, d) for i, d in enumerate([*ids, *rest])])
 
 
 def get_directory(dir_id: int) -> dict | None:
@@ -503,7 +525,7 @@ def set_score(uids, score) -> None:
 
 # View More: the sections in the right pane, in the order shown (Settings > Appearance > View More layout)
 DETAIL_SECTIONS = (("title", "Title"), ("rating", "Star ratings"), ("meta", "File details"), ("synopsis", "Synopsis"),
-                   ("cast", "Actors"), ("tags", "Tags"), ("boxset", "Box set"), ("notes", "Private notes"),
+                   ("cast", "Actors"), ("gallery", "Gallery"), ("tags", "Tags"), ("boxset", "Box set"), ("notes", "Private notes"),
                    ("list", "Episodes / films"))
 
 
@@ -721,14 +743,18 @@ def log_watch(uid: str, seconds: float) -> None:
                   (uid, datetime.now(timezone.utc).date().isoformat(), seconds))
 
 
-def analytics(excluded=(), days: int = 7) -> dict:
+def analytics(excluded=(), days: int = 7, excluded_dirs=()) -> dict:
     """Minutes watched per day, and top genres: rated genres first (average stars), then by watch time.
-    Items carrying an excluded tag are left out of everything."""
+    Items carrying an excluded tag, or in an excluded folder, are left out of everything."""
     ex = list(excluded)
     skip = ""
     if ex:
         skip = ("AND NOT EXISTS (SELECT 1 FROM tags x WHERE x.media_uuid=l.media_uuid "
                 f"AND x.tag_name IN ({','.join('?' * len(ex))})) ")
+    dirs = [int(d) for d in excluded_dirs]
+    if dirs:
+        skip += ("AND NOT EXISTS (SELECT 1 FROM media_items mx WHERE mx.uuid=l.media_uuid "
+                 f"AND mx.parent_directory_id IN ({','.join(str(d) for d in dirs)})) ")
     today = datetime.now(timezone.utc).date()
     since = (today - timedelta(days=days - 1)).isoformat()
     per_day = {r["d"]: r["s"] for r in conn().execute(
@@ -743,6 +769,34 @@ def analytics(excluded=(), days: int = 7) -> dict:
         f"WHERE 1=1 {skip}GROUP BY name ORDER BY rating IS NULL, rating DESC, secs DESC LIMIT 5", ex)]
     total = conn().execute(f"SELECT COALESCE(SUM(l.seconds),0) s FROM watch_log l WHERE 1=1 {skip}", ex).fetchone()["s"]
     return {"days": series, "genres": genres, "total_minutes": round(total / 60)}
+
+
+# ---------------------------------------------------------------- what the All tab and Insights leave out
+
+def hidden(kind: str) -> list:
+    """kind: all_dirs / all_tags (kept out of the All tab), insights_dirs (out of Insights). Insights' tags use
+    excluded_tags() as before."""
+    try:
+        return list(json.loads(get_setting(f"hidden_{kind}", "[]")))
+    except (TypeError, ValueError):
+        return []
+
+
+def set_hidden(kind: str, values) -> None:
+    set_setting(f"hidden_{kind}", json.dumps(sorted(set(values), key=str)))
+
+
+def visible_in_all(cards: list[dict], index: dict) -> list[dict]:
+    """The All tab without the folders and tags you chose to keep out of it (each folder's own tab still shows them)."""
+    dirs, tags = set(hidden("all_dirs")), set(hidden("all_tags"))
+    if not (dirs or tags):
+        return cards
+    def shown(c):
+        if c["parent_directory_id"] in dirs:
+            return False
+        info = index.get(c["uuid"], {})
+        return not (tags & (set(info.get("tags", ())) | {"genre:" + g for g in info.get("genres", ())}))
+    return [c for c in cards if shown(c)]
 
 
 def export_user_data() -> dict:

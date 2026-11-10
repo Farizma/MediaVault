@@ -51,7 +51,7 @@ class ScrapeOptionTests(unittest.TestCase):
                "cast": [{"id": 1, "name": "Al Pacino", "role": "Hanna", "photo_url": "http://a"}]}
         tags = []
 
-        async def fake_many(jobs, keys):
+        async def fake_many(jobs, keys, source="tmdb"):
             return [hit]
         with mock.patch.object(scraper, "api_keys", return_value={"tmdb": "K", "omdb": "", "fanart": ""}), \
                 mock.patch.object(scraper, "scrape_many", fake_many), \

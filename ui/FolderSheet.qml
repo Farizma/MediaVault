@@ -16,6 +16,7 @@ Item {
         path = p
         tabName.text = name
         scrapeOn.checked = true
+        animeOn.checked = /anime/i.test(p)       // a folder called Anime is very likely anime
         parts.selected = parts.parts.map(function(x) { return x.id })
         shown = 1
         tabName.forceActiveFocus()
@@ -23,7 +24,7 @@ Item {
     }
     function close() { shown = 0 }
     function add() {
-        Backend.addFolder(path, tabName.text, scrapeOn.checked, parts.selected.join(","))
+        Backend.addFolder(path, tabName.text, scrapeOn.checked, parts.selected.join(","), animeOn.checked)
         close()
     }
 
@@ -53,6 +54,8 @@ Item {
             Field { id: tabName; Layout.fillWidth: true; placeholderText: "Tab name"; onAccepted: root.add(); Keys.onEscapePressed: root.close() }
             Toggle { id: scrapeOn; Layout.fillWidth: true; Layout.topMargin: 4; text: "Scrape the web"
                 hint: "Off for home videos: nothing about them leaves this PC" }
+            Toggle { id: animeOn; Layout.fillWidth: true; text: "This folder is anime"; enabled: scrapeOn.checked; opacity: enabled ? 1 : 0.4
+                hint: "Details, cast and art from AniList (no key needed) instead of TMDB. Understands \u201C[Group] Show - 07\u201D file names." }
             Text { text: "WHAT TO SCRAPE"; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10; opacity: scrapeOn.checked ? 1 : 0.4 }
             ScrapeParts { id: parts; Layout.fillWidth: true; enabled: scrapeOn.checked }
             Text { Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 11; opacity: scrapeOn.checked ? 1 : 0.4

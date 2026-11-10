@@ -32,6 +32,7 @@ Item {
         case "meta": return (info.facts || []).length > 0
         case "synopsis": case "tags": case "notes": return !setSlide
         case "cast": return !setSlide && (info.cast || []).length > 0
+        case "gallery": return !setSlide
         case "boxset": return info.canSet === true
         case "list": return (d.episodes || []).length > 0
         }
@@ -95,6 +96,7 @@ Item {
         pullOut.stop(); packUp.stop(); spread = 0; neighFade = 1
         box.spinning = Qt.binding(function() { return root.f === 1 && !root.closing && !root.launching && !root.turning })
         box.opened = 0
+        box.zoom = 1
         box.yaw = startYaw                   // front-on (poster) or side-on (spine): looks exactly like what it came from
         visible = true
         forceActiveFocus()
@@ -220,8 +222,9 @@ Item {
     Rectangle {
         id: sheet
         anchors.centerIn: parent
-        width: Math.min(1120, root.width - 48)
-        height: Math.min(720, root.height - 48)
+        // grows with the window (up to a comfortable maximum) instead of staying a fixed card on a big screen
+        width: Math.min(root.width - 48, Math.max(1120, Math.min(1900, root.width * 0.84)))
+        height: Math.min(root.height - 48, Math.max(720, Math.min(1240, root.height * 0.88)))
         radius: 16
         color: Theme.panel
         border.color: Theme.lineStrong
@@ -266,7 +269,7 @@ Item {
                 id: artTools
                 anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 18 }
                 spacing: 8
-                Text { anchors.horizontalCenter: parent.horizontalCenter; text: "BOX ART"; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10 }
+                Text { anchors.horizontalCenter: parent.horizontalCenter; text: "ADD / CHANGE BOX ART ASSETS"; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10 }
                 Row {
                     anchors.horizontalCenter: parent.horizontalCenter
                     spacing: 6
@@ -327,7 +330,7 @@ Item {
                             Layout.topMargin: modelData === "title" ? -8 : 0
                             active: root.showSection(modelData)
                             visible: active
-                            sourceComponent: ({ title: secTitle, rating: secRating, meta: secMeta, synopsis: secSynopsis, cast: secCast,
+                            sourceComponent: ({ title: secTitle, rating: secRating, meta: secMeta, synopsis: secSynopsis, cast: secCast, gallery: secGallery,
                                                 tags: secTags, boxset: secBoxSet, notes: secNotes, list: secList })[modelData] || null
                         }
                     }
@@ -501,6 +504,50 @@ Item {
                 }
             }
 
+            // ---- Gallery: wide stills (scraped, or your own); they also play behind the recommended carousel
+            Component {
+                id: secGallery
+                ColumnLayout {
+                    spacing: 8
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Caption { text: "GALLERY"; Layout.fillWidth: true }
+                        GlassButton { small: true; label: "Add images\u2026"; glyph: "+"; onClicked: Backend.addGalleryImages(root.infoKey) }
+                    }
+                    ListView {
+                        id: galleryList
+                        visible: (root.info.gallery || []).length > 0
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 104
+                        orientation: ListView.Horizontal
+                        spacing: 10
+                        clip: true
+                        boundsBehavior: Flickable.StopAtBounds
+                        model: root.info.gallery || []
+                        ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AsNeeded }
+                        delegate: Rectangle {
+                            width: 160; height: 90; radius: 8; color: Theme.slate; border.color: shotArea.containsMouse ? "#66FFFFFF" : Theme.line
+                            clip: true
+                            Image { anchors.fill: parent; source: modelData.url; fillMode: Image.PreserveAspectCrop; asynchronous: true
+                                sourceSize.width: 320; sourceSize.height: 180 }
+                            MouseArea { id: shotArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: lightbox.open(index) }
+                            Rectangle {      // remove
+                                visible: shotArea.containsMouse || xArea.containsMouse
+                                anchors { top: parent.top; right: parent.right; margins: 5 }
+                                width: 22; height: 22; radius: 11; color: xArea.containsMouse ? Theme.red : "#CC000000"
+                                Text { anchors.centerIn: parent; text: "\u2715"; color: "#FFFFFF"; font.pixelSize: 10 }
+                                MouseArea { id: xArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                    onClicked: Backend.removeGalleryImage(root.infoKey, modelData.name) }
+                            }
+                            Rectangle { visible: modelData.custom; anchors { left: parent.left; bottom: parent.bottom; margins: 5 } width: 34; height: 16; radius: 4
+                                color: "#CC000000"; Text { anchors.centerIn: parent; text: "YOURS"; color: "#FFFFFF"; font.family: Theme.mono; font.pixelSize: 8 } }
+                        }
+                    }
+                    Text { visible: (root.info.gallery || []).length === 0; Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 12
+                        text: "No images yet. Stills from TMDB or AniList arrive with scraping (Gallery images in the folder's scrape options, or Fetch missing), or add your own." }
+                }
+            }
+
             Component {
                 id: secTags
                 ColumnLayout {
@@ -511,8 +558,10 @@ Item {
                         Repeater {
                             model: root.info.tags || []
                             Pill {
-                                label: (modelData.genre ? modelData.name.substring(6) : modelData.name) + (modelData.genre ? "" : "   \u00D7")
-                                accent: modelData.genre ? Theme.blue : Theme.green
+                                // genres (blue, scraped), automatic tags from folders and file names (grey), yours (green)
+                                label: (modelData.genre ? modelData.name.substring(6) : modelData.auto ? modelData.name.substring(5) : modelData.name)
+                                       + (modelData.genre ? "" : "   \u00D7")
+                                accent: modelData.genre ? Theme.blue : modelData.auto ? Theme.muted : Theme.green
                                 onClicked: if (!modelData.genre) { Backend.removeTag(root.infoKey, modelData.name); root.refresh() }
                             }
                         }
@@ -655,8 +704,9 @@ Item {
 
     DvdBox {
         id: box
-        width: 360
-        height: Math.min(470, sheet.height - 96)
+        // as big as the stage allows: from under the film label down to just above the box-art buttons
+        height: Math.max(300, sheet.height - 150)
+        width: Math.min(stage.width - 24, height * 0.92)
         front: root.cur.cover || ""
         back: root.cur.back || ""
         spine: root.cur.spine || ""
@@ -670,7 +720,7 @@ Item {
         enabled: root.f === 1 && !root.closing && !root.launching && !root.turning
         // resting place: centred in the left pane, above the box-art buttons
         readonly property real restX: sheet.x + (stage.width - width) / 2
-        readonly property real restY: sheet.y + (sheet.height - 70 - height) / 2
+        readonly property real restY: sheet.y + sheet.height - 80 - height     // its hint line sits just above the art buttons
         readonly property real restCx: restX + width / 2
         readonly property real restCy: restY + faceCY
         // start: the card's poster (or, without a card, a smaller box in the same place)
@@ -746,6 +796,49 @@ Item {
                 text: Backend.castSupport().airplay || Backend.castSupport().chromecast ? "Looking for devices on your network\u2026" : "Install AirPlay and Chromecast support in Settings \u203A Streaming." }
         }
     }
+
+    // Gallery viewer: one image at a time, as big as the window allows; arrows or the keyboard to page, Esc to close
+    Item {
+        id: lightbox
+        property int index: 0
+        readonly property var shots: root.info.gallery || []
+        property real shown: 0
+        function open(i) { index = i; shown = 1; forceActiveFocus() }
+        function close() { shown = 0; root.forceActiveFocus() }
+        anchors.fill: parent
+        z: 44
+        visible: shown > 0.001
+        opacity: shown
+        Behavior on shown { NumberAnimation { duration: 220 * Theme.motion; easing.type: Easing.OutCubic } }
+        Keys.onEscapePressed: close()
+        Keys.onLeftPressed: index = (index - 1 + shots.length) % Math.max(1, shots.length)
+        Keys.onRightPressed: index = (index + 1) % Math.max(1, shots.length)
+        Rectangle { anchors.fill: parent; color: "#F0000000" }
+        MouseArea { anchors.fill: parent; onClicked: lightbox.close(); onWheel: (w) => w.accepted = true }
+        Image {
+            anchors { fill: parent; margins: 64 }
+            source: lightbox.shots.length ? lightbox.shots[Math.min(lightbox.index, lightbox.shots.length - 1)].url : ""
+            fillMode: Image.PreserveAspectFit; asynchronous: true; smooth: true
+            scale: 0.96 + 0.04 * lightbox.shown
+        }
+        Text { anchors { bottom: parent.bottom; horizontalCenter: parent.horizontalCenter; bottomMargin: 24 }
+            text: (lightbox.index + 1) + " / " + lightbox.shots.length + "   \u00B7   \u2190 \u2192 to page, Esc to close"
+            color: Theme.faint; font.family: Theme.mono; font.pixelSize: 11 }
+        Repeater {
+            model: lightbox.shots.length > 1 ? [-1, 1] : []
+            Rectangle {
+                width: 44; height: 44; radius: 22; color: navArea.containsMouse ? Qt.rgba(1, 1, 1, 0.18) : Qt.rgba(1, 1, 1, 0.08)
+                anchors.verticalCenter: parent.verticalCenter
+                x: modelData < 0 ? 16 : lightbox.width - width - 16
+                Text { anchors.centerIn: parent; text: modelData < 0 ? "\u2039" : "\u203A"; color: "#FFFFFF"; font.pixelSize: 24 }
+                MouseArea { id: navArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                    onClicked: lightbox.index = (lightbox.index + modelData + lightbox.shots.length) % lightbox.shots.length }
+            }
+        }
+    }
+
+    // custom box art: the crop editor opens on the picture you picked
+    ArtCropper { id: cropper; anchors.fill: parent }
 
     // Fix match: search TMDB by hand; picking a result re-pulls the title, details, genres, cover and disc
     Popup {
@@ -942,6 +1035,7 @@ Item {
         function onMatchFailed(key, why) { if (key === root.infoKey) matchMenu.phase = why }
         function onMatchApplied(key, newKey) { if (key === root.infoKey) { matchMenu.close(); root.refresh() } }
         function onDevicesFound(list) { castMenu.devices = list }
+        function onArtPicked(key, face, url, path) { if (root.visible) cropper.open(key, face, url, path) }
         function onBoxArtChanged(key) { if ((key === root.infoKey || key === root.cur.key) && root.visible) root.refresh() }
     }
 }

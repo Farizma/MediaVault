@@ -110,6 +110,15 @@ Item {
                             Layout.preferredWidth: 1          // take what is left, never push the row wider
                             Layout.minimumWidth: 160
                             spacing: 8
+                            Text { text: "FOLDERS COUNTED"; Layout.fillWidth: true; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 11 }
+                            Flow {
+                                Layout.fillWidth: true; spacing: 6
+                                Repeater {
+                                    model: root.ins.folders || []
+                                    Pill { label: (modelData.hidden ? "Left out: " : "") + modelData.name; selected: !modelData.hidden; accent: Theme.green
+                                        onClicked: Backend.toggleHidden("insights_dirs", String(modelData.id)) }
+                                }
+                            }
                             Text { text: "TAP A TAG TO HIDE IT FROM THESE CHARTS"; Layout.fillWidth: true; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 11; wrapMode: Text.Wrap }
                             Flow {
                                 Layout.fillWidth: true; spacing: 6

@@ -75,6 +75,7 @@ _Nothing decided yet. Ideas move here once we choose to build them._
 | Box set title dropdown, pull-out carousel with wave, reorderable View More, audience rating, Resume / From start | Round 11 |
 | v1.0.0: Windows setup, Components and GitHub update checks | 1.0.0 |
 | View More fix, setup elevation fix, smooth wheel scrolling, smoother parallax, Black Out button, Insights window | 1.0.1 |
+| Anime (AniList), crop editor, Gallery, auto tags, hide from All / Insights, tab and layout dragging, full Custom theme, player window and PiP fixes | 1.0.2 |
 
 ### Proposed
 

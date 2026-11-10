@@ -8,6 +8,8 @@ Rectangle {
     property string label: ""
     property color iconColor: Theme.text
     property bool active: false
+    property bool toggled: false              // an on/off switch that is on (Black Out): tinted, ringed, with a dot
+    property color onColor: Theme.amber
     property string tip: ""
     signal clicked()
 
@@ -21,16 +23,25 @@ Rectangle {
     radius: 14
     clip: true
     color: Qt.rgba(1, 1, 1, (active ? 0.12 : 0) + (open ? 0.20 : 0.10))
-    border.color: Theme.lineStrong
+    border.color: toggled ? onColor : Theme.lineStrong
+    border.width: toggled ? 1.5 : 1
     scale: area.pressed ? 0.96 : 1
     Behavior on implicitWidth { NumberAnimation { duration: 260 * Theme.motion; easing.type: Easing.OutQuint } }
     Behavior on scale { NumberAnimation { duration: 120 * Theme.motion; easing.type: Easing.OutCubic } }
     Behavior on color { ColorAnimation { duration: 150 * Theme.motion } }
 
+    Rectangle { anchors.fill: parent; radius: parent.radius; color: root.onColor; opacity: root.toggled ? 0.22 : 0
+        Behavior on opacity { NumberAnimation { duration: 160 * Theme.motion } } }
+    Rectangle {      // "on" dot, top right
+        width: 7; height: 7; radius: 3.5; color: root.onColor
+        anchors { top: parent.top; right: parent.right; margins: 6 }
+        scale: root.toggled ? 1 : 0
+        Behavior on scale { NumberAnimation { duration: 200 * Theme.motion; easing.type: Easing.OutBack } }
+    }
     HudIcon {
         id: ico
         kind: root.iconKind
-        color: root.iconColor
+        color: root.toggled ? root.onColor : root.iconColor
         width: root.restIcon; height: root.restIcon
         anchors.verticalCenter: parent.verticalCenter
         // centred at rest; at the left edge (and shrunk to openIcon) when open

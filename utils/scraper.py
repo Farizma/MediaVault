@@ -55,13 +55,25 @@ _JUNK = re.compile(r"\b(?:480p|576p|720p|1080p|1440p|2160p|4k|uhd|bluray|blu-ray
                    r"remux|proper|repack|extended|unrated|imax|10bit)\b", re.I)
 
 
+# anime releases: "[Group] Title - 07 (1080p)", "Title - 07v2", "Title S2 - 07", "Title Ep 07", "Title E07"
+_ANIME_EP = re.compile(r"(?:\s(?:S|Season\s?)(\d{1,2}))?\s(?:-\s|Ep\.?\s?|E|#)(\d{1,4})(?:v\d)?(?=\s|$|[(\[])", re.I)
+_SEASON_DIR = re.compile(r"^(?:season|s)\s*(\d{1,2})$", re.I)
+
+
 def clean_name(filename: str, fallback: str = "") -> Parsed:
-    """'The.Movie.2019.1080p.BluRay.x264-GRP.mkv' -> Parsed('The Movie', '2019', None, None)."""
+    """'The.Movie.2019.1080p.BluRay.x264-GRP.mkv' -> Parsed('The Movie', '2019', None, None).
+    'Show S01E02' and anime style '[Group] Show - 02 (1080p)' are episodes; a 'Season 2' folder sets the season."""
     stem = os.path.splitext(os.path.basename(filename))[0]
     stem = re.sub(r"[._]+", " ", _GROUP.sub(" ", stem))
     season = episode = year = None
     if m := _SXE.search(stem):
         season, episode, stem = int(m[1]), int(m[2]), stem[:m.start()]
+    elif (m := _ANIME_EP.search(stem)) and not _YEAR.fullmatch(" " + m[2]):
+        episode = int(m[2])
+        season = int(m[1]) if m[1] else None
+        if season is None and (d := _SEASON_DIR.match(os.path.basename(os.path.dirname(filename)).strip())):
+            season = int(d[1])
+        stem = stem[:m.start()]
     if years := list(_YEAR.finditer(stem)):
         year, stem = years[-1][1], stem[:years[-1].start()]
     stem = _JUNK.split(stem, maxsplit=1)[0]
@@ -139,7 +151,8 @@ def tmdb_search(kind: str, query: str, year: str, key: str) -> list[dict]:
 def tmdb_details(kind: str, tmdb_id: int, key: str) -> dict:
     """Everything for one title by id, in the same shape as a search hit, plus its collection (films only)."""
     credits = "aggregate_credits" if kind == "show" else "credits"
-    r = _tmdb_json(f"{'tv' if kind == 'show' else 'movie'}/{int(tmdb_id)}", key, append_to_response=credits)
+    r = _tmdb_json(f"{'tv' if kind == 'show' else 'movie'}/{int(tmdb_id)}", key, append_to_response=credits + ",images",
+                   include_image_language="null,en")
     poster, coll = r.get("poster_path"), r.get("belongs_to_collection") or {}
     return {"tmdb_id": r.get("id"), "title": r.get("title") or r.get("name"),
             "release_date": r.get("release_date") or r.get("first_air_date"),
@@ -149,7 +162,17 @@ def tmdb_details(kind: str, tmdb_id: int, key: str) -> dict:
             "score": _score(r),
             "collection_id": coll.get("id"), "collection_name": coll.get("name"),
             "collection_poster_url": f"{IMG}w500{coll['poster_path']}" if coll.get("poster_path") else None,
-            "cast": _cast((r.get(credits) or {}).get("cast") or [])}
+            "cast": _cast((r.get(credits) or {}).get("cast") or []),
+            "gallery_urls": _backdrops(r.get("images") or {})}
+
+
+GALLERY_MAX = 6
+
+
+def _backdrops(images: dict) -> list[str]:
+    """The best-voted wide stills (no text on them first), for the Gallery and the recommended carousel."""
+    shots = sorted(images.get("backdrops") or [], key=lambda b: (b.get("iso_639_1") is not None, -(b.get("vote_average") or 0)))
+    return [f"{IMG}w1280{b['file_path']}" for b in shots[:GALLERY_MAX] if b.get("file_path")]
 
 
 CAST_MAX = 15
@@ -231,14 +254,20 @@ def disc_url(tmdb_id, key: str) -> str | None:
     return discs[0]["url"] if discs else None
 
 
-def _lookup(kind: str, p: Parsed, keys: dict) -> dict | None:
+def _lookup(kind: str, p: Parsed, keys: dict, source: str = "tmdb") -> dict | None:
+    if source == "anilist":                  # anime folders: AniList, no key needed
+        from utils import anilist
+        try:
+            return anilist.lookup(p.title, p.year)
+        except anilist.AniListError as e:
+            raise ScrapeError(str(e)) from None
     if not (keys.get("tmdb") or keys.get("omdb")):
         raise ScrapeError("no API key configured")
     if keys.get("tmdb") and (hit := _tmdb(kind, p, keys["tmdb"])):
         if hit.get("tmdb_id"):
             try:   # one more request: the search result has no cast, and does not say which collection a film is in
                 d = tmdb_details(kind, hit["tmdb_id"], keys["tmdb"])
-                hit.update({k: d[k] for k in ("collection_id", "collection_name", "collection_poster_url", "cast")})
+                hit.update({k: d[k] for k in ("collection_id", "collection_name", "collection_poster_url", "cast", "gallery_urls")})
                 if kind == "show":
                     hit["collection_id"] = hit["collection_name"] = None
             except ScrapeError:
@@ -248,7 +277,7 @@ def _lookup(kind: str, p: Parsed, keys: dict) -> dict | None:
     return _omdb(kind, p, keys["omdb"]) if keys.get("omdb") else None
 
 
-async def scrape_many(jobs: list[tuple[str, Parsed]], keys: dict) -> list:
+async def scrape_many(jobs: list[tuple[str, Parsed]], keys: dict, source: str = "tmdb") -> list:
     """jobs = [(media_type, Parsed)]. Same show/title is asked once (memory cache)."""
     sem = asyncio.Semaphore(CONCURRENCY)
     unique = list(dict.fromkeys((k, p.title, p.year) for k, p in jobs))
@@ -256,7 +285,7 @@ async def scrape_many(jobs: list[tuple[str, Parsed]], keys: dict) -> list:
     async def one(kind, title, year):
         async with sem:
             try:
-                return await asyncio.to_thread(_lookup, kind, Parsed(title, year, None, None), keys)
+                return await asyncio.to_thread(_lookup, kind, Parsed(title, year, None, None), keys, source)
             except ScrapeError as e:
                 return e
 
@@ -373,6 +402,45 @@ def save_collection_poster(cid, url: str, cache: dict | None = None, force: bool
         save_webp(img, dest)
     except Exception:
         logging.getLogger(__name__).warning("collection poster failed for %s", cid, exc_info=True)
+
+
+def gallery_dir(item: dict) -> Path:
+    """A title's Gallery: wide images (scraped stills, or your own) shown in View More and behind the recommended
+    carousel. One per film, one per series (every episode shares it), in the app cache for personal clips."""
+    if item["media_type"] == "show":
+        return Path(item["file_path"]).parent / ASSET_DIR / "_series.gallery"
+    return _assets(item) / f"{_stem(item)}.gallery"
+
+
+GALLERY_BOX = (1280, 720)
+
+
+def gallery_images(item: dict) -> list[Path]:
+    """Your own images first (c-*.webp, in the order added), then the scraped ones (s-*.webp)."""
+    d = gallery_dir(item)
+    if not d.is_dir():
+        return []
+    files = sorted(p for p in d.iterdir() if p.suffix.lower() == ".webp")
+    return [p for p in files if p.name.startswith("c-")] + [p for p in files if not p.name.startswith("c-")]
+
+
+def save_gallery(item: dict, urls: list[str], replace: bool = False) -> int:
+    """Download scraped Gallery images (s-01.webp ...). Your own images are never touched. Returns how many saved."""
+    d = gallery_dir(item)
+    if replace and d.is_dir():
+        for p in d.glob("s-*.webp"):
+            p.unlink(missing_ok=True)
+    saved = 0
+    for i, url in enumerate(urls[:GALLERY_MAX], 1):
+        dest = d / f"s-{i:02d}.webp"
+        if dest.exists():
+            continue
+        try:
+            save_webp(fetch_image(url), dest, box=GALLERY_BOX)
+            saved += 1
+        except Exception:
+            logging.getLogger(__name__).warning("gallery image failed: %s", url, exc_info=True)
+    return saved
 
 
 def cover_path(item: dict) -> Path:

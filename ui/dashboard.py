@@ -5,6 +5,7 @@ import random
 import re
 import sys
 import threading
+import time
 from pathlib import Path
 
 from PySide6.QtCore import Property, QAbstractListModel, QModelIndex, QObject, Qt, QTimer, Signal, Slot
@@ -18,7 +19,8 @@ from . import dvd_box, file_url, pick_folder, pick_image
 log = logging.getLogger(__name__)
 BILLBOARD_SIZE = 8  # titles in the recommended carousel
 SETTINGS = {"tmdb_key", "omdb_key", "night_mode", "reduce_motion", "upscale_level", "show_insights", "core", "theme",
-            "custom_accent", "custom_highlight", "auto_credits",
+            "custom_accent", "custom_highlight", "custom_page", "custom_surface", "custom_card", "custom_text",
+            "custom_muted", "custom_amber", "custom_red", "auto_credits", "auto_tags",
             "fanart_key", "animated_theme", "detail_order", "group_collections", "discord", "discord_detail", "discord_app_id"}
 
 
@@ -83,7 +85,8 @@ def billboard_deck(cards: list[dict], keep: list[str], size: int = BILLBOARD_SIZ
         deck += random.sample(done, min(len(done), size - len(deck)))
     items = []
     for c in deck:
-        art = next((p for p in (scraper.fanart_path(c), scraper.cover_path(c)) if p.exists()), None)
+        gallery = scraper.gallery_images(c)          # a random still from the title's Gallery, else the fanart / cover
+        art = random.choice(gallery) if gallery else next((p for p in (scraper.fanart_path(c), scraper.cover_path(c)) if p.exists()), None)
         length = f"{c['episodes']} episodes" if c["episodes"] else duration_label(c["duration"])
         meta = " · ".join(x for x in ((c["release_date"] or "")[:4], c["resolution"], c["codec"],
                                       c["audio_layout"], length) if x)
@@ -220,8 +223,11 @@ class LibraryModel(QAbstractListModel):
         """Refresh the cards (searched, filtered, sorted by `view`). Returns ALL of the tab's cards, unfiltered,
         so the billboard picks from the whole tab without a second query."""
         cards = db.list_library(dir_id)
+        index = db.search_index()
+        if dir_id is None:                 # the All tab leaves out the folders and tags you chose to hide from it
+            cards = db.visible_in_all(cards, index)
         online = {d["id"]: os.path.isdir(d["folder_path"]) for d in db.list_directories()}   # one check per folder
-        shown = library_view(cards, db.search_index(), **self.view) if self.view else cards
+        shown = library_view(cards, index, **self.view) if self.view else cards
         rows = [self._row(c, online.get(c["parent_directory_id"], True)) for c in shown]
         if [r["key"] for r in rows] == [r["key"] for r in self._rows]:
             self._rows = rows  # same cards: refresh in place so the grid keeps its scroll position
@@ -270,12 +276,14 @@ class Dashboard(QObject):
     libraryChanged = Signal()          # emit from any thread: the UI refreshes on the GUI thread
     toast = Signal(str)
     raiseWindow = Signal()
+    minimizeWindow = Signal()          # picture in picture: only the small video window stays on screen
     thumbnailsReady = Signal(int)
     boxArtChanged = Signal(str)        # key whose covers changed: the open detail view reloads its textures
     offlineChanged = Signal()
     streamChanged = Signal()
     devicesFound = Signal("QVariantList")
     folderPicked = Signal(str, str)
+    artPicked = Signal(str, str, str, str)       # key, face, image url, path: View More opens its crop editor
     componentsChecked = Signal("QVariantList")   # Settings > Components, after a check or an update
     appUpdateProgress = Signal(float)            # 0..1 while the new setup.exe downloads; -1 = failed              # path, suggested tab name
     matchResults = Signal(str, "QVariantList")   # key, candidates
@@ -388,13 +396,15 @@ class Dashboard(QObject):
 
     def _refresh_insights(self):
         excluded = db.excluded_tags()
-        data = db.analytics(excluded)
+        data = db.analytics(excluded, excluded_dirs=db.hidden("insights_dirs"))
         h, m = divmod(data["total_minutes"], 60)
         self._insights = {
             "total": f"{h}h {m:02d}m",
             "days": [{"label": d[8:], "minutes": mins} for d, mins in data["days"]],
             "genres": [{"name": n, "minutes": mins, "rating": r or 0} for n, mins, r in data["genres"]],
             "tags": [{"name": t, "hidden": t in excluded} for t in db.user_tags()],
+            "folders": [{"id": d["id"], "name": d["tab_name"], "hidden": d["id"] in set(db.hidden("insights_dirs"))}
+                        for d in db.list_directories()],
         }
         self.insightsChanged.emit()
 
@@ -472,7 +482,7 @@ class Dashboard(QObject):
             "disc": file_url(scraper.disc_art(art)) if scraper.disc_art(art) else "",
             "customDisc": scraper.custom_disc_path(art).exists(),
             "rating": db.get_rating(item["uuid"]), "note": db.get_note(item["uuid"]),
-            "tags": [{"name": t, "genre": t.startswith("genre:")} for t in db.tags_for(item["uuid"])
+            "tags": [{"name": t, "genre": t.startswith("genre:"), "auto": t.startswith("auto:")} for t in db.tags_for(item["uuid"])
                      if not t.startswith("rating:")],
             "playLabel": "Resume" if resume else "Play",
             "resume": resume and not films,
@@ -481,6 +491,8 @@ class Dashboard(QObject):
             "order": db.detail_order(),
             "slides": self._slides(key, art, films) if films else [],
             "cast": [] if films else self._cast_list(item),
+            "gallery": [] if films else [{"url": file_url(p), "name": p.name, "custom": p.name.startswith("c-")}
+                                         for p in scraper.gallery_images(item)],
             "boxSet": ({"key": f"set:{item['collection_id']}", "name": item.get("collection_name") or ""}
                        if not films and not eps and item.get("collection_id") is not None else {}),
             "canSet": not films and item["media_type"] == "movie",
@@ -491,14 +503,24 @@ class Dashboard(QObject):
         }
 
     # -- fix match: search TMDB by hand, then re-pull details and art for the chosen title
+    def _is_anime(self, key: str) -> bool:
+        item = self._target(key)
+        d = db.get_directory(item["parent_directory_id"]) if item and item.get("parent_directory_id") else None
+        return bool(d) and (d.get("source") or "tmdb") == "anilist"
+
     @Slot(str, str, str)
     def searchMatch(self, key: str, query: str, year: str):
         kind = "show" if key.startswith("show:") else "movie"
+        anime = self._is_anime(key)
 
         def work():
             try:
-                self.matchResults.emit(key, scraper.tmdb_search(kind, query.strip(), year.strip(), scraper.api_keys()["tmdb"]))
-            except scraper.ScrapeError as e:
+                if anime:
+                    from utils import anilist
+                    self.matchResults.emit(key, anilist.search(query.strip()))
+                else:
+                    self.matchResults.emit(key, scraper.tmdb_search(kind, query.strip(), year.strip(), scraper.api_keys()["tmdb"]))
+            except Exception as e:   # ScrapeError, AniListError
                 self.matchFailed.emit(key, str(e))
         if query.strip():
             threading.Thread(target=work, daemon=True, name="match-search").start()
@@ -513,9 +535,14 @@ class Dashboard(QObject):
         if not items:
             return
         keys = scraper.api_keys()
+        anime = self._is_anime(key)
         try:
-            hit = scraper.tmdb_details("show" if show else "movie", tmdb_id, keys["tmdb"])
-        except scraper.ScrapeError as e:
+            if anime:
+                from utils import anilist
+                hit = anilist.details(tmdb_id)
+            else:
+                hit = scraper.tmdb_details("show" if show else "movie", tmdb_id, keys["tmdb"])
+        except Exception as e:   # ScrapeError, AniListError
             self.matchFailed.emit(key, str(e))
             return
         own = items[0].get("collection_id") is not None and items[0]["collection_id"] < 0   # a set you made stays
@@ -524,6 +551,11 @@ class Dashboard(QObject):
                      None if show else cid, None if show else cname, hit["genres"])
         if hit.get("score") is not None:
             db.set_score([i["uuid"] for i in items], hit["score"])
+        if anime and hit.get("anilist_id"):
+            with db._tx() as c:
+                c.executemany("UPDATE media_items SET anilist_id=? WHERE uuid=?", [(hit["anilist_id"], i["uuid"]) for i in items])
+        if hit.get("gallery_urls"):
+            scraper.save_gallery(items[0], hit["gallery_urls"], replace=True)
         if hit.get("cast"):
             db.set_cast(db.cast_owner(items[0]), hit["cast"])
             scraper.save_person_photos(hit["cast"])
@@ -539,7 +571,7 @@ class Dashboard(QObject):
                     if hit["poster_url"] not in cache:
                         cache[hit["poster_url"]] = scraper.fetch_image(hit["poster_url"])
                     scraper.save_webp(cache[hit["poster_url"]], scraper.poster_path(i))
-                if not show:
+                if not show and hit.get("tmdb_id"):
                     scraper.disc_path(i).unlink(missing_ok=True)         # the old title's disc
                     url = scraper.disc_url(hit["tmdb_id"], keys["fanart"])
                     if url:
@@ -714,25 +746,73 @@ class Dashboard(QObject):
         self.frames.clear()
 
     # -- custom DVD box art (for titles the scraper found nothing for, or art you prefer)
+    def _media_folder(self, key: str) -> str:
+        """Where a title's file is: the file picker for its art starts there."""
+        item = self._target(key)
+        return os.path.dirname(item["file_path"]) if item and item.get("file_path") else ""
+
     @Slot(str, str)
     def pickBoxArt(self, key: str, face: str):
-        """face = "front", "back" or "spine". Opens a file dialog; the image is cropped to the face's shape and
-        saved for every episode of a series, next to the media (.vault-assets)."""
+        """face = front / back / spine / disc. A file dialog (starting in the title's own folder), then View More's
+        crop editor (artPicked) to frame, zoom and turn it; saveCroppedArt writes it."""
         if face not in CUSTOM_ART:
             return
 
         def run():
-            path = pick_image()
-            if not path:
-                return
-            try:
-                save_box_art(Image.open(path), self._art_items(key), face)
-                self.toast.emit(f"{face.capitalize()} art updated")
-            except Exception as e:
-                log.exception("box art")
-                self.toast.emit(f"Could not use that image: {e}")
-            self.boxArtChanged.emit(key)
+            path = pick_image(self._media_folder(key), f"Choose {face} art")
+            if path:
+                self.artPicked.emit(key, face, file_url(path, bust=False), path)
         QTimer.singleShot(0, run)  # same reason as pickFolder: no modal dialog from inside a QML handler
+
+    @Slot(str, str, str, float, float, float, float, int)
+    def saveCroppedArt(self, key: str, face: str, path: str, x: float, y: float, w: float, h: float, turns: int):
+        """The crop editor's result: (x, y, w, h) as fractions of the image as it is shown (after EXIF rotation),
+        then a quarter-turn count. Saved at the face's size for every file of the card (or the box set)."""
+        if face not in CUSTOM_ART:
+            return
+        try:
+            img = ImageOps.exif_transpose(Image.open(path)).convert("RGB")
+            W, H = img.size
+            box = (max(0, int(x * W)), max(0, int(y * H)), min(W, int((x + w) * W)), min(H, int((y + h) * H)))
+            if box[2] - box[0] < 8 or box[3] - box[1] < 8:
+                raise ValueError("the crop is too small")
+            img = img.crop(box)
+            if turns % 4:
+                img = img.rotate(-90 * (turns % 4), expand=True)
+            save_box_art(img, self._art_items(key), face)
+            self.toast.emit(f"{face.capitalize()} art updated")
+        except Exception as e:
+            log.exception("box art")
+            self.toast.emit(f"Could not use that image: {e}")
+        self.boxArtChanged.emit(key)
+
+    # -- Gallery: wide images for View More and the recommended carousel (scraped, or your own)
+    @Slot(str)
+    def addGalleryImages(self, key: str):
+        def run():
+            from . import pick_images
+            paths = pick_images(self._media_folder(key))
+            item = self._target(key)
+            if not (paths and item):
+                return
+            d = scraper.gallery_dir(item)
+            n = 0
+            for p in paths:
+                try:
+                    scraper.save_webp(Image.open(p), d / f"c-{int(time.time() * 1000)}-{n}.webp", box=scraper.GALLERY_BOX)
+                    n += 1
+                except Exception:
+                    log.warning("gallery image %s", p, exc_info=True)
+            self.toast.emit(f"Added {n} image{'s' if n != 1 else ''} to the Gallery")
+            self.boxArtChanged.emit(key)
+        QTimer.singleShot(0, run)
+
+    @Slot(str, str)
+    def removeGalleryImage(self, key: str, name: str):
+        item = self._target(key)
+        if item and re.fullmatch(r"[cs]-[\w.-]+\.webp", name):
+            (scraper.gallery_dir(item) / name).unlink(missing_ok=True)
+            self.boxArtChanged.emit(key)
 
     @Slot(str, str)
     def resetBoxArt(self, key: str, face: str):
@@ -751,7 +831,7 @@ class Dashboard(QObject):
     def setSetting(self, key: str, value: str):
         if key not in SETTINGS:
             return
-        if key.startswith("custom_") and not re.match(r"^#[0-9A-Fa-f]{6}$", value):
+        if key.startswith("custom_") and value and not re.match(r"^#[0-9A-Fa-f]{6}$", value):   # "" = back to default
             return
         db.set_setting(key, value.strip() if key.endswith("_key") else value)
         engine = self.app.engine
@@ -769,27 +849,79 @@ class Dashboard(QObject):
             self.app.presence.configure()
         elif key == "theme":
             self.app.set_theme(value)
-        elif key in ("custom_accent", "custom_highlight"):   # picking a colour switches to the Custom theme
+        elif key.startswith("custom_"):   # picking a colour switches to the Custom theme
             self.app.set_theme("custom")
 
     @Slot(result="QVariantList")
     def directories(self):
         return [{"id": d["id"], "name": d["tab_name"], "path": d["folder_path"], "scrape": bool(d["should_scrape"]),
-                 "parts": sorted(db.scrape_opts({**d, "should_scrape": 1}))} for d in db.list_directories()]
+                 "parts": sorted(db.scrape_opts({**d, "should_scrape": 1})),
+                 "anime": (d.get("source") or "tmdb") == "anilist",
+                 "inAll": d["id"] not in set(db.hidden("all_dirs")),
+                 "inInsights": d["id"] not in set(db.hidden("insights_dirs"))} for d in db.list_directories()]
 
     @Slot(result="QVariantList")
     def scrapeParts(self):
         return [{"id": k, "label": l} for k, l in db.SCRAPE_PARTS]
 
-    @Slot(str, str, bool, str)
-    def addFolder(self, path: str, tab: str, scrape: bool, parts: str):
-        """After the folder picker: the options sheet in QML sends the chosen tab name and what to scrape."""
+    @Slot(str, str, bool, str, bool)
+    def addFolder(self, path: str, tab: str, scrape: bool, parts: str, anime: bool):
+        """After the folder picker: the options sheet in QML sends the tab name, what to scrape, and whether it is anime."""
         try:
-            self.app.add_directory(path, tab.strip() or None, scrape, [p for p in parts.split(",") if p])
+            self.app.add_directory(path, tab.strip() or None, scrape, [p for p in parts.split(",") if p],
+                                   "anilist" if anime else "tmdb")
             self.toast.emit("Folder added. Scanning in the background.")
         except Exception as e:
             log.exception("add folder")
             self.toast.emit(f"Could not add folder: {e}")
+
+    # -- keep folders / tags out of the All tab, or folders out of Insights
+    @Slot(str, result="QVariantList")
+    def hiddenFrom(self, kind: str):
+        return db.hidden(kind) if kind in ("all_dirs", "all_tags", "insights_dirs") else []
+
+    @Slot(str, str)
+    def toggleHidden(self, kind: str, value: str):
+        if kind not in ("all_dirs", "all_tags", "insights_dirs"):
+            return
+        v = int(value) if kind.endswith("dirs") else value
+        now = set(db.hidden(kind))
+        now.symmetric_difference_update({v})
+        db.set_hidden(kind, now)
+        if kind == "insights_dirs":
+            self._refresh_insights()
+        else:
+            self.reload()
+
+    @Slot(result="QVariantList")
+    def allTags(self):
+        """Your tags and the genres, for choosing what the All tab leaves out."""
+        genres = sorted({g for info in db.search_index().values() for g in info["genres"]})
+        return [{"name": t, "label": t[5:] if t.startswith("auto:") else t} for t in db.user_tags()] + \
+               [{"name": "genre:" + g, "label": g} for g in genres]
+
+    @Slot(int, int)
+    def moveTab(self, dir_id: int, to: int):
+        """A folder tab dragged to position `to` among the folder tabs (All always stays first)."""
+        ids = [d["id"] for d in db.list_directories() if d["id"] != dir_id]
+        ids.insert(max(0, min(len(ids), to)), dir_id)
+        db.set_directory_order(ids)
+        self.tabs.reload()
+
+    @Slot(int, bool)
+    def setAnime(self, dir_id: int, anime: bool):
+        """An anime folder gets its details from AniList (no key needed) instead of TMDB."""
+        db.set_source(dir_id, "anilist" if anime else "tmdb")
+
+    @Slot(int)
+    def retag(self, dir_id: int):
+        """Tags from folders and file names, again, for every title already in the folder (-1 = every folder)."""
+        def work():
+            from watcher import retag
+            n = sum(retag(d) for d in db.list_directories() if dir_id < 0 or d["id"] == dir_id)
+            self.toast.emit(f"Tagged {n} title{'s' if n != 1 else ''} from their folders and file names")
+            self.libraryChanged.emit()
+        threading.Thread(target=work, daemon=True, name="retag").start()
 
     @Slot(int, str)
     def setScrapeParts(self, dir_id: int, parts: str):
@@ -1159,10 +1291,13 @@ class Dashboard(QObject):
         from . import THEMES
         out = [{"id": t[0], "name": t[1], "tagline": t[2], "page": t[3], "surface": t[4], "accent": t[5], "highlight": t[6]}
                for t in THEMES]
+        from . import CUSTOM_COLOURS, custom_from
+        mine = custom_from(db.get_setting)
         for t in out:  # the Custom swatches show the colours you picked
             if t["id"] == "custom":
-                t["accent"] = db.get_setting("custom_accent") or t["accent"]
-                t["highlight"] = db.get_setting("custom_highlight") or t["highlight"]
+                t.update(page=mine["custom_page"], surface=mine["custom_surface"], accent=mine["custom_accent"],
+                         highlight=mine["custom_highlight"])
+                t["colours"] = [{"key": k, "name": n, "role": r, "value": mine[k]} for k, n, r in CUSTOM_COLOURS]
         return out
 
     @Slot(result="QVariantList")

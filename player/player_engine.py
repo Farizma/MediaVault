@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import (Property, QEasingCurve, QObject, QTimer, QVariantAnimation, Qt, Signal, Slot)
+from PySide6.QtCore import (Property, QEasingCurve, QObject, QRect, QSize, QTimer, QVariantAnimation, Qt, Signal, Slot)
 from PySide6.QtGui import QColor, QGuiApplication, QPainter, QRasterWindow
 
 from utils import hw_accelerator as hw, scraper
@@ -55,10 +55,41 @@ class Session:
 # ------------------------------------------------------------------ windows and Windows APIs
 
 class BlackWindow(QRasterWindow):
+    """A black native window: the video surface (mpv / VLC draw into it), or a blackout on another monitor.
+    The video window reports its moves and resizes (so the HUD follows it), its close button (stop), and hands
+    keyboard focus to the HUD, which owns all input."""
+    on_geometry = None
+    on_close = None
+    on_focus = None
+
     def paintEvent(self, _event):
+        # QWindow has no rect(): fill by width and height. Any error must still end the painter, or Qt's backing
+        # store stays mid-paint and the window freezes (the stuck black picture-in-picture box) or the app crashes.
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor(0, 0, 0))
-        painter.end()
+        try:
+            painter.fillRect(0, 0, self.width(), self.height(), QColor(0, 0, 0))
+        finally:
+            painter.end()
+
+    def moveEvent(self, e):
+        super().moveEvent(e)
+        if self.on_geometry:
+            self.on_geometry()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        if self.on_geometry:
+            self.on_geometry()
+
+    def closeEvent(self, e):
+        if self.on_close:
+            self.on_close()
+        super().closeEvent(e)
+
+    def focusInEvent(self, e):
+        super().focusInEvent(e)
+        if self.on_focus:
+            self.on_focus()
 
 
 def _black_window(screen, passive: bool) -> BlackWindow:
@@ -401,6 +432,9 @@ class PlayerEngine(QObject):
         self.sub = {"scale": 1.0, "pos": 100, "box": False}   # restored from settings by the app
         self.sub_delay = 0.0        # per file
         self.blackout = True        # black out the other monitors while playing (HUD button, remembered)
+        self.fullscreen = False     # the theater opens as a window; F / double-click / HUD button go full screen
+        self.player_geo = None      # QRect of the theater window last time (remembered by the app)
+        self.hud = None             # the HUD's QQuickWindow, set by the app once QML is loaded
         self.audio_delay = 0.0      # lip sync: kept from file to file (it belongs to the speakers / headphones)
         self.hdr = {"mode": "tonemap", "peak": 0, "scene": True}   # restored from settings by the app
         self.auto_credits = True    # series: the next-episode countdown starts where the credits start
@@ -467,13 +501,31 @@ class PlayerEngine(QObject):
         else:
             self._start(path)
 
+    def _window_geometry(self, screen):
+        """Where the theater window opens: where it was last time if that is still on a screen, else centred over
+        most of the screen Media Vault is on."""
+        g = self.player_geo
+        if g and g.width() >= 480 and any(sc.availableGeometry().intersects(g) for sc in QGuiApplication.screens()):
+            return g
+        a = screen.availableGeometry()
+        w, h = int(a.width() * 0.8), int(a.height() * 0.8)
+        return QRect(a.x() + (a.width() - w) // 2, a.y() + (a.height() - h) // 2, w, h)
+
     def _start(self, path):
         screen = self.screen or QGuiApplication.primaryScreen()
-        self.win = _black_window(screen, passive=False)
-        self.win.setFlags(Qt.FramelessWindowHint)
-        self.win.setGeometry(screen.geometry())
-        self.win.showFullScreen()
+        self.win = BlackWindow()
+        self.win.setTitle("Media Vault")
+        self.win.setScreen(screen)
+        self.win.setMinimumSize(QSize(480, 270))
+        self.win.setGeometry(self._window_geometry(screen))
+        self.win.on_geometry = self._sync_geometry
+        self.win.on_close = lambda: QTimer.singleShot(0, self.stop)     # the window's own close button
+        self.win.on_focus = self._focus_hud
+        self.fullscreen = False
+        self.win.show()                       # a window first; F, a double-click or the HUD button go full screen
         wid = int(self.win.winId())
+        if self.hud is not None:
+            self.hud.setTransientParent(self.win)   # owned by the video window: always above it, never behind
         self.blackouts = []
         for other in QGuiApplication.screens():
             if other is not screen:
@@ -487,11 +539,12 @@ class PlayerEngine(QObject):
             self._teardown()
             self.error.emit(str(e))
             return
-        self._screen_geo = screen.geometry()
+        self._screen_geo = self.win.geometry()
         if not self._open(path):
             self.stop()
             return
         self._timer.start()
+        self._raise_hud()
 
     def _make_core(self, wid):
         first = hw.resolve(self.core_pref, self.hw.backend)
@@ -541,6 +594,9 @@ class PlayerEngine(QObject):
     def stop(self):
         if not self.core and not self.win:
             return
+        if self.player_geo and self.on_setting:
+            g = self.player_geo
+            self.on_setting("player_geometry", f"{g.x()},{g.y()},{g.width()},{g.height()}")
         self._timer.stop()
         self._save(final=True)
         self._teardown()
@@ -555,10 +611,15 @@ class PlayerEngine(QObject):
         if self.core:
             self.core.close()
             self.core = None
+        if self.win:
+            self.win.on_close = self.win.on_geometry = self.win.on_focus = None
+        if self.hud is not None:
+            self.hud.setTransientParent(None)
         for w in [self.win, *self.blackouts]:
             if w:
                 w.close()
         self.win, self.blackouts = None, []
+        self.fullscreen = False
 
     # -- tick
     def _tick(self):
@@ -675,7 +736,8 @@ class PlayerEngine(QObject):
             "night": self.night, "core": c.name, "level": c.level, "levelNames": hw.LEVEL_NAMES, "volume": self.volume,
             "speed": self.speed, "subScale": self.sub["scale"], "subPos": self.sub["pos"], "subBox": self.sub["box"],
             "subDelay": self.sub_delay, "subStyleOk": c.name == "mpv", "pip": self.pip,
-            "audioDelay": self.audio_delay, "blackout": self.blackout, "screens": len(self.blackouts) + 1, "hdr": self._hdr_kind(), "hdrMode": self.hdr["mode"],
+            "audioDelay": self.audio_delay, "blackout": self.blackout, "screens": len(self.blackouts) + 1,
+            "fullscreen": self.fullscreen, "hdr": self._hdr_kind(), "hdrMode": self.hdr["mode"],
             "hdrPeak": self.hdr["peak"], "hdrScene": self.hdr["scene"], "hdrOk": c.name == "mpv",
             "creditsActive": bool(self._in_credits and not s.next_path), "hasCredits": bool(s.credits),
             "introActive": intro, "autoplayLeft": countdown, "nextTitle": s.next_title,
@@ -849,43 +911,96 @@ class PlayerEngine(QObject):
         if self.on_setting:
             self.on_setting("hdr", f'{self.hdr["mode"]},{self.hdr["peak"]},{int(self.hdr["scene"])}')
 
+    # -- the theater window: full screen, picture in picture, and the HUD laid over it
+    def _focus_hud(self):
+        if self.hud is not None:
+            self.hud.requestActivate()
+
+    def _raise_hud(self):
+        """After the video window is shown again (new flags, full screen, PiP) it must not cover the HUD."""
+        if self.hud is not None and self.win is not None:
+            QTimer.singleShot(0, lambda: self.hud and self.hud.raise_())
+            QTimer.singleShot(0, self._focus_hud)
+
+    def _sync_geometry(self):
+        """The video window moved or was resized: the HUD follows at once (not on the next tick)."""
+        if not self.win:
+            return
+        g = self.win.geometry()
+        if g == self._screen_geo:
+            return
+        self._screen_geo = g
+        if not (self.pip or self.fullscreen) and self.win.isVisible():
+            self.player_geo = QRect(g)
+        if self._state.get("active"):
+            self._state = {**self._state, "x": g.x(), "y": g.y(), "w": g.width(), "h": g.height()}
+            self.stateChanged.emit()
+
+    @Slot()
+    def toggleFullscreen(self):
+        if not self.win or self.pip:
+            return
+        if self.fullscreen:
+            self.win.showNormal()
+            if self.player_geo:
+                self.win.setGeometry(self.player_geo)
+            self.fullscreen = False
+        else:
+            screen = self.win.screen() or QGuiApplication.primaryScreen()
+            self.player_geo = self.win.geometry()
+            self.win.showFullScreen()
+            self.win.setGeometry(screen.geometry())
+            self.fullscreen = True
+        self._sync_geometry()
+        self._state = {**self._state, "fullscreen": self.fullscreen}
+        self.stateChanged.emit()
+        self._raise_hud()
+
     @Slot()
     def togglePip(self):
-        """Picture in picture: the video becomes a small always-on-top window in the corner; Media Vault is
-        usable underneath. Again (or Esc) returns to full screen."""
+        """Picture in picture: the video becomes a small always-on-top window in the corner, Media Vault
+        minimises, and the HUD shows Back, Play / Pause, Skip and PiP (return). Again (or Esc) returns to the theater."""
         if not self.win:
             return
         screen = self.win.screen() or QGuiApplication.primaryScreen()
         if not self.pip:
+            self._was_full = self.fullscreen
+            if not self.fullscreen:
+                self.player_geo = self.win.geometry()
             avail = screen.availableGeometry()
             w = max(360, int(avail.width() * 0.26))
             h = int(w * 9 / 16)
-            self._full_geo = screen.geometry()
+            self.pip = True
+            self.fullscreen = False
             self.win.showNormal()
             self.win.setFlags(Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint)
             self.win.setGeometry(avail.right() - w - 24, avail.bottom() - h - 24, w, h)
             self.win.show()
             for b in self.blackouts:
                 b.hide()
-            self.pip = True
-            self._screen_geo = self.win.geometry()
             self.pipChanged.emit(True)
         else:
-            self.win.setFlags(Qt.FramelessWindowHint)
-            self.win.setGeometry(self._full_geo or screen.geometry())
-            self.win.showFullScreen()
+            self.pip = False
+            self.win.setFlags(Qt.Window)            # a normal window again: title bar, move, resize, close
+            if getattr(self, "_was_full", False):
+                self.win.showFullScreen()
+                self.win.setGeometry(screen.geometry())
+                self.fullscreen = True
+            else:
+                self.win.setGeometry(self._window_geometry(screen))
+                self.win.showNormal()
             for b in self.blackouts:
                 b.setVisible(self.blackout)
-            self.pip = False
-            self._screen_geo = self._full_geo or screen.geometry()
             self.pipChanged.emit(False)
-        self._state = {**self._state, "pip": self.pip, "x": self._screen_geo.x(), "y": self._screen_geo.y(),
-                       "w": self._screen_geo.width(), "h": self._screen_geo.height()}
+        self._screen_geo = None
+        self._sync_geometry()
+        self._state = {**self._state, "pip": self.pip, "fullscreen": self.fullscreen}
         self.stateChanged.emit()
+        self._raise_hud()
 
     @Slot(int, int)
     def movePip(self, dx: int, dy: int):
-        """Drag the picture-in-picture window (kept on its screen)."""
+        """Drag the picture-in-picture window (kept on its screen); the HUD moves with it."""
         if not (self.pip and self.win):
             return
         avail = (self.win.screen() or QGuiApplication.primaryScreen()).availableGeometry()
@@ -893,9 +1008,7 @@ class PlayerEngine(QObject):
         x = max(avail.left(), min(avail.right() - g.width(), g.x() + dx))
         y = max(avail.top(), min(avail.bottom() - g.height(), g.y() + dy))
         self.win.setPosition(x, y)
-        self._screen_geo = self.win.geometry()
-        self._state = {**self._state, "x": x, "y": y}
-        self.stateChanged.emit()
+        self._sync_geometry()
 
     # -- snapshot -> crop canvas -> box art / fanart
     @Slot(str)

@@ -31,7 +31,9 @@ Item {
     readonly property real camZ: 740
     readonly property real fov: 30
     readonly property real viewH: height - 24
-    readonly property real focal: viewH / (2 * Math.tan(fov * Math.PI / 360))
+    property real zoom: 1                  // scroll wheel over the box: 0.7 .. 1.8 (a longer lens, so nothing distorts)
+    Behavior on zoom { NumberAnimation { duration: 160 * Theme.motion; easing.type: Easing.OutCubic } }
+    readonly property real focal: viewH / (2 * Math.tan(fov * Math.PI / 360)) * zoom
     // on-screen height of the front face when it faces the camera: DetailView lines the box up with a card
     readonly property real faceH: boxH * focal / (camZ - boxD / 2)
     readonly property real faceCY: viewH / 2
@@ -170,6 +172,15 @@ Item {
     Timer { id: rest; interval: 1500 }
 
     // 1:1 drag, then momentum from the release velocity
+    WheelHandler {
+        enabled: root.enabled
+        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+        onWheel: (ev) => {
+            var d = ev.pixelDelta.y !== 0 ? ev.pixelDelta.y / 400 : ev.angleDelta.y / 1200
+            root.zoom = Math.max(0.7, Math.min(1.8, root.zoom * (1 + d)))
+            ev.accepted = true
+        }
+    }
     MouseArea {
         id: drag
         anchors.fill: parent
@@ -201,7 +212,7 @@ Item {
     }
     Text {
         anchors { bottom: parent.bottom; horizontalCenter: parent.horizontalCenter }
-        text: "Drag to spin"; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10
+        text: "Drag to spin \u00B7 scroll to zoom"; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10
         opacity: root.hint ? 1 : 0
         Behavior on opacity { NumberAnimation { duration: 200 * Theme.motion } }
     }

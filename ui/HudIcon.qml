@@ -68,6 +68,14 @@ Canvas {
             ctx.globalCompositeOperation = "destination-out"
             ctx.beginPath(); ctx.arc(12.9, 7.6, 3.2, 0, Math.PI * 2); ctx.fill()
             ctx.restore()
+        } else if (kind === "fullscreen" || kind === "windowed") {   // four corners, pointing out (or in)
+            var o = kind === "fullscreen"
+            var C = [[3, 3, 1, 1], [19, 3, -1, 1], [3, 19, 1, -1], [19, 19, -1, -1]]
+            for (var i = 0; i < 4; i++) {
+                var x = C[i][0], y = C[i][1], sx = C[i][2], sy = C[i][3]
+                if (!o) { x += sx * 5; y += sy * 5; sx = -sx; sy = -sy }
+                ctx.beginPath(); ctx.moveTo(x, y + sy * 5.5); ctx.lineTo(x, y); ctx.lineTo(x + sx * 5.5, y); ctx.stroke()
+            }
         } else if (kind === "panel") {                  // three sliders
             for (const [y, k] of [[5, 14], [11, 7], [17, 12]]) {
                 ctx.beginPath(); ctx.moveTo(3, y); ctx.lineTo(19, y); ctx.stroke()

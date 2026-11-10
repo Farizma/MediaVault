@@ -58,18 +58,58 @@ def _ink(bg: str) -> str:
 HEX = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
 
-def apply_theme(theme_id: str, accent: str = "", highlight: str = "") -> str:
+# Every colour of the Custom theme can be chosen (Settings > Appearance). Setting key, name, what it paints.
+CUSTOM_COLOURS = [
+    ("custom_page", "Background", "Behind everything"),
+    ("custom_surface", "Panels", "Sheets, menus, the player bar"),
+    ("custom_card", "Cards", "Cards, fields, rows"),
+    ("custom_text", "Text", "Titles and body text"),
+    ("custom_muted", "Secondary text", "Labels, hints, counts"),
+    ("custom_accent", "Accent", "Progress bars, switches, watched marks"),
+    ("custom_highlight", "Highlight", "Selection and focus"),
+    ("custom_amber", "Warning", "Box sets, notices, audience stars"),
+    ("custom_red", "Danger", "Missing files, errors"),
+]
+
+
+def custom_defaults() -> dict:
+    """What each Custom colour is when you have not chosen it (the Custom row of THEMES, plus the usual text)."""
+    t = next(t for t in THEMES if t[0] == "custom")
+    return {"custom_page": t[3], "custom_surface": t[4], "custom_card": _mix(t[4], "#FFFFFF", 0.05),
+            "custom_text": "#F5F5F7", "custom_muted": "#8E8E93", "custom_accent": t[5], "custom_highlight": t[6],
+            "custom_amber": "#FCD34D", "custom_red": "#FF453A"}
+
+
+def custom_from(get_setting) -> dict:
+    """The Custom theme's colours from settings (a bad or missing value falls back to its default)."""
+    out = custom_defaults()
+    for key, _, _ in CUSTOM_COLOURS:
+        v = (get_setting(key) or "").strip()
+        if HEX.match(v):
+            out[key] = v.upper()
+    return out
+
+
+def apply_theme(theme_id: str, accent: str = "", highlight: str = "", custom: dict | None = None) -> str:
     """Rewrite THEME's colours for a colourway (unknown ids fall back to the first). Returns the id used.
-    accent / highlight replace the colourway's own two colours (the Custom theme); bad values are ignored."""
+    The Custom theme takes all its colours from `custom` (see custom_from); accent / highlight alone still work."""
     theme_id = "custom" if theme_id == "graphite" else theme_id  # Graphite became the customisable theme
     t = next((t for t in THEMES if t[0] == theme_id), THEMES[0])
     page, surface, accent0, highlight0 = t[3:]
     accent = accent.upper() if HEX.match(accent or "") else accent0
     highlight = highlight.upper() if HEX.match(highlight or "") else highlight0
     card = _mix(surface, "#FFFFFF", 0.05)
+    extra = {"text": "#F5F5F7", "muted": "#8E8E93", "amber": "#FCD34D", "red": "#FF453A"}
+    if t[0] == "custom" and custom:
+        page, surface, card = custom["custom_page"], custom["custom_surface"], custom["custom_card"]
+        accent, highlight = custom["custom_accent"], custom["custom_highlight"]
+        extra = {"text": custom["custom_text"], "muted": custom["custom_muted"],
+                 "amber": custom["custom_amber"], "red": custom["custom_red"]}
+    # faint text: the text colour at half strength, so light themes made with Custom still read
     THEME.update({"black": page, "graphite": surface, "slate": card, "chrome": "#BF" + card[1:],
                   "panel": "#F2" + surface[1:], "scrim": "#BF" + page[1:], "green": accent, "blue": highlight,
-                  "onBlue": _ink(highlight), "onGreen": _ink(accent), "theme": t[0]})
+                  "onBlue": _ink(highlight), "onGreen": _ink(accent), "theme": t[0],
+                  **extra, "faint": "#80" + extra["text"][1:]})
     return t[0]
 
 
@@ -115,17 +155,28 @@ def pick_folder() -> str:
     return ""
 
 
-def pick_image() -> str:
-    """Image chooser for custom box art. Returns "" when cancelled."""
+IMAGE_FILTER = "Images (*.png *.jpg *.jpeg *.webp *.bmp)"
+
+
+def _image_dialog(start_dir: str, title: str, many: bool):
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QFileDialog
-    dialog = QFileDialog(None, "Choose box art", str(Path.home() / "Pictures"),
-                         "Images (*.png *.jpg *.jpeg *.webp *.bmp)")
-    dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
+    start = start_dir if start_dir and Path(start_dir).is_dir() else str(Path.home() / "Pictures")
+    dialog = QFileDialog(None, title, start, IMAGE_FILTER)     # starts in the title's own folder
+    dialog.setFileMode(QFileDialog.FileMode.ExistingFiles if many else QFileDialog.FileMode.ExistingFile)
     dialog.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-    if dialog.exec() and dialog.selectedFiles():
-        return dialog.selectedFiles()[0]
-    return ""
+    return dialog.selectedFiles() if dialog.exec() else []
+
+
+def pick_image(start_dir: str = "", title: str = "Choose box art") -> str:
+    """Image chooser for custom box art, opening in `start_dir` (the media file's folder). "" when cancelled."""
+    files = _image_dialog(start_dir, title, False)
+    return files[0] if files else ""
+
+
+def pick_images(start_dir: str = "") -> list[str]:
+    """Several images at once, for a title's Gallery."""
+    return _image_dialog(start_dir, "Add images to the Gallery", True)
 
 
 def file_url(path, bust: bool = True) -> str:

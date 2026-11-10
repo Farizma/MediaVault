@@ -57,8 +57,11 @@ class App:
         atexit.register(self.shutdown)
 
     # -- startup
-    def attach(self, main_window):
+    def attach(self, main_window, hud_window=None):
         self.main_window = main_window
+        self.engine.hud = hud_window
+        self._restore_window(main_window)
+        main_window.closing.connect(self._main_closing)
         if not self.dashboard.needsSetup:
             self.start_library()
 
@@ -68,7 +71,7 @@ class App:
         if options["tmdb_key"]:
             db.set_setting("tmdb_key", options["tmdb_key"])
         for f in folders:
-            db.add_directory(f["path"], f["tab"], bool(f["scrape"]), f.get("parts"))
+            db.add_directory(f["path"], f["tab"], bool(f["scrape"]), f.get("parts"), "anilist" if f.get("anime") else "tmdb")
         if options["associate"]:
             self.set_file_types(True)
         self.start_library()
@@ -93,6 +96,12 @@ class App:
             pass
         self.engine.night = db.get_setting("night_mode") == "1"
         self.engine.blackout = db.get_setting("blackout") != "0"
+        try:
+            from PySide6.QtCore import QRect
+            x, y, w, h = (int(v) for v in (db.get_setting("player_geometry") or "").split(","))
+            self.engine.player_geo = QRect(x, y, w, h)
+        except ValueError:
+            pass
         from utils.discord_presence import Presence
         self.presence = Presence(db.get_setting)
         self.ready = True
@@ -134,10 +143,10 @@ class App:
             self.dashboard.libraryChanged.emit()
 
     # -- library
-    def add_directory(self, path, tab=None, scrape=True, parts=None):
+    def add_directory(self, path, tab=None, scrape=True, parts=None, source="tmdb"):
         from watcher import scan_directory
         db = self.db
-        did = db.add_directory(path, tab or Path(path).name or path, scrape, parts)
+        did = db.add_directory(path, tab or Path(path).name or path, scrape, parts, source)
         directory = db.get_directory(did)
         self.watcher.watch(directory)
 
@@ -185,8 +194,36 @@ class App:
         self.db.set_intro(os.path.dirname(session.path), start, end)
 
     def _pip_changed(self, on: bool):
-        if on and self.main_window:  # the library comes forward under the small video window
-            self.dashboard.raiseWindow.emit()
+        """Picture in picture: only the small video window stays on screen; Media Vault minimises."""
+        if on and self.main_window:
+            self.dashboard.minimizeWindow.emit()
+
+    # -- the library window: same size and place as last time; closing it ends Media Vault, player included
+    def _restore_window(self, w):
+        from PySide6.QtCore import QRect
+        from PySide6.QtGui import QGuiApplication
+        try:
+            x, y, width, height, maxed = (int(v) for v in (self.db.get_setting("window_geometry") or "").split(","))
+        except (ValueError, Exception):
+            return
+        g = QRect(x, y, max(width, w.minimumWidth()), max(height, w.minimumHeight()))
+        if any(sc.availableGeometry().intersects(g) for sc in QGuiApplication.screens()):   # a monitor may be gone
+            w.setGeometry(g)
+        if maxed:
+            w.showMaximized()
+
+    def _main_closing(self, *_):
+        from PySide6.QtGui import QWindow
+        w = self.main_window
+        maxed = w.visibility() == QWindow.Visibility.Maximized
+        g = w.property("normalGeo") if maxed else w.geometry()     # maximised: keep the size it returns to
+        if not g or g.width() < 100:
+            g = w.geometry()
+        try:
+            self.db.set_setting("window_geometry", f"{g.x()},{g.y()},{g.width()},{g.height()},{int(maxed)}")
+        except Exception:
+            logging.exception("save window size")
+        self.quit()
 
     def _after_playback(self):
         self.dashboard.libraryChanged.emit()
@@ -195,8 +232,7 @@ class App:
     def set_theme(self, theme_id: str) -> None:
         import ui
         db = self.db
-        self.db.set_setting("theme", ui.apply_theme(theme_id, db.get_setting("custom_accent") or "",
-                                                     db.get_setting("custom_highlight") or ""))
+        self.db.set_setting("theme", ui.apply_theme(theme_id, custom=ui.custom_from(db.get_setting)))
         if self.qml_context:
             self.qml_context.setContextProperty("Theme", ui.THEME)  # every binding on Theme.* updates live
 
@@ -217,7 +253,7 @@ class App:
         self.dashboard.toast.emit(f"Updates available: {names}. Settings > Components.")
 
     def quit(self):
-        """Close for an update: the installer replaces the files once the app is gone."""
+        """Media Vault ends: the player and its windows go too (a picture-in-picture window never stays behind)."""
         from PySide6.QtGui import QGuiApplication
         self.shutdown()
         QGuiApplication.quit()
@@ -238,14 +274,22 @@ class App:
 
     # -- a second launch hands us a file
     def handle_arg(self, arg: str):
+        """A file from "Open with" (or a second launch). Runs on the next event-loop pass, never inside the
+        socket's signal, and never lets an error take the app down."""
         from watcher import is_video
-        if arg and arg != SHOW and os.path.isfile(arg) and is_video(arg):  # only ever play real video files
-            if self.ready:
-                self.play(arg)
+        try:
+            arg = (arg or "").strip().strip('"')
+            if arg and arg != SHOW and os.path.isfile(arg) and is_video(arg):  # only ever play real video files
+                if self.ready:
+                    self.dashboard.raiseWindow.emit()
+                    self.play(arg)
+                else:
+                    self.initial = arg
             else:
-                self.initial = arg
-        else:
-            self.dashboard.raiseWindow.emit()
+                self.dashboard.raiseWindow.emit()
+        except Exception:
+            logging.exception("open with")
+            self.dashboard.toast.emit("Could not open that file. Details are in media_vault.log.")
 
     def shutdown(self):
         try:
@@ -278,7 +322,7 @@ def main() -> int:
     if not setup.run_setup():
         return 1
 
-    from PySide6.QtCore import QUrl
+    from PySide6.QtCore import QTimer, QUrl
     from PySide6.QtNetwork import QLocalServer, QLocalSocket
     from PySide6.QtQml import QQmlApplicationEngine
     from PySide6.QtQuickControls2 import QQuickStyle
@@ -294,7 +338,7 @@ def main() -> int:
         sock.connectToServer(PIPE_NAME)
         if not sock.waitForConnected(400):
             return False
-        sock.write((arg or SHOW).encode("utf-8"))
+        sock.write((os.path.abspath(arg) if arg else SHOW).encode("utf-8"))
         sock.waitForBytesWritten(2000)
         sock.disconnectFromServer()
         return True
@@ -322,16 +366,19 @@ def main() -> int:
         reduced = reduced or db.get_setting("reduce_motion") == "1"  # ... or our own setting
     ui.THEME["motion"] = 0 if reduced else 1
     if db.db_exists():
-        ui.apply_theme(db.get_setting("theme") or "", db.get_setting("custom_accent") or "",
-                       db.get_setting("custom_highlight") or "")
+        ui.apply_theme(db.get_setting("theme") or "", custom=ui.custom_from(db.get_setting))
     else:
         ui.apply_theme("")
 
     def on_connection():
         conn = server.nextPendingConnection()
         if conn:
-            conn.readyRead.connect(lambda c=conn: app.handle_arg(bytes(c.readAll()).decode("utf-8", "ignore")))
-            conn.disconnected.connect(conn.deleteLater)
+            buf = bytearray()
+            conn.readyRead.connect(lambda c=conn, b=buf: b.extend(bytes(c.readAll())))
+            # the whole message arrives before the sender disconnects; act on it from the event loop afterwards
+            conn.disconnected.connect(lambda c=conn, b=buf: (b.extend(bytes(c.readAll())),
+                                                           QTimer.singleShot(0, lambda: app.handle_arg(bytes(b).decode("utf-8", "ignore"))),
+                                                           c.deleteLater()))
     server.newConnection.connect(on_connection)
 
     ui.load_fonts(qapp)
@@ -349,7 +396,8 @@ def main() -> int:
         logging.critical("QML failed to load (see qt log lines above)")
         QMessageBox.critical(None, "Media Vault", "The interface failed to load. Details are in media_vault.log.")
         return 1
-    app.attach(engine.rootObjects()[0])
+    qapp.setQuitOnLastWindowClosed(False)     # Media Vault ends when its library window closes (see App._main_closing)
+    app.attach(engine.rootObjects()[0], engine.rootObjects()[1])
     if restored:
         app.dashboard.toast.emit("Portable backup restored")
     code = qapp.exec()

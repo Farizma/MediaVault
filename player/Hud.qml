@@ -1,5 +1,5 @@
-// Theater HUD: a transparent, always-on-top window laid over the native mpv / VLC window.
-// It owns ALL input. The player underneath receives none.
+// Theater HUD: a transparent window laid over the native mpv / VLC window, owned by it (so it is always above the
+// video, never behind it, and minimises with it). It owns ALL input. The player underneath receives none.
 // shortcut: the glass is translucent, not blurred: the video lives in another native window,
 // so a Qt blur cannot sample it.
 import QtQuick
@@ -11,7 +11,7 @@ import "../ui"
 Window {
     id: win
     readonly property var st: Player.state
-    flags: Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint
+    flags: Qt.FramelessWindowHint | Qt.Tool | (st.pip === true ? Qt.WindowStaysOnTopHint : 0)
     color: "transparent"
     visible: st.active === true
     x: st.x || 0
@@ -20,6 +20,11 @@ Window {
     height: st.h || 720
     onWidthChanged: root.popup = ""            // the picker is placed over its button; a resize moves the button
     onVisibleChanged: if (visible) { root.popup = ""; root.forceActiveFocus(); requestActivate(); root.poke() }
+
+    // Windows passes clicks on fully transparent pixels of a see-through window to whatever is underneath, so a HUD
+    // that is clear except for its controls cannot be dragged (PiP) or clicked to pause. Black at 1/255 is invisible
+    // over the video and makes every pixel catch the mouse.
+    Rectangle { anchors.fill: parent; color: "#01000000"; z: -1000 }
 
     // lists change only when their content does, so open pickers do not flicker on every tick
     property var subs: []
@@ -113,7 +118,8 @@ Window {
             case Qt.Key_C: Player.captureFrame((e.modifiers & Qt.ShiftModifier) ? "fanart" : "poster"); break
             case Qt.Key_I: Player.markIntro(); break
             case Qt.Key_V: Player.cycleVrView(); break
-            case Qt.Key_Escape: if (root.popup !== "") root.popup = ""; else if (root.pip) Player.togglePip(); else Player.stop(); break
+            case Qt.Key_F: Player.toggleFullscreen(); break
+            case Qt.Key_Escape: if (root.popup !== "") root.popup = ""; else if (root.pip) Player.togglePip(); else if (win.st.fullscreen) Player.toggleFullscreen(); else Player.stop(); break
             }
             e.accepted = true
         }
@@ -125,6 +131,7 @@ Window {
             cursorShape: root.controlsOn ? Qt.ArrowCursor : Qt.BlankCursor
             onPositionChanged: root.poke()
             onClicked: { if (root.popup !== "") root.popup = ""; else if (!root.cropping) Player.togglePause() }
+            onDoubleClicked: if (!root.cropping) { Player.togglePause(); Player.toggleFullscreen() }   // the click before it paused: undo that
             // scroll anywhere over the picture = volume, 5 % a notch (touchpads add up their small steps).
             // The Audio & Video panel swallows its own wheel events, so scrolling there never lands here.
             onWheel: (w) => {
@@ -255,9 +262,11 @@ Window {
                     Item { Layout.fillWidth: true }
                     RevealButton { tip: "AirPlay or Chromecast"; id: castBtn; label: "Cast"; iconKind: "airplay"; active: root.popup === "cast"
                         onClicked: { root.castList = Backend.devices(); if (root.castList.length === 0) Backend.findDevices(); root.togglePopup("cast", castBtn) } }
-                    RevealButton { tip: (win.st.screens || 1) > 1 ? "Shortcut  B" : "Only one screen is connected"; iconKind: "blackout"; label: "Black Out"
-                        active: win.st.blackout === true; opacity: (win.st.screens || 1) > 1 ? 1 : 0.45
+                    RevealButton { tip: (win.st.screens || 1) > 1 ? "Shortcut  B" : "Only one screen is connected"; iconKind: "blackout"; label: win.st.blackout === true ? "Black Out: On" : "Black Out: Off"
+                        toggled: win.st.blackout === true; opacity: (win.st.screens || 1) > 1 ? 1 : 0.45
                         onClicked: Player.toggleBlackout() }
+                    RevealButton { tip: "Shortcut  F, or double-click the picture"; iconKind: win.st.fullscreen ? "windowed" : "fullscreen"
+                        label: win.st.fullscreen ? "Exit full screen" : "Full screen"; onClicked: Player.toggleFullscreen() }
                     RevealButton { tip: "Shortcut  P"; id: pipBtn; label: "Picture in picture"; iconKind: "pip"; onClicked: { root.popup = ""; Player.togglePip() } }
                     RevealButton { tip: "Use this frame as box art or fanart (C)"; id: snapBtn; label: "Snapshot"; iconKind: "snapshot"; iconColor: Theme.blue
                         active: root.popup === "camera"; onClicked: root.togglePopup("camera", snapBtn) }
@@ -662,13 +671,21 @@ Window {
                     GradientStop { position: 0.7; color: "transparent" }
                     GradientStop { position: 1; color: "#99000000" }
                 }
+                // Back: stop and return to the library. PiP: back to the theater.
+                GlassButton { anchors { top: parent.top; left: parent.left; margins: 10 } small: true; label: "Back"; glyph: "\u2039"
+                    tip: "Stop and go back to the library"; onClicked: Player.stop() }
+                GlassButton { anchors { top: parent.top; right: parent.right; margins: 10 } small: true; iconKind: "pip"; implicitWidth: 38
+                    tip: "Back to the full player (P)"; onClicked: Player.togglePip() }
                 Row {
-                    anchors { top: parent.top; right: parent.right; margins: 10 }
-                    spacing: 6
-                    GlassButton { small: true; label: "\u2922"; implicitWidth: 34; onClicked: Player.togglePip() }   // back to full screen
-                    GlassButton { small: true; label: "\u2715"; implicitWidth: 34; onClicked: Player.stop() }
+                    anchors.centerIn: parent
+                    spacing: 10
+                    GlassButton { anchors.verticalCenter: parent.verticalCenter; small: true; iconKind: "back"; implicitWidth: 40
+                        tip: "Back 10 seconds"; onClicked: Player.seekBy(-10) }
+                    GlassButton { anchors.verticalCenter: parent.verticalCenter; primary: true; label: win.st.paused ? "\u25B6" : "\u275A\u275A"; implicitWidth: 52
+                        onClicked: Player.togglePause() }
+                    GlassButton { anchors.verticalCenter: parent.verticalCenter; small: true; iconKind: "forward"; implicitWidth: 40
+                        tip: (win.st.nextTitle || "") !== "" ? "Forward 10 seconds" : "Skip 10 seconds"; onClicked: Player.seekBy(10) }
                 }
-                GlassButton { anchors.centerIn: parent; primary: true; label: win.st.paused ? "\u25B6" : "\u275A\u275A"; implicitWidth: 52; onClicked: Player.togglePause() }
                 Rectangle {      // progress
                     anchors { left: parent.left; right: parent.right; bottom: parent.bottom; margins: 12 }
                     height: 4; radius: 2; color: "#40FFFFFF"

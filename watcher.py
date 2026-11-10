@@ -13,7 +13,7 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 import database as db
-from utils import media_probe, scraper
+from utils import autotag, media_probe, scraper
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +51,7 @@ def index_paths(directory: dict, paths) -> int:
     if not new:
         return 0
     scrape = bool(directory["should_scrape"])
+    auto = db.get_setting("auto_tags", "1") != "0"     # tags from folders and file names (Settings > Folders)
     hp = _headless()
     rows, tags = [], []
     try:
@@ -66,25 +67,29 @@ def index_paths(directory: dict, paths) -> int:
             rows.append((row, parsed))
             if kind == "clip":
                 tags.append((row["uuid"], "Personal"))  # lets analytics hide home video with one tag toggle
+            if auto:
+                tags.extend((row["uuid"], autotag.PREFIX + t) for t in autotag.tags_for(p, directory["folder_path"], kind == "show"))
     finally:
         if hp:
             hp.close()
     if scrape:
-        _scrape_into(rows, tags, db.scrape_opts(directory))
+        _scrape_into(rows, tags, db.scrape_opts(directory), directory.get("source") or "tmdb")
     db.add_items([r for r, _ in rows], tags)  # the one collective write
     return len(rows)
 
 
-def _scrape_into(rows, tags, opts=None) -> None:
-    """Fill rows from TMDB / OMDb. opts: which parts this folder wants (database.SCRAPE_PARTS); None = all."""
+def _scrape_into(rows, tags, opts=None, source: str = "tmdb") -> None:
+    """Fill rows from TMDB / OMDb, or AniList for an anime folder. opts: which parts this folder wants
+    (database.SCRAPE_PARTS); None = all."""
     opts = {k for k, _ in db.SCRAPE_PARTS} if opts is None else opts
     keys = scraper.api_keys()
-    if not (keys["tmdb"] or keys["omdb"]) or not opts:
+    if not opts or (source != "anilist" and not (keys["tmdb"] or keys["omdb"])):
         return  # nothing to ask; do not mark files as failed
     todo = [(r, p) for r, p in rows if not db.is_failed(db.file_hash(r["file_path"]))]
     if not todo:
         return
-    answers = asyncio.run(scraper.scrape_many([(r["media_type"], p) for r, p in todo], keys))
+    answers = asyncio.run(scraper.scrape_many([(r["media_type"], p) for r, p in todo], keys, source))
+    gallery_done = set()
     images, missed, cast_done = {}, [], set()
     for (row, parsed), hit in zip(todo, answers):
         if isinstance(hit, Exception):
@@ -99,6 +104,12 @@ def _scrape_into(rows, tags, opts=None) -> None:
             if "synopsis" in opts:
                 row["synopsis"] = hit["synopsis"]
             row["tmdb_id"] = hit.get("tmdb_id")
+            row["anilist_id"] = hit.get("anilist_id")
+            if "gallery" in opts and hit.get("gallery_urls"):
+                owner = db.cast_owner(row)
+                if owner not in gallery_done:            # a series' episodes share one Gallery
+                    gallery_done.add(owner)
+                    scraper.save_gallery(row, hit["gallery_urls"])
             if "score" in opts:
                 row["score"] = hit.get("score")
             if "sets" in opts:
@@ -130,12 +141,27 @@ def _scrape_into(rows, tags, opts=None) -> None:
         db.mark_failed(missed)
 
 
+def retag(directory: dict) -> int:
+    """Tags from folders and file names, worked out again for every title in a folder (after a reorganise, or for
+    a library scanned before this existed). Only "auto:" tags change; yours stay. Returns titles tagged."""
+    items = db.list_media(directory["id"])
+    pairs = []
+    for it in items:
+        pairs += [(it["uuid"], autotag.PREFIX + t) for t in autotag.tags_for(it["file_path"], directory["folder_path"],
+                                                                            it["media_type"] == "show")]
+    with db._tx() as c:
+        c.executemany("DELETE FROM tags WHERE media_uuid=? AND tag_name LIKE 'auto:%'", [(it["uuid"],) for it in items])
+        c.executemany("INSERT INTO tags (media_uuid, tag_name) VALUES (?,?)", pairs)
+    return len({u for u, _ in pairs})
+
+
 def fetch_missing(directory: dict) -> int:
     """Fill gaps for titles already in a folder, by what the folder scrapes: cast and photos, cover, disc art,
     box set, genres, synopsis. Titles, and anything you set yourself, are never touched. Returns titles updated."""
     opts = db.scrape_opts(directory)
     keys = scraper.api_keys()
-    if not opts or not keys["tmdb"]:
+    anime = (directory.get("source") or "tmdb") == "anilist"
+    if not opts or (not anime and not keys["tmdb"]):
         return 0
     groups: dict[str, list[dict]] = {}          # one lookup per film, and per series
     for it in db.list_media(directory["id"]):
@@ -156,26 +182,38 @@ def fetch_missing(directory: dict) -> int:
             "genres": "genres" in opts and not any(t.startswith("genre:") for t in tags),
             "synopsis": "synopsis" in opts and not first.get("synopsis"),
             "score": "score" in opts and first.get("score") is None,
+            "gallery": "gallery" in opts and not scraper.gallery_images(first),
         }
         if "photos" in opts and need["cast"]:
             need["photos"] = True
         if not any(need.values()):
             continue
+        title = db.series_title(first["title"]) if kind == "show" else first["title"]
+        year = (first.get("release_date") or "")[:4] or None
         try:
-            tid = first.get("tmdb_id")
-            if not tid:
-                title = db.series_title(first["title"]) if kind == "show" else first["title"]
-                hit = scraper._tmdb(kind, scraper.Parsed(title, (first.get("release_date") or "")[:4] or None, None, None), keys["tmdb"])
-                tid = hit and hit.get("tmdb_id")
-            if not tid:
-                continue
-            hit = scraper.tmdb_details(kind, tid, keys["tmdb"])
-        except scraper.ScrapeError as e:
+            if anime:
+                from utils import anilist
+                hit = anilist.details(first["anilist_id"]) if first.get("anilist_id") else anilist.lookup(title, year)
+                if not hit:
+                    continue
+                tid = None
+            else:
+                tid = first.get("tmdb_id")
+                if not tid:
+                    hit = scraper._tmdb(kind, scraper.Parsed(title, year, None, None), keys["tmdb"])
+                    tid = hit and hit.get("tmdb_id")
+                if not tid:
+                    continue
+                hit = scraper.tmdb_details(kind, tid, keys["tmdb"])
+        except Exception as e:   # ScrapeError, AniListError, offline
             log.warning("fetch missing skipped %s: %s", first["title"], e)
             continue
         uids = [i["uuid"] for i in items]
         with db._tx() as c:
-            c.executemany("UPDATE media_items SET tmdb_id=? WHERE uuid=? AND tmdb_id IS NULL", [(tid, u) for u in uids])
+            if tid:
+                c.executemany("UPDATE media_items SET tmdb_id=? WHERE uuid=? AND tmdb_id IS NULL", [(tid, u) for u in uids])
+            if hit.get("anilist_id"):
+                c.executemany("UPDATE media_items SET anilist_id=? WHERE uuid=? AND anilist_id IS NULL", [(hit["anilist_id"], u) for u in uids])
             if need["synopsis"] and hit.get("synopsis"):
                 c.executemany("UPDATE media_items SET synopsis=? WHERE uuid=? AND (synopsis IS NULL OR synopsis='')",
                               [(hit["synopsis"], u) for u in uids])
@@ -200,7 +238,9 @@ def fetch_missing(directory: dict) -> int:
                         scraper.save_webp(img, scraper.poster_path(i))
             except Exception:
                 log.warning("poster failed for %s", first["title"], exc_info=True)
-        if need["disc"]:
+        if need["gallery"] and hit.get("gallery_urls"):
+            scraper.save_gallery(first, hit["gallery_urls"])
+        if need["disc"] and tid:
             url = scraper.disc_url(tid, keys.get("fanart", ""))
             if url:
                 try:
