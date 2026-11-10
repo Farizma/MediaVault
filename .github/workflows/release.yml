@@ -1,9 +1,11 @@
 # Builds MediaVault_v<version>_setup.exe on Windows and publishes it as a GitHub release.
-# Runs when a tag v<version> is pushed (the tag must match version.py), or by hand from the Actions tab.
+# Runs when main gets a version.py whose release does not exist yet (it creates the tag v<version> itself),
+# when a tag v<version> is pushed (it must match version.py), or by hand from the Actions tab.
 name: Release
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -19,17 +21,36 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Is there a release to make?
+        id: plan
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = (Select-String -Path version.py -Pattern '^VERSION = "(.+)"').Matches[0].Groups[1].Value
+          "version=$v" >> $env:GITHUB_OUTPUT
+          gh release view "v$v" --repo $env:GITHUB_REPOSITORY *> $null
+          $exists = $LASTEXITCODE -eq 0
+          $global:LASTEXITCODE = 0
+          # a push to main only builds when this version has no release yet; tags and manual runs always build
+          $go = ($env:GITHUB_REF_TYPE -eq "tag") -or ($env:GITHUB_EVENT_NAME -eq "workflow_dispatch") -or (-not $exists)
+          "build=$($go.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          "exists=$($exists.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+          Write-Host "version $v, release exists: $exists, build: $go"
+
       - uses: actions/setup-python@v5
+        if: steps.plan.outputs.build == 'true'
         with:
           python-version: "3.13"
 
       - name: Install build tools
+        if: steps.plan.outputs.build == 'true'
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pyinstaller
 
       - name: Check the tag matches version.py
-        if: startsWith(github.ref, 'refs/tags/')
+        if: steps.plan.outputs.build == 'true' && startsWith(github.ref, 'refs/tags/')
         shell: python
         run: |
           import os, sys
@@ -40,16 +61,20 @@ jobs:
               sys.exit(f"tag v{tag} does not match version.py ({VERSION})")
 
       - name: Tests
+        if: steps.plan.outputs.build == 'true'
         run: python -m unittest tests.test_core tests.test_qml_static tests.test_round8 tests.test_round9 tests.test_round10 tests.test_round11 tests.test_release -v
 
       - name: Install Inno Setup
+        if: steps.plan.outputs.build == 'true'
         run: |
           if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
 
       - name: Build EXE and setup
+        if: steps.plan.outputs.build == 'true'
         run: python build_installer.py
 
       - name: Smoke test the build
+        if: steps.plan.outputs.build == 'true'
         shell: pwsh
         run: |
           $v = python -c "from version import VERSION; print(VERSION)"
@@ -64,12 +89,13 @@ jobs:
           Get-FileHash $setup -Algorithm SHA256 | Format-List
 
       - uses: actions/upload-artifact@v4
+        if: steps.plan.outputs.build == 'true'
         with:
           name: MediaVault-setup
           path: dist/MediaVault_v*_setup.exe
 
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: steps.plan.outputs.build == 'true' && (startsWith(github.ref, 'refs/tags/') || steps.plan.outputs.exists == 'false')
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -79,9 +105,11 @@ jobs:
           $hash = (Get-FileHash $setup -Algorithm SHA256).Hash.ToLower()
           $notes = (Get-Content RELEASE_NOTES.md -Raw) + "`n`nSHA-256 of MediaVault_v${v}_setup.exe: ``$hash``"
           Set-Content release-notes.txt $notes
-          gh release view $env:GITHUB_REF_NAME 2>$null
+          $tag = "v$v"
+          gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $env:GITHUB_REF_NAME $setup --clobber
+            gh release upload $tag $setup --clobber
           } else {
-            gh release create $env:GITHUB_REF_NAME $setup --title "Media Vault $v" --notes-file release-notes.txt
+            # creates the tag v<version> on this commit too
+            gh release create $tag $setup --target $env:GITHUB_SHA --title "Media Vault $v" --notes-file release-notes.txt --latest
           }

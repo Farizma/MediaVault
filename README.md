@@ -20,8 +20,9 @@ On first start a setup window installs anything missing (PySide6, mpv/VLC, watch
 
 Tests: `python -m unittest discover -s tests` (Qt tests need `QT_QPA_PLATFORM=offscreen` on a machine without a display).
 Installer: `python build_installer.py` on Windows (PyInstaller, then Inno Setup 6) makes
-`dist/MediaVault_v<version>_setup.exe`. Releases are built by `.github/workflows/release.yml` when a tag
-`v<version>` matching `version.py` is pushed.
+`dist/MediaVault_v<version>_setup.exe`. Releases are built by `.github/workflows/release.yml`: raise `VERSION`
+in `version.py` and push to `main`; the workflow tests, builds the setup on Windows, and publishes release
+`v<version>` (pushing a tag `v<version>` works too).
 
 ## What it does
 
