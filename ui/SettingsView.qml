@@ -151,6 +151,7 @@ Item {
         // ---- section body
         Flickable {
             id: flick
+            SmoothWheel { view: flick; step: 160 }
             anchors { left: nav.right; right: parent.right; top: parent.top; bottom: parent.bottom; leftMargin: 28; rightMargin: 16; topMargin: 26; bottomMargin: 24 }
             contentHeight: body.implicitHeight
             clip: true
@@ -778,7 +779,7 @@ Item {
                                [["\u2212", "="], "Audio earlier / later (lip sync)"],
                                [["Tab"], "Skip intro, or skip credits"], [["Enter"], "Next episode now"],
                                [["I"], "Mark intro start, then end"], [["O"], "Mark where the credits start"],
-                               [["P"], "Picture in picture"], [["N"], "Reduce loud sounds"], [["U"], "Next upscaling level"],
+                               [["P"], "Picture in picture"], [["B"], "Black out other screens"], [["N"], "Reduce loud sounds"], [["U"], "Next upscaling level"],
                                [["V"], "VR view"], [["C"], "Frame as box art"], [["Shift", "C"], "Frame as fanart"],
                                [["Esc"], "Close menu, leave PiP, or back"]]
                     }

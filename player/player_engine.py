@@ -400,6 +400,7 @@ class PlayerEngine(QObject):
         self.speed = 1.0
         self.sub = {"scale": 1.0, "pos": 100, "box": False}   # restored from settings by the app
         self.sub_delay = 0.0        # per file
+        self.blackout = True        # black out the other monitors while playing (HUD button, remembered)
         self.audio_delay = 0.0      # lip sync: kept from file to file (it belongs to the speakers / headphones)
         self.hdr = {"mode": "tonemap", "peak": 0, "scene": True}   # restored from settings by the app
         self.auto_credits = True    # series: the next-episode countdown starts where the credits start
@@ -477,7 +478,8 @@ class PlayerEngine(QObject):
         for other in QGuiApplication.screens():
             if other is not screen:
                 b = _black_window(other, passive=True)
-                b.show()
+                if self.blackout:
+                    b.show()
                 self.blackouts.append(b)
         try:
             self.core = self._make_core(wid)
@@ -673,7 +675,7 @@ class PlayerEngine(QObject):
             "night": self.night, "core": c.name, "level": c.level, "levelNames": hw.LEVEL_NAMES, "volume": self.volume,
             "speed": self.speed, "subScale": self.sub["scale"], "subPos": self.sub["pos"], "subBox": self.sub["box"],
             "subDelay": self.sub_delay, "subStyleOk": c.name == "mpv", "pip": self.pip,
-            "audioDelay": self.audio_delay, "hdr": self._hdr_kind(), "hdrMode": self.hdr["mode"],
+            "audioDelay": self.audio_delay, "blackout": self.blackout, "screens": len(self.blackouts) + 1, "hdr": self._hdr_kind(), "hdrMode": self.hdr["mode"],
             "hdrPeak": self.hdr["peak"], "hdrScene": self.hdr["scene"], "hdrOk": c.name == "mpv",
             "creditsActive": bool(self._in_credits and not s.next_path), "hasCredits": bool(s.credits),
             "introActive": intro, "autoplayLeft": countdown, "nextTitle": s.next_title,
@@ -812,6 +814,17 @@ class PlayerEngine(QObject):
         if self.core:
             self.core.set_sub_delay(self.sub_delay)
 
+    @Slot()
+    def toggleBlackout(self):
+        """Black out every other monitor while playing, or leave them as they are. Remembered for next time."""
+        self.blackout = not self.blackout
+        if not self.pip:
+            for b in self.blackouts:
+                b.setVisible(self.blackout)
+        self._say("Other screens blacked out" if self.blackout else "Other screens left on")
+        if self.on_setting:
+            self.on_setting("blackout", "1" if self.blackout else "0")
+
     @Slot(float)
     def setAudioDelay(self, seconds: float):
         self.audio_delay = round(max(-5.0, min(5.0, float(seconds))), 3)
@@ -862,7 +875,7 @@ class PlayerEngine(QObject):
             self.win.setGeometry(self._full_geo or screen.geometry())
             self.win.showFullScreen()
             for b in self.blackouts:
-                b.show()
+                b.setVisible(self.blackout)
             self.pip = False
             self._screen_geo = self._full_geo or screen.geometry()
             self.pipChanged.emit(False)

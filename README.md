@@ -5,7 +5,7 @@ everything in a full-screen player with a glass HUD. PySide6 + QML front end, Py
 
 ## Download
 
-Get **MediaVault_v1.0.0_setup.exe** from [Releases](https://github.com/Farizma/MediaVault/releases/latest) and run it.
+Get the latest **MediaVault_v…_setup.exe** from [Releases](https://github.com/Farizma/MediaVault/releases/latest) and run it.
 The setup wizard installs wherever you choose: your user folder needs no administrator rights, while Program Files
 or "Install for all users" asks Windows for permission. Updates: Settings › Components checks GitHub and installs
 the new setup for you.
@@ -73,6 +73,8 @@ _Nothing decided yet. Ideas move here once we choose to build them._
 | Fix match, audio delay, box sets (collections), Discord status, better HDR | Round 9 |
 | Box set carousel, editable box sets, cast and photos, per-folder scrape choices | Round 10 |
 | Box set title dropdown, pull-out carousel with wave, reorderable View More, audience rating, Resume / From start | Round 11 |
+| v1.0.0: Windows setup, Components and GitHub update checks | 1.0.0 |
+| View More fix, setup elevation fix, smooth wheel scrolling, smoother parallax, Black Out button, Insights window | 1.0.1 |
 
 ### Proposed
 

@@ -399,6 +399,11 @@ class Dashboard(QObject):
         self.insightsChanged.emit()
 
     @Slot()
+    def refreshInsights(self):
+        """The Insights window: fresh numbers each time it opens (a film watched since counts)."""
+        self._refresh_insights()
+
+    @Slot()
     def toggleInsights(self):
         self._insights_visible = not self._insights_visible
         db.set_setting("show_insights", "1" if self._insights_visible else "0")
@@ -475,7 +480,7 @@ class Dashboard(QObject):
             "score": item.get("score") if not films else None,
             "order": db.detail_order(),
             "slides": self._slides(key, art, films) if films else [],
-            "cast": [] if films else self._cast(item),
+            "cast": [] if films else self._cast_list(item),
             "boxSet": ({"key": f"set:{item['collection_id']}", "name": item.get("collection_name") or ""}
                        if not films and not eps and item.get("collection_id") is not None else {}),
             "canSet": not films and item["media_type"] == "movie",
@@ -550,7 +555,7 @@ class Dashboard(QObject):
         self.matchApplied.emit(key, new_key)
 
     @staticmethod
-    def _cast(item) -> list[dict]:
+    def _cast_list(item) -> list[dict]:
         out = []
         for p in db.get_cast(db.cast_owner(item)):
             photo = scraper.person_photo_path(p["person_id"]) if p["person_id"] else None

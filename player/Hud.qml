@@ -101,6 +101,7 @@ Window {
             case Qt.Key_Tab: if (win.st.creditsActive) Player.finishNow(); else Player.skipIntro(); break
             case Qt.Key_O: Player.markCredits(); break
             case Qt.Key_P: root.popup = ""; Player.togglePip(); break
+            case Qt.Key_B: Player.toggleBlackout(); break
             case Qt.Key_BracketLeft: Player.setSpeed((win.st.speed || 1) - 0.25); break
             case Qt.Key_BracketRight: Player.setSpeed((win.st.speed || 1) + 0.25); break
             case Qt.Key_Backslash: Player.setSpeed(1); break
@@ -254,6 +255,9 @@ Window {
                     Item { Layout.fillWidth: true }
                     RevealButton { tip: "AirPlay or Chromecast"; id: castBtn; label: "Cast"; iconKind: "airplay"; active: root.popup === "cast"
                         onClicked: { root.castList = Backend.devices(); if (root.castList.length === 0) Backend.findDevices(); root.togglePopup("cast", castBtn) } }
+                    RevealButton { tip: (win.st.screens || 1) > 1 ? "Shortcut  B" : "Only one screen is connected"; iconKind: "blackout"; label: "Black Out"
+                        active: win.st.blackout === true; opacity: (win.st.screens || 1) > 1 ? 1 : 0.45
+                        onClicked: Player.toggleBlackout() }
                     RevealButton { tip: "Shortcut  P"; id: pipBtn; label: "Picture in picture"; iconKind: "pip"; onClicked: { root.popup = ""; Player.togglePip() } }
                     RevealButton { tip: "Use this frame as box art or fanart (C)"; id: snapBtn; label: "Snapshot"; iconKind: "snapshot"; iconColor: Theme.blue
                         active: root.popup === "camera"; onClicked: root.togglePopup("camera", snapBtn) }

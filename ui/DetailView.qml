@@ -291,6 +291,7 @@ Item {
 
             Flickable {
                 id: flick
+                SmoothWheel { view: flick; step: 160 }
                 anchors { left: parent.left; right: parent.right; top: parent.top; bottom: actions.top; leftMargin: 32; rightMargin: 20; topMargin: 28; bottomMargin: 12 }
                 contentHeight: col.implicitHeight
                 clip: true

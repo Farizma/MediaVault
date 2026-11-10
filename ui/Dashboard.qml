@@ -8,7 +8,7 @@ Item {
     id: dash
     property int currentTab: -1
     property string currentTabName: "All"
-    readonly property bool overlayOpen: detail.visible || picker.visible || settings.visible
+    readonly property bool overlayOpen: detail.visible || picker.visible || settings.visible || insightsSheet.visible || folderSheet.visible
     // content column: 32 px gutters, never wider than 1520 (the web app's max-w-[1520px])
     readonly property real gutter: Math.max(width < 1100 ? 24 : 32, (width - 1520) / 2)
 
@@ -173,6 +173,7 @@ Item {
             reuseItems: true
             boundsBehavior: Flickable.StopAtBounds
             ScrollBar.vertical: ScrollBar { parent: content; x: content.width - width; y: grid.y; height: grid.height }
+            SmoothWheel { view: grid; onScrolled: grid.userScrolled = true }
 
             header: Column {
                 width: grid.width
@@ -376,84 +377,6 @@ Item {
                     }
                 }
 
-                // ---- insights
-                Rectangle {
-                    id: insights
-                    readonly property var ins: Backend.insights
-                    function maxOf(list, field) { var m = 1; for (var i = 0; i < (list || []).length; i++) m = Math.max(m, list[i][field]); return m }
-                    width: grid.span
-                    // grows open / folds shut (and fades) instead of popping
-                    height: Backend.insightsVisible ? insRow.implicitHeight + 40 : 0
-                    visible: height > 0.5
-                    opacity: Backend.insightsVisible ? 1 : 0
-                    clip: true
-                    Behavior on height { NumberAnimation { duration: 320 * Theme.motion; easing.type: Easing.OutCubic } }
-                    Behavior on opacity { NumberAnimation { duration: 240 * Theme.motion } }
-                    radius: 16
-                    color: Theme.slate
-                    border.color: Theme.line
-                    RowLayout {
-                        id: insRow
-                        anchors { left: parent.left; right: parent.right; top: parent.top; margins: 20 }
-                        spacing: 36
-                        ColumnLayout {
-                            Layout.alignment: Qt.AlignTop
-                            spacing: 6
-                            Text { text: "WATCH TIME · 7 DAYS"; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 11 }
-                            Text { text: insights.ins.total || "0h 00m"; color: Theme.text; font.pixelSize: 22; font.weight: Font.ExtraBold; font.letterSpacing: -0.4 }
-                            Row {
-                                Layout.topMargin: 6
-                                spacing: 10
-                                Repeater {
-                                    model: insights.ins.days || []
-                                    Column {
-                                        spacing: 4
-                                        Item {     // bars grow up from a shared baseline
-                                            width: 24; height: 72
-                                            Rectangle {
-                                                anchors.bottom: parent.bottom
-                                                width: parent.width; radius: 5; color: modelData.minutes > 0 ? Theme.green : Theme.fillHover
-                                                height: Math.max(4, 72 * modelData.minutes / insights.maxOf(insights.ins.days, "minutes"))
-                                            }
-                                        }
-                                        Text { text: modelData.label; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10; anchors.horizontalCenter: parent.horizontalCenter }
-                                    }
-                                }
-                            }
-                        }
-                        ColumnLayout {
-                            Layout.alignment: Qt.AlignTop
-                            spacing: 7
-                            Text { text: "TOP-RATED GENRES"; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 11 }
-                            Repeater {
-                                model: insights.ins.genres || []
-                                Row {
-                                    spacing: 8
-                                    Text { text: modelData.name; color: Theme.text; font.pixelSize: 12; font.weight: Font.DemiBold; width: 108; elide: Text.ElideRight }
-                                    Rectangle { width: Math.max(4, 120 * modelData.minutes / insights.maxOf(insights.ins.genres, "minutes")); height: 8; radius: 4; color: Theme.blue; anchors.verticalCenter: parent.verticalCenter }
-                                    Text { text: modelData.minutes + "m" + (modelData.rating > 0 ? "  " + modelData.rating.toFixed(1) + "★" : ""); color: Theme.faint; font.family: Theme.mono; font.pixelSize: 11 }
-                                }
-                            }
-                            Text { visible: (insights.ins.genres || []).length === 0; text: "Genres appear once scraped titles are watched."; color: Theme.faint; font.pixelSize: 12 }
-                        }
-                        ColumnLayout {
-                            Layout.alignment: Qt.AlignTop
-                            Layout.fillWidth: true
-                            Layout.preferredWidth: 1          // take what is left, never push the row wider
-                            Layout.minimumWidth: 160
-                            spacing: 8
-                            Text { text: "TAP A TAG TO HIDE IT FROM THESE CHARTS"; Layout.fillWidth: true; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 11; wrapMode: Text.Wrap }
-                            Flow {
-                                Layout.fillWidth: true; spacing: 6
-                                Repeater {
-                                    model: insights.ins.tags || []
-                                    Pill { label: (modelData.hidden ? "Hidden: " : "") + modelData.name; selected: !modelData.hidden; accent: Theme.blue; onClicked: Backend.toggleTag(modelData.name) }
-                                }
-                            }
-                        }
-                    }
-                }
-
                 // ---- catalog title, search, view toggle, sort and filters
                 Item {
                     width: grid.span
@@ -546,12 +469,24 @@ Item {
                 // while its box is out in the View More sheet, the card itself is not there
                 readonly property bool lifted: detail.visible && detail.fromCard && detail.itemKey === key
                 readonly property real opening: key === dash.launchKey ? dash.launchT : 0
-                // parallax: where the pointer is over the poster, -1..1 on each axis, eased by a spring
+                // parallax: where the pointer is over the poster (tx, ty: -1..1), and where the tilt is now (px, py).
+                // Every frame the tilt closes a share of the gap, scaled by the real frame time: smooth at any
+                // pointer speed (a spring restarted on each mouse event stutters when the pointer moves slowly).
+                property real tx: 0
+                property real ty: 0
                 property real px: 0
                 property real py: 0
-                Behavior on px { enabled: Theme.motion > 0; SpringAnimation { spring: 3.5; damping: 0.45; epsilon: 0.002 } }
-                Behavior on py { enabled: Theme.motion > 0; SpringAnimation { spring: 3.5; damping: 0.45; epsilon: 0.002 } }
-                GridView.onPooled: { pointerIn = false; hovered = false; px = 0; py = 0; linger.stop(); dash.stopPreview(vo) }
+                FrameAnimation {
+                    running: Theme.motion > 0 && (Math.abs(cell.tx - cell.px) > 0.0005 || Math.abs(cell.ty - cell.py) > 0.0005)
+                    onTriggered: {
+                        var k = 1 - Math.exp(-Math.min(frameTime, 0.05) * 12)
+                        cell.px += (cell.tx - cell.px) * k
+                        cell.py += (cell.ty - cell.py) * k
+                    }
+                }
+                onTxChanged: if (Theme.motion === 0) px = tx
+                onTyChanged: if (Theme.motion === 0) py = ty
+                GridView.onPooled: { pointerIn = false; hovered = false; tx = 0; ty = 0; px = 0; py = 0; linger.stop(); dash.stopPreview(vo) }
                 GridView.onReused: { pointerIn = false; hovered = false; enter() }
                 Component.onCompleted: enter()
                 property real appear: 1
@@ -747,10 +682,10 @@ Item {
                     function openBox() { detail.open(key, cell.mapToItem(detail, box.x, box.y, box.width, box.height), "card") }
                     onEntered: { cell.pointerIn = true; linger.restart() }
                     onPositionChanged: (m) => {
-                        cell.px = Math.max(-1, Math.min(1, (m.x / width - 0.5) * 2))
-                        cell.py = Math.max(-1, Math.min(1, (m.y / height - 0.5) * 2))
+                        cell.tx = Math.max(-1, Math.min(1, (m.x / width - 0.5) * 2))
+                        cell.ty = Math.max(-1, Math.min(1, (m.y / height - 0.5) * 2))
                     }
-                    onExited: { cell.pointerIn = false; cell.px = 0; cell.py = 0; linger.stop(); if (cell.hovered) dash.tintTo(dash.billboardArt); cell.hovered = false; dash.stopPreview(vo) }
+                    onExited: { cell.pointerIn = false; cell.tx = 0; cell.ty = 0; linger.stop(); if (cell.hovered) dash.tintTo(dash.billboardArt); cell.hovered = false; dash.stopPreview(vo) }
                     onClicked: openBox()                 // the poster becomes the 3D box and grows into View More
 
                     // hover actions
@@ -870,8 +805,8 @@ Item {
                 Row {
                     spacing: 8
                     GlassButton { tip: "Add a folder; it becomes a tab"; small: true; label: "Add folder"; glyph: "+"; onClicked: Backend.pickFolder() }
-                    GlassButton { tip: "Watch time and favourite genres"; small: true; label: "Insights"; glyph: "●"; glyphColor: Theme.blue
-                        active: Backend.insightsVisible; onClicked: Backend.toggleInsights() }
+                    GlassButton { id: insightsBtn; tip: "Watch time and favourite genres"; small: true; label: "Insights"; glyph: "●"; glyphColor: Theme.blue
+                        active: insightsSheet.shown > 0.5; onClicked: insightsSheet.open(insightsBtn) }
                     GlassButton { tip: "Themes, playback, folders, help"; id: settingsBtn; small: true; label: "Settings"; glyph: "\u2699"; glyphColor: Theme.green; onClicked: settings.open(settingsBtn) }
                 }
             }
@@ -883,6 +818,7 @@ Item {
     PickerView { id: picker; anchors.fill: parent }
     SettingsView { id: settings; anchors.fill: parent; onThemeChosen: (id) => dash.switchTheme(id) }
     FolderSheet { id: folderSheet; anchors.fill: parent }
+    InsightsSheet { id: insightsSheet; anchors.fill: parent }
     Connections { target: Backend; function onFolderPicked(path, name) { folderSheet.open(path, name) } }
 
     Rectangle {
@@ -914,7 +850,6 @@ Item {
 
     Connections {
         target: Backend
-        function onInsightsVisibleChanged() { if (Backend.insightsVisible) grid.positionViewAtBeginning() }
         function onToast(message) { toastText.text = message; toast.opacity = 1; toastHide.restart() }
         function onThumbnailsReady(n) { picker.show(n) }
     }

@@ -1,5 +1,5 @@
 // Line icons for the player bar, drawn on a canvas so they stay crisp at any size (no GPU needed).
-// kinds: airplay, pip, snapshot, back, forward, panel
+// kinds: airplay, pip, snapshot, back, forward, panel, blackout
 import QtQuick
 
 Canvas {
@@ -60,6 +60,14 @@ Canvas {
             ctx.restore()
             ctx.font = "bold 6.6px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle"
             ctx.fillText("10s", 11.2, 12.6)
+        } else if (kind === "blackout") {               // a monitor, its screen gone dark: a crescent moon on it
+            rrect(ctx, 2.5, 3, 17, 12, 2); ctx.stroke()
+            ctx.beginPath(); ctx.moveTo(11, 15); ctx.lineTo(11, 18.2); ctx.moveTo(7.5, 18.8); ctx.lineTo(14.5, 18.8); ctx.stroke()
+            ctx.save()
+            ctx.beginPath(); ctx.arc(11, 9, 3.6, 0, Math.PI * 2); ctx.fill()
+            ctx.globalCompositeOperation = "destination-out"
+            ctx.beginPath(); ctx.arc(12.9, 7.6, 3.2, 0, Math.PI * 2); ctx.fill()
+            ctx.restore()
         } else if (kind === "panel") {                  // three sliders
             for (const [y, k] of [[5, 14], [11, 7], [17, 12]]) {
                 ctx.beginPath(); ctx.moveTo(3, y); ctx.lineTo(19, y); ctx.stroke()

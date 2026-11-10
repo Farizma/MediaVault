@@ -92,6 +92,7 @@ class App:
         except ValueError:
             pass
         self.engine.night = db.get_setting("night_mode") == "1"
+        self.engine.blackout = db.get_setting("blackout") != "0"
         from utils.discord_presence import Presence
         self.presence = Presence(db.get_setting)
         self.ready = True

@@ -106,16 +106,19 @@ begin
     if MsgBox('Installing to' + #13#10 + WizardDirValue + #13#10#13#10 +
               'needs administrator permission. Continue as administrator?', mbConfirmation, MB_YESNO) = IDYES then
     begin
+      // Start setup again in "all users" mode: setup's own loader then asks Windows for administrator
+      // permission (the same UAC prompt as "Run as administrator"). The verb is left empty on purpose:
+      // "runas" from inside the wizard fails on some PCs, while the loader's own elevation always works.
       Params := '/ALLUSERS /DIR="' + WizardDirValue + '"';
-      if WizardIsTaskSelected('desktopicon') then Params := Params + ' /TASKS="desktopicon"';
-      if ShellExec('runas', ExpandConstant('{srcexe}'), Params, '', SW_SHOW, ewNoWait, Code) then
+      if ShellExec('', ExpandConstant('{srcexe}'), Params, '', SW_SHOW, ewNoWait, Code) then
       begin
         Relaunched := True;
         WizardForm.Close;
       end
       else
-        MsgBox('Administrator permission was not given. Choose a folder you can write to, such as' + #13#10 +
-               ExpandConstant('{localappdata}') + '\Programs\Media Vault', mbInformation, MB_OK);
+        MsgBox('Setup could not restart as administrator (' + SysErrorMessage(Code) + ').' + #13#10#13#10 +
+               'Right-click the setup file and choose "Run as administrator", or pick a folder you can write to, such as' + #13#10 +
+               ExpandConstant('{localappdata}') + '\Programs\Media Vault', mbError, MB_OK);
     end;
     Result := False;
   end;
