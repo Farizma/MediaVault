@@ -8,7 +8,7 @@ everything in a full-screen player with a glass HUD. PySide6 + QML front end, Py
 Get the latest **MediaVault_v…_setup.exe** from [Releases](https://github.com/Farizma/MediaVault/releases/latest) and run it.
 The setup wizard installs wherever you choose: your user folder needs no administrator rights, while Program Files
 or "Install for all users" asks Windows for permission. Updates: Settings › About & Updates checks GitHub and installs
-the new setup for you.
+new versions inside Media Vault, with no wizard: it closes, updates and opens again.
 
 ## Run from source
 
@@ -52,8 +52,9 @@ in `version.py` and push to `main`; the workflow tests, builds the setup on Wind
 - **Discord status:** optional "Watching …" status with three detail levels; home videos never show their name.
 - **Themes:** eight dark themes including a custom one with a colour wheel, optional animated glow.
 - **Backups:** automatic database backups, plus portable `.mvault` files with the whole library and its artwork.
-- **About & Updates:** Settings › About & Updates lists every tool Media Vault uses with its version, and updates them;
-  Media Vault itself is checked against GitHub releases.
+- **About & Updates:** Settings › About & Updates lists every tool Media Vault uses with its version, and updates them
+  one at a time or all at once; a badge on Settings shows when something is waiting. Every update can be rolled back
+  (Media Vault itself to the previous release, the video engines and shader to the version they replaced).
 - **Help:** shortcut sheet in Settings › Help; hover any button for a hint.
 
 Build history and what is tested vs. written-but-unrun: [ROADMAP.md](ROADMAP.md).
@@ -78,6 +79,7 @@ _Nothing decided yet. Ideas move here once we choose to build them._
 | Anime (AniList), crop editor, Gallery, auto tags, hide from All / Insights, tab and layout dragging, full Custom theme, player window and PiP fixes | 1.0.2 |
 | Age ratings, original / romaji titles, Tag Manager, tag rules, folder Configure window, themed player | 1.0.3 |
 | Fix Scraped Data across TMDB, AniList and OMDb, AniList % scores, adult / OVA file names | 1.0.4 |
+| Updates inside Media Vault (no wizard), Update all, update badge, rollbacks | 1.0.5 |
 
 ### Proposed
 

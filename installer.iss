@@ -63,6 +63,9 @@ Name: "{autodesktop}\Media Vault"; Filename: "{app}\MediaVault.exe"; Tasks: desk
 
 [Run]
 Filename: "{app}\MediaVault.exe"; Description: "Start Media Vault"; Flags: nowait postinstall skipifsilent
+; an update from inside Media Vault runs setup with no wizard (/VERYSILENT /RELAUNCH): start Media Vault again after,
+; as the person who asked for it (not as administrator, when an all-users copy needed elevation)
+Filename: "{app}\MediaVault.exe"; Flags: nowait runasoriginaluser; Check: RelaunchAfterUpdate
 
 [UninstallDelete]
 ; things Media Vault downloads into its own folder after install (video engines, shader)
@@ -71,6 +74,12 @@ Type: filesandordirs; Name: "{app}\bin"
 [Code]
 var
   Relaunched: Boolean;
+
+// Media Vault's own updater passes /RELAUNCH with /VERYSILENT.
+function RelaunchAfterUpdate: Boolean;
+begin
+  Result := WizardSilent and (Pos('/RELAUNCH', Uppercase(GetCmdTail)) > 0);
+end;
 
 // The nearest folder of Path that exists (setup creates the rest).
 function ExistingParent(Path: String): String;

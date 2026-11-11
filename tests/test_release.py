@@ -48,8 +48,10 @@ class ReleaseCheckTests(unittest.TestCase):
         with mock.patch.object(components, "app_release", return_value=rel), \
                 mock.patch("setup._latest_mpv", side_effect=OSError("offline")), \
                 mock.patch.object(components, "latest_vlc", side_effect=OSError("offline")), \
-                mock.patch.object(components, "frozen", return_value=True):
+                mock.patch.object(components, "frozen", return_value=True), \
+                mock.patch.object(components, "previous_release", return_value={"version": "0.9.0", "setup": "o", "setupName": "o.exe"}):
             out = components.check(rows)
+        self.assertEqual(out[0]["previous"], "0.9.0")
         self.assertEqual((out[0]["status"], out[0]["latest"]), ("update", "1.1.0"))
         self.assertEqual(out[1]["status"], "missing")
 

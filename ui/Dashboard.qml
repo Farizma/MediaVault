@@ -872,7 +872,11 @@ Item {
                     GlassButton { tip: "Add a folder; it becomes a tab"; small: true; label: "Add folder"; glyph: "+"; onClicked: Backend.pickFolder() }
                     GlassButton { id: insightsBtn; tip: "Watch time and favourite genres"; small: true; label: "Insights"; glyph: "●"; glyphColor: Theme.blue
                         active: insightsSheet.shown > 0.5; onClicked: insightsSheet.open(insightsBtn) }
-                    GlassButton { tip: "Themes, playback, folders, help"; id: settingsBtn; small: true; label: "Settings"; glyph: "\u2699"; glyphColor: Theme.green; onClicked: settings.open(settingsBtn) }
+                    GlassButton { tip: Backend.updateCount > 0 ? (Backend.updateCount === 1 ? "1 update is waiting (About & Updates)" : Backend.updateCount + " updates are waiting (About & Updates)")
+                                                              : "Themes, playback, folders, help"
+                        id: settingsBtn; small: true; label: "Settings"; glyph: "\u2699"; glyphColor: Theme.green
+                        onClicked: settings.open(settingsBtn)
+                        Badge { count: Backend.updateCount; anchors { right: parent.right; top: parent.top; rightMargin: -5; topMargin: -5 } } }
                 }
             }
         }

@@ -246,11 +246,19 @@ class App:
             self.dashboard.toast.emit(f"Could not change file associations: {e}")
 
     def _updates_found(self, found):
+        self.dashboard.checkComponents()        # fills the update badge on Settings
         if found.get("app"):
             self.dashboard.toast.emit(f"Media Vault {found['app']} is available. Settings > About & Updates.")
             return
         names = ", ".join(found["packages"] + (["libmpv"] if found["mpv"] else []))
         self.dashboard.toast.emit(f"Updates available: {names}. Settings > About & Updates.")
+
+    def restart(self):
+        """Close and start again (to finish a rollback). The new copy starts once this one has gone."""
+        import subprocess
+        args = [sys.executable] + ([] if getattr(sys, "frozen", False) else [str(Path(__file__).resolve())]) + ["--restarted"]
+        atexit.register(lambda: subprocess.Popen(args, close_fds=True, creationflags=getattr(subprocess, "DETACHED_PROCESS", 0)))
+        self.quit()
 
     def quit(self):
         """Media Vault ends: the player and its windows go too (a picture-in-picture window never stays behind)."""
@@ -318,6 +326,15 @@ def setup_logging():
 
 
 def main() -> int:
+    if "--restarted" in sys.argv:          # started by restart(): give the old copy a moment to let go of its files
+        sys.argv.remove("--restarted")
+        import time
+        time.sleep(1.5)
+    try:                                   # a rollback asked for last time: swap the files before any engine loads
+        from utils import rollback
+        rollback.apply_pending()
+    except Exception:
+        logging.exception("rollback at start-up")
     arg = sys.argv[1] if len(sys.argv) > 1 else ""
     if not setup.run_setup():
         return 1

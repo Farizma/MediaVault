@@ -324,7 +324,9 @@ class Dashboard(QObject):
     devicesFound = Signal("QVariantList")
     folderPicked = Signal(str, str)
     artPicked = Signal(str, str, str, str)       # key, face, image url, path: View More opens its crop editor
-    componentsChecked = Signal("QVariantList")   # Settings > Components, after a check or an update
+    componentsChecked = Signal("QVariantList")   # Settings > About & Updates, after a check or an update
+    updateCountChanged = Signal()                # how many things have an update (badge on Settings)
+    _quitForUpdate = Signal()                    # from a worker thread: close Media Vault so setup can replace it
     appUpdateProgress = Signal(float)            # 0..1 while the new setup.exe downloads; -1 = failed              # path, suggested tab name
     matchResults = Signal(str, "QVariantList")   # key, candidates
     matchFailed = Signal(str, str)               # key, reason
@@ -346,8 +348,26 @@ class Dashboard(QObject):
         self._thumbs: list = []
         self.libraryChanged.connect(self.reload)
         self._thumbnailsDone.connect(self._store_thumbnails)
+        self._update_count = 0
+        self.componentsChecked.connect(self._count_updates)
+        self._quitForUpdate.connect(self._quit_for_update)     # queued: runs on the main thread
 
     # -- properties
+    @Property(int, notify=updateCountChanged)
+    def updateCount(self):
+        return self._update_count
+
+    @Slot("QVariantList")
+    def _count_updates(self, rows):
+        n = sum(1 for r in rows if r.get("status") == "update" and r.get("kind") not in ("bundled", "system"))
+        if n != self._update_count:
+            self._update_count = n
+            self.updateCountChanged.emit()
+
+    @Slot()
+    def _quit_for_update(self):
+        QTimer.singleShot(700, self.app.quit)
+
     @Property(bool, notify=needsSetupChanged)
     def needsSetup(self):
         return self._needs_setup
@@ -1282,7 +1302,8 @@ class Dashboard(QObject):
 
     @Slot(str, str)
     def installAppUpdate(self, url: str, name: str):
-        """Download the new MediaVault_vX_setup.exe from GitHub and start it; Media Vault closes so files can be replaced."""
+        """Download a Media Vault setup from GitHub and install it without the wizard: Media Vault closes, setup
+        replaces it in the same folder and starts it again. Also used to roll back (an older release's setup)."""
         from utils import components
         if not components.frozen():
             self.openLink(url or self.appInfo()["page"])
@@ -1293,12 +1314,58 @@ class Dashboard(QObject):
                 path = components.download_setup(url, name, lambda d, t: self.appUpdateProgress.emit(d / t if t else 0.0))
                 self.appUpdateProgress.emit(1.0)
                 components.run_setup(path)
-                QTimer.singleShot(800, self.app.quit)
+                self._quitForUpdate.emit()
             except Exception as e:
                 log.exception("app update")
                 self.appUpdateProgress.emit(-1.0)
-                self.toast.emit(f"Could not download the update: {e}")
+                self.toast.emit(f"Could not install the update: {e}")
         threading.Thread(target=work, daemon=True, name="app-update").start()
+
+    @Slot()
+    def updateAll(self):
+        """Update everything that has an update: the video engines, shader and packages first, Media Vault last
+        (installing it closes and reopens the app)."""
+        def work():
+            from utils import components
+            rows = components.check(components.inventory(), log.warning)
+            todo = [r for r in rows if r["status"] == "update" and r["kind"] not in ("bundled", "system", "app")]
+            done, failed = [], []
+            for i, r in enumerate(todo, 1):
+                self.toast.emit(f"Updating {r['name']} ({i} of {len(todo)})\u2026")
+                try:
+                    components.update(r["id"], log.warning)
+                    done.append(r["name"])
+                except Exception as e:
+                    log.exception("update %s", r["id"])
+                    failed.append(f"{r['name']} ({e})")
+            app = rows[0]
+            self.componentsChecked.emit(components.check(components.inventory(), log.warning))
+            if failed:
+                self.toast.emit("Could not update " + ", ".join(failed))
+            elif done:
+                self.toast.emit("Updated " + ", ".join(done) + ". Restart Media Vault to use them.")
+            if app.get("status") == "update" and app.get("setup") and components.frozen():
+                self.installAppUpdate(app["setup"], app["setup"].split("/")[-1])
+            elif not todo:
+                self.toast.emit("Everything is up to date")
+        self.toast.emit("Checking for updates\u2026")
+        threading.Thread(target=work, daemon=True, name="update-all").start()
+
+    @Slot(str)
+    def rollbackComponent(self, component: str):
+        def work():
+            from utils import components
+            try:
+                self.toast.emit(components.rollback_component(component, log.warning))
+            except Exception as e:
+                log.exception("rollback")
+                self.toast.emit(f"Could not roll back: {e}")
+            self.componentsChecked.emit(components.check(components.inventory(), log.warning))
+        threading.Thread(target=work, daemon=True, name="rollback").start()
+
+    @Slot()
+    def restartApp(self):
+        self.app.restart()
 
     @Slot(str)
     def openLink(self, url: str):

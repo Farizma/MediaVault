@@ -97,7 +97,11 @@ def inventory() -> list[dict]:
             installed = (installed or "") + (f" · Qt {qt}" if installed else f"Qt {qt}")
         rows.append({"id": pid, "name": name, "role": role, "installed": installed, "pip": dist,
                      "kind": "bundled" if frozen() and not optional else "python", "optional": optional})
+    from utils import rollback
+    waiting = rollback.pending()
     for r in rows:
+        r["previous"] = "" if r["id"] in ("app", "python") or r.get("kind") == "bundled" else rollback.previous(r["id"])
+        r["rollbackPending"] = r["id"] in waiting
         r.setdefault("optional", False)
         r.setdefault("latest", "")
         r.setdefault("status", "ok" if r["installed"] else ("optional" if r["optional"] else "missing"))
@@ -131,6 +135,19 @@ def app_release() -> dict:
             "setupName": setup_asset.get("name") if setup_asset else ""}
 
 
+def previous_release() -> dict:
+    """The newest release older than this one that has a setup file (what "Roll back" installs), or {}."""
+    best = {}
+    for r in _get_json(version.RELEASES_API.rsplit("/", 1)[0] + "?per_page=30"):
+        tag = (r.get("tag_name") or "").lstrip("vV")
+        if r.get("draft") or r.get("prerelease") or not newer(version.VERSION, tag):
+            continue
+        asset = next((a for a in r.get("assets") or [] if a.get("name", "").lower().endswith("_setup.exe")), None)
+        if asset and (not best or newer(tag, best["version"])):
+            best = {"version": tag, "page": r.get("html_url") or "", "setup": asset["browser_download_url"], "setupName": asset["name"]}
+    return best
+
+
 def check(rows: list[dict], log=lambda *_: None) -> list[dict]:
     """Fill in `latest` and `status` (ok / update / missing / optional / error) by asking each source.
     Each source failing (offline, rate limited) marks only its own rows."""
@@ -153,6 +170,13 @@ def check(rows: list[dict], log=lambda *_: None) -> list[dict]:
     except Exception as e:
         by["app"].update(status="error", error=f"GitHub: {e}")
         log(f"app check: {e}")
+    if frozen():
+        try:
+            prev = previous_release()
+            by["app"].update(previous=prev.get("version", ""), previousSetup=prev.get("setup", ""),
+                             previousName=prev.get("setupName", ""))
+        except Exception as e:
+            log(f"previous release: {e}")
     try:
         latest = setup._latest_mpv()["name"]
         r = by["libmpv"]
@@ -176,10 +200,21 @@ def check(rows: list[dict], log=lambda *_: None) -> list[dict]:
     return rows
 
 
+def _installed(component: str) -> str:
+    row = next((r for r in inventory() if r["id"] == component), None)
+    return (row or {}).get("installed", "")
+
+
 def update(component: str, log=print) -> str:
-    """Install or update one component. Returns a sentence for the toast."""
+    """Install or update one component. Returns a sentence for the toast. What was there is kept for a rollback."""
     import setup
-    from utils import bin_dir
+    from utils import bin_dir, rollback
+    before = _installed(component)
+    if before:
+        if component in rollback.PARTS:
+            rollback.snapshot(component, before)
+        elif any(p[0] == component and not (frozen() and not p[4]) for p in PACKAGES):
+            rollback.remember_pip(component, before)
     if component == "libmpv":
         setup.download_mpv(bin_dir(), log)
         return "libmpv updated. It is used from the next video."
@@ -196,6 +231,49 @@ def update(component: str, log=print) -> str:
         setup.pip_install(["-U", pkg[3]], log)
         return f"{pkg[1]} updated. Restart Media Vault to use it."
     raise ValueError(f"unknown component {component}")
+
+
+def rollback_component(component: str, log=print) -> str:
+    """Put back the version a component had before its last update. Returns a sentence for the toast."""
+    import setup
+    from utils import rollback
+    want = rollback.previous(component)
+    if not want:
+        raise ValueError("there is no earlier version kept for this")
+    if component in rollback.PARTS:
+        rollback.request(component, _installed(component))
+        return f"Restart Media Vault to finish going back to {want}."
+    pkg = next((p for p in PACKAGES if p[0] == component), None)
+    if not pkg or (frozen() and not pkg[4]):
+        raise ValueError(f"{component} cannot be rolled back on its own")
+    now = _installed(component)
+    setup.pip_install([f"{pkg[3]}=={want}"], log)
+    rollback.remember_pip(component, now)              # rolling back again undoes it
+    return f"{pkg[1]} is back on {want}. Restart Media Vault to use it."
+
+
+def install_dir() -> Path:
+    return Path(sys.executable).resolve().parent
+
+
+def _writable(folder: Path) -> bool:
+    probe = folder / f".mv-write-{os.getpid()}"
+    try:
+        probe.write_bytes(b"x")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
+def setup_arguments(folder: Path, all_users: bool) -> str:
+    """No wizard: install over this copy, in its own folder, then start Media Vault again. Setup closes Media
+    Vault if it is still running. For a copy installed for all users, Windows asks for permission once (UAC)."""
+    args = ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/RELAUNCH",
+            f'/DIR="{folder}"', f'/LOG="{Path(tempfile.gettempdir()) / "MediaVault_update.log"}"']
+    if all_users:
+        args.append("/ALLUSERS")
+    return " ".join(args)
 
 
 def download_setup(url: str, name: str, progress=lambda done, total: None) -> Path:
@@ -215,8 +293,11 @@ def download_setup(url: str, name: str, progress=lambda done, total: None) -> Pa
 
 
 def run_setup(path: Path) -> None:
-    """Start the installer. It finds the current install folder itself (same app id) and asks to close Media Vault."""
-    if sys.platform == "win32":
-        os.startfile(str(path))   # noqa: S606  (opens the Windows installer wizard)
-    else:
+    """Start the downloaded setup in the background, with no wizard (see setup_arguments). Media Vault quits
+    right after; setup replaces its files and starts it again."""
+    if sys.platform != "win32":
         raise OSError("the installer only runs on Windows")
+    folder = install_dir()
+    # ShellExecute, not subprocess: setup asks Windows to elevate itself for an all-users copy, and only
+    # ShellExecute can show that prompt
+    os.startfile(str(path), "open", setup_arguments(folder, all_users=not _writable(folder)))   # noqa: S606

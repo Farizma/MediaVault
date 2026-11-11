@@ -96,7 +96,7 @@ Item {
         property string sub
         Layout.fillWidth: true
         spacing: 4
-        Text { text: parent.title; color: "#FFFFFF"; font.pixelSize: 18; font.weight: Font.Bold; font.letterSpacing: -0.3 }
+        Text { text: parent.title; color: Theme.text; font.pixelSize: 18; font.weight: Font.Bold; font.letterSpacing: -0.3 }
         Text { visible: parent.sub !== ""; text: parent.sub; color: Theme.faint; font.pixelSize: 12; wrapMode: Text.Wrap; Layout.fillWidth: true }
     }
     component Caption: Text { color: Theme.faint; font.family: Theme.mono; font.pixelSize: 11; Layout.topMargin: 6; Layout.fillWidth: true; wrapMode: Text.Wrap }
@@ -153,6 +153,8 @@ Item {
                             Text { text: modelData[0]; anchors.verticalCenter: parent.verticalCenter
                                 color: parent.parent.on ? Theme.text : Theme.faint; font.pixelSize: 12; font.weight: Font.DemiBold }
                         }
+                        Badge { count: modelData[0] === "About & Updates" ? Backend.updateCount : 0
+                            anchors { right: parent.right; rightMargin: 10; verticalCenter: parent.verticalCenter } }
                         MouseArea { id: navArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: root.section = index }
                     }
                 }
@@ -927,7 +929,23 @@ Item {
                     visible: root.sectionName === "About & Updates"
                     Layout.fillWidth: true
                     spacing: 10
-                    Heading { title: "About & Updates"; sub: "The tools Media Vault is built on, the versions on this PC, and whether newer ones exist. Media Vault checks GitHub for its own releases."; Layout.rightMargin: 48 }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Layout.rightMargin: 48
+                        spacing: 12
+                        Heading { title: "About & Updates"; sub: "The tools Media Vault is built on, the versions on this PC, and whether newer ones exist. Updates install here, without a setup wizard, and each one can be rolled back." }
+                        GlassButton { Layout.alignment: Qt.AlignBottom; small: true; label: root.checking ? "Checking\u2026" : "Check now"
+                            enabled: !root.checking; opacity: enabled ? 1 : 0.5
+                            onClicked: { root.checking = true; Backend.checkComponents() } }
+                        GlassButton {
+                            Layout.alignment: Qt.AlignBottom
+                            small: true; primary: Backend.updateCount > 0
+                            label: Backend.updateCount > 0 ? "Update all (" + Backend.updateCount + ")" : "Update all"
+                            enabled: Backend.updateCount > 0 && root.downloading < 0; opacity: enabled ? 1 : 0.45
+                            tip: "Video engines, shader and packages first, then Media Vault itself (it closes and reopens)"
+                            onClicked: Backend.updateAll()
+                        }
+                    }
 
                     // Media Vault itself
                     Rectangle {
@@ -947,7 +965,7 @@ Item {
                                     Layout.fillWidth: true; wrapMode: Text.Wrap; font.pixelSize: 12
                                     color: root.appRow.status === "update" ? Theme.green : root.appRow.status === "error" ? Theme.amber : Theme.muted
                                     text: root.downloading >= 0 && root.downloading < 1 ? "Downloading version " + root.appRow.latest + "\u2026 " + Math.round(root.downloading * 100) + "%"
-                                        : root.downloading >= 1 ? "Starting the installer\u2026 Media Vault will close."
+                                        : root.downloading >= 1 ? "Installing\u2026 Media Vault closes now and opens again by itself in a moment."
                                         : root.checking ? "Checking GitHub for a newer version\u2026"
                                         : root.appRow.status === "update" ? "Version " + root.appRow.latest + " is available."
                                         : root.appRow.status === "error" ? "Could not reach GitHub. Check your connection and try again."
@@ -965,9 +983,22 @@ Item {
                                 primary: true; label: root.appInfo.installed ? "Download & install" : "Get it on GitHub"
                                 onClicked: root.appInfo.installed ? Backend.installAppUpdate(root.appRow.setup || "", root.appRow.setup ? root.appRow.setup.split("/").pop() : "")
                                                                   : Backend.openLink(root.appRow.page || root.appInfo.page) }
+                            GlassButton {      // two clicks: going back a version is not something to do by accident
+                                id: appBack
+                                property bool asking: false
+                                small: true
+                                visible: (root.appRow.previous || "") !== "" && root.downloading < 0
+                                label: asking ? "Install " + root.appRow.previous + "?" : "Roll back"
+                                glyphColor: Theme.amber
+                                tip: "Install Media Vault " + root.appRow.previous + " again, the same way as an update. Your library stays."
+                                onClicked: {
+                                    if (!asking) { asking = true; appBackReset.restart(); return }
+                                    asking = false
+                                    Backend.installAppUpdate(root.appRow.previousSetup, root.appRow.previousName)
+                                }
+                                Timer { id: appBackReset; interval: 4000; onTriggered: appBack.asking = false }
+                            }
                             GlassButton { small: true; label: "Release notes"; onClicked: Backend.openLink(root.appRow.page || root.appInfo.page) }
-                            GlassButton { small: true; label: root.checking ? "Checking\u2026" : "Check now"; enabled: !root.checking; opacity: enabled ? 1 : 0.5
-                                onClicked: { root.checking = true; Backend.checkComponents() } }
                         }
                     }
 
@@ -994,7 +1025,7 @@ Item {
                                     Layout.preferredWidth: 150
                                     spacing: 1
                                     Text { width: parent.width; horizontalAlignment: Text.AlignRight; elide: Text.ElideLeft
-                                        text: modelData.installed || "\u2014"; color: "#D9FFFFFF"; font.family: Theme.mono; font.pixelSize: 11 }
+                                        text: modelData.installed || "\u2014"; color: Theme.soft; font.family: Theme.mono; font.pixelSize: 11 }
                                     Text { width: parent.width; horizontalAlignment: Text.AlignRight; visible: modelData.status === "update"
                                         text: "\u2192 " + modelData.latest; color: Theme.green; font.family: Theme.mono; font.pixelSize: 11 }
                                 }
@@ -1007,6 +1038,16 @@ Item {
                                     implicitHeight: 22; radius: 11
                                     color: "transparent"; border.color: look[1]; opacity: 0.9
                                     Text { anchors.centerIn: parent; text: parent.look[0]; color: parent.look[1]; font.pixelSize: 10; font.weight: Font.Bold }
+                                }
+                                // roll back: the version from before the last update (or, once asked, restart to finish)
+                                GlassButton {
+                                    small: true
+                                    visible: modelData.rollbackPending === true || (modelData.previous || "") !== ""
+                                    label: modelData.rollbackPending ? "Restart to finish" : "Roll back"
+                                    tip: modelData.rollbackPending ? "Media Vault puts back " + modelData.previous + " as it starts"
+                                                                   : "Go back to " + modelData.previous
+                                    glyphColor: Theme.amber
+                                    onClicked: modelData.rollbackPending ? Backend.restartApp() : Backend.rollbackComponent(modelData.id)
                                 }
                                 Item {
                                     Layout.preferredWidth: 84; implicitHeight: 30
