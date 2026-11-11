@@ -92,15 +92,53 @@ def api_keys() -> dict:
             "fanart": os.environ.get("FANART_API_KEY") or db.get_setting("fanart_key") or ""}
 
 
+MAX_JSON = 16 << 20
+MAX_IMAGE = 25 << 20              # bytes of one downloaded picture
+MAX_PIXELS = 60_000_000           # pixels of one picture (a "decompression bomb" is refused, not unpacked)
+_TAG = re.compile(r"<[^>]{0,500}>")
+
+
+def untag(value):
+    """Scraped text is shown as text: markup in it (from a community-edited source, or a hostile one) is dropped,
+    so Qt never renders it as rich text (which can load remote or local images). Lists and dicts are walked."""
+    if isinstance(value, str):
+        return _TAG.sub("", value).replace("<", "\u2039").replace(">", "\u203a") if "<" in value or ">" in value else value
+    if isinstance(value, list):
+        return [untag(v) for v in value]
+    if isinstance(value, dict):
+        return {k: (v if k.endswith(("url", "urls")) else untag(v)) for k, v in value.items()}
+    return value
+
+
+def _plain(fn):
+    """Decorator: whatever this scraper function returns is passed through untag, and result thumbnails must be HTTPS."""
+    import functools
+
+    @functools.wraps(fn)
+    def run(*a, **kw):
+        out = untag(fn(*a, **kw))
+        for row in out if isinstance(out, list) else []:
+            if isinstance(row, dict) and "thumb" in row:
+                row["thumb"] = safe_url(row["thumb"]) or ""
+        return out
+    return run
+
+
+def safe_url(url) -> str | None:
+    """A picture address from a scraped answer: HTTPS only (urllib would also open file:// and http://)."""
+    return url if isinstance(url, str) and url.lower().startswith("https://") and len(url) < 2000 else None
+
+
 def _get_json(url: str) -> dict:
     req = urllib.request.Request(url, headers={"User-Agent": "MediaVault/1.0"})
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
-            return json.load(r)
+            return json.loads(r.read(MAX_JSON + 1)[:MAX_JSON])
     except Exception as e:
         raise ScrapeError(str(e).replace(url, "<url>")) from None  # keep the API key out of logs
 
 
+@_plain
 def _tmdb(kind: str, p: Parsed, key: str) -> dict | None:
     path = "search/tv" if kind == "show" else "search/movie"
     year_key = "first_air_date_year" if kind == "show" else "year"
@@ -161,6 +199,7 @@ def _tmdb_json(path: str, key: str, **q) -> dict:
     return _get_json(f"https://api.themoviedb.org/3/{path}?{urllib.parse.urlencode({'api_key': key, **q})}")
 
 
+@_plain
 def tmdb_search(kind: str, query: str, year: str, key: str) -> list[dict]:
     """Fix Scraped Data: up to 12 TMDB candidates for a title (adult titles included: you are searching by hand)."""
     if not key:
@@ -178,6 +217,7 @@ def tmdb_search(kind: str, query: str, year: str, key: str) -> list[dict]:
     return out
 
 
+@_plain
 def tmdb_details(kind: str, tmdb_id: int, key: str) -> dict:
     """Everything for one title by id, in the same shape as a search hit, plus its collection (films only)."""
     credits = "aggregate_credits" if kind == "show" else "credits"
@@ -265,6 +305,7 @@ def _omdb(kind: str, p: Parsed, key: str) -> dict | None:
     return _omdb_shape(r)
 
 
+@_plain
 def _omdb_shape(r: dict) -> dict:
     poster = r.get("Poster")
     try:
@@ -281,6 +322,7 @@ def _omdb_shape(r: dict) -> dict:
             "collection_id": None, "collection_name": None, "collection_poster_url": None}
 
 
+@_plain
 def omdb_search(kind: str, query: str, year: str, key: str) -> list[dict]:
     """Fix Scraped Data candidates from OMDb (IMDb data); the id is the IMDb id ("tt0113277")."""
     q = {"apikey": key, "s": query, "type": "series" if kind == "show" else "movie", **({"y": year} if year else {})}
@@ -358,10 +400,23 @@ async def scrape_many(jobs: list[tuple[str, Parsed]], keys: dict, source: str = 
 # ------------------------------------------------------------ 3. images and sidecar paths
 
 def fetch_image(url: str):
+    """One picture from a scraped address: HTTPS only, at most MAX_IMAGE bytes and MAX_PIXELS pixels."""
+    import warnings
+
     from PIL import Image
+    if not safe_url(url):
+        raise ScrapeError("refusing a picture address that is not HTTPS")
     req = urllib.request.Request(url, headers={"User-Agent": "MediaVault/1.0"})
     with urllib.request.urlopen(req, timeout=15) as r:
-        return Image.open(io.BytesIO(r.read()))
+        data = r.read(MAX_IMAGE + 1)
+    if len(data) > MAX_IMAGE:
+        raise ScrapeError("picture is too large")
+    Image.MAX_IMAGE_PIXELS = MAX_PIXELS
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", Image.DecompressionBombWarning)
+        img = Image.open(io.BytesIO(data))
+        img.load()
+    return img
 
 
 def save_webp(img, dest: Path, box=POSTER_BOX) -> None:

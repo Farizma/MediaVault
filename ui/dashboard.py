@@ -225,7 +225,8 @@ class LibraryModel(QAbstractListModel):
         if not index.isValid() or not 0 <= index.row() < len(self._rows):
             return None
         field = self.FIELDS.get(role)
-        return self._rows[index.row()][field] if field else None
+        value = self._rows[index.row()][field] if field else None
+        return scraper.untag(value) if isinstance(value, str) else value     # titles from before 1.0.6 too
 
     def _row(self, card: dict, online: bool) -> dict:
         art = art_item(card)
@@ -509,6 +510,9 @@ class Dashboard(QObject):
     # -- detail view
     @Slot(str, result="QVariantMap")
     def detail(self, key: str):
+        return scraper.untag(self._detail(key))   # scraped text is only ever shown as text
+
+    def _detail(self, key: str):
         item = self._target(key)
         if not item:
             return {}

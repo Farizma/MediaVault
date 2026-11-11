@@ -12,6 +12,7 @@ import time
 import urllib.request
 
 from utils import alttitles
+from utils.scraper import _plain
 
 API = "https://graphql.anilist.co"
 PERSON_OFFSET = 1_000_000_000      # AniList staff ids, kept apart from TMDB person ids in the shared photo cache
@@ -108,6 +109,7 @@ def _title(t: dict) -> str:
     return (t or {}).get("english") or (t or {}).get("romaji") or (t or {}).get("native") or ""
 
 
+@_plain
 def _shape(m: dict) -> dict:
     """An AniList entry in the same shape as a TMDB hit (scraper._lookup / tmdb_details)."""
     sd = m.get("startDate") or {}
@@ -208,6 +210,7 @@ def details(anilist_id: int) -> dict:
     return _shape(data["Media"])
 
 
+@_plain
 def search(query: str) -> list[dict]:
     """Fix Scraped Data candidates, in the same shape as scraper.tmdb_search."""
     media = []

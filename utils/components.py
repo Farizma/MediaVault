@@ -135,6 +135,15 @@ def app_release() -> dict:
             "setupName": setup_asset.get("name") if setup_asset else ""}
 
 
+def asset_digest(url: str) -> str:
+    """The SHA-256 GitHub publishes for one of this repo's release files ("" if it has none)."""
+    for r in _get_json(version.RELEASES_API.rsplit("/", 1)[0] + "?per_page=30"):
+        for a in r.get("assets") or []:
+            if a.get("browser_download_url") == url:
+                return (a.get("digest") or "").removeprefix("sha256:").lower()
+    return ""
+
+
 def previous_release() -> dict:
     """The newest release older than this one that has a setup file (what "Roll back" installs), or {}."""
     best = {}
@@ -246,6 +255,8 @@ def rollback_component(component: str, log=print) -> str:
     pkg = next((p for p in PACKAGES if p[0] == component), None)
     if not pkg or (frozen() and not pkg[4]):
         raise ValueError(f"{component} cannot be rolled back on its own")
+    if not re.fullmatch(r"[0-9][0-9A-Za-z.+!-]{0,40}", want):        # a version number, nothing pip could read as an option
+        raise ValueError("the kept version number is not valid")
     now = _installed(component)
     setup.pip_install([f"{pkg[3]}=={want}"], log)
     rollback.remember_pip(component, now)              # rolling back again undoes it
@@ -276,19 +287,31 @@ def setup_arguments(folder: Path, all_users: bool) -> str:
     return " ".join(args)
 
 
-def download_setup(url: str, name: str, progress=lambda done, total: None) -> Path:
-    """Download a release's setup.exe to the temp folder (only from GitHub, only an .exe)."""
-    if not url.lower().startswith(f"https://github.com/{version.REPO}/releases/download/".lower()) or not name.lower().endswith(".exe"):
+def download_setup(url: str, name: str, progress=lambda done, total: None, sha256: str | None = None) -> Path:
+    """Download a release's setup.exe (only this repo's GitHub releases, only an .exe) into a private temp folder,
+    and check it against the SHA-256 GitHub publishes for it. Setup is run silently right after, so a file that
+    does not match is deleted, never started."""
+    import hashlib
+    if not url.lower().startswith(f"https://github.com/{version.REPO}/releases/download/".lower()) \
+            or not re.fullmatch(r"[A-Za-z0-9_.\-]{1,120}\.exe", name) or ".." in name:
         raise ValueError("refusing to download an installer from an unexpected address")
-    dest = Path(tempfile.gettempdir()) / os.path.basename(name)
+    want = asset_digest(url) if sha256 is None else sha256.lower()
+    if not want:
+        raise ValueError("GitHub lists no checksum for this installer, so it was not installed. Download it from the release page.")
+    dest = Path(tempfile.mkdtemp(prefix="mediavault-update-")) / name     # not a shared, guessable temp path
+    digest = hashlib.sha256()
     with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=30) as r, open(dest, "wb") as f:
         total, done = int(r.headers.get("Content-Length") or 0), 0
         while chunk := r.read(1 << 16):
             f.write(chunk)
+            digest.update(chunk)
             done += len(chunk)
+            if done > 1 << 30:
+                raise IOError("the download is far larger than a Media Vault installer")
             progress(done, total)
-    if total and dest.stat().st_size != total:
-        raise IOError("the download was cut short")
+    if (total and dest.stat().st_size != total) or digest.hexdigest() != want:
+        dest.unlink(missing_ok=True)
+        raise IOError("the installer did not match GitHub's checksum, so it was deleted and not run")
     return dest
 
 

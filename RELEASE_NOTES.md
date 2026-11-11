@@ -27,6 +27,22 @@ Choose *More info* › *Run anyway*. The SHA-256 of the setup file is listed bel
 ### Changed
 - The 3D box has the proportions of a real DVD case (135 × 190 mm), so covers and sleeve scans fit without cropping.
 
+### Security
+- **Watch on other devices (LAN streaming):** a title could carry script into the library page (an inline handler
+  it could break out of); the page now has no script at all, under a strict Content-Security-Policy, plus
+  nosniff / no-referrer / no-framing headers. The server answers only devices on your own network (private,
+  link-local and loopback addresses), listens on this network's address instead of every interface, drops idle
+  connections after 30 s, refuses anything but GET, and no longer names its Python version.
+- **Updates are checked before they run:** Media Vault's installer must match the SHA-256 GitHub publishes for it
+  (a mismatch is deleted, never started) and is saved in a private folder. The emergency 7-Zip unpacker is now a
+  pinned release checked by hash before it runs, and the upscaling shader is checked by hash too.
+- **Downloads are HTTPS only** (no file:// or plain http:// from scraped answers), size-capped, and pictures with
+  absurd pixel counts ("decompression bombs") are refused.
+- **Scraped text is only ever text:** markup in titles, synopses, cast and tags from TMDB, AniList or OMDb is
+  dropped, so the app never renders it as rich text (which can load remote or local images). Result thumbnails
+  must be HTTPS.
+- A rollback can only hand pip a version number.
+
 ### Fixed
 - **Closing the window left Media Vault running, hidden** (and logged a crash each time): the close handler could not
   receive Qt's close event. Media Vault now saves its size and place and quits properly. This was also why the old

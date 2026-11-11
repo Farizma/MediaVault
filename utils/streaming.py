@@ -12,6 +12,7 @@ MKV and AVI play in some browsers and on Chromecast only partly; Apple TV refuse
 import asyncio
 import hmac
 import html
+import ipaddress
 import logging
 import mimetypes
 import os
@@ -58,19 +59,60 @@ video{{width:100%;max-height:80vh;background:#000}} .w{{padding:18px}} .m{{color
 </style></head><body><header>Media Vault</header>{body}</body></html>""".encode("utf-8")
 
 
+# No scripts, frames, forms or outside resources: the pages are plain links, posters and one <video>.
+SECURITY_HEADERS = {
+    "Content-Security-Policy": "default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; "
+                               "base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",          # the secret in the address never leaves in a Referer
+    "X-Frame-Options": "DENY",
+    "Cross-Origin-Resource-Policy": "same-origin",
+}
+# an empty poster for titles without one (instead of the old inline script, which a title could break out of)
+_BLANK = b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2 3"/>'
+
+
+def _local_client(addr: str) -> bool:
+    """Only devices on this network: private, link-local or loopback addresses (never the internet, even when
+    this PC has a public address or a port is forwarded)."""
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return False
+    if ip.version == 6 and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
+    return ip.is_private or ip.is_link_local or ip.is_loopback
+
+
 class _Handler(BaseHTTPRequestHandler):
     server_version = "MediaVault"
+    sys_version = ""                           # no Python version in the Server header
+    timeout = 30                               # a client that stops talking does not hold a thread forever
 
     def log_message(self, fmt, *args):  # quiet: no request lines in the app log
         pass
 
+    def end_headers(self):
+        for k, v in SECURITY_HEADERS.items():
+            self.send_header(k, v)
+        super().end_headers()
+
     def _deny(self):
         self.send_response(404)
+        self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def do_HEAD(self):  # noqa: N802
+        self._deny()
+
+    def do_POST(self):  # noqa: N802
+        self._deny()
+
     def do_GET(self):  # noqa: N802 (http.server naming)
+        if not _local_client(self.client_address[0]) or len(self.path) > 300:
+            return self._deny()
         parts = [unquote(p) for p in self.path.split("?")[0].strip("/").split("/")]
-        if not parts or not hmac.compare_digest(parts[0], self.server.token):
+        if not parts or not hmac.compare_digest(parts[0].encode(), self.server.token.encode()):
             return self._deny()
         try:
             if len(parts) == 1:
@@ -86,7 +128,7 @@ class _Handler(BaseHTTPRequestHandler):
             if kind == "poster":
                 from utils import scraper
                 p = scraper.cover_path(item)
-                return self._file(str(p), "image/webp") if p.exists() else self._deny()
+                return self._file(str(p), "image/webp") if p.exists() else self._send(_BLANK, "image/svg+xml")
             if kind == "watch":
                 t = self.server.token
                 body = (f'<div class="w"><video controls autoplay playsinline src="/{t}/v/{uid}"></video>'
@@ -112,8 +154,7 @@ class _Handler(BaseHTTPRequestHandler):
         cards = []
         for c in db.list_library(None, sets=False):
             uid = c["uuid"]
-            cards.append(f'<a class="c" href="/{t}/watch/{uid}"><img loading="lazy" src="/{t}/poster/{uid}" '
-                         f'onerror="this.outerHTML=\'<div class=n>{html.escape(c["title"], quote=True)}</div>\'">'
+            cards.append(f'<a class="c" href="/{t}/watch/{uid}"><img loading="lazy" alt="" src="/{t}/poster/{uid}">'
                          f'<p>{html.escape(c["title"])}</p></a>')
         self._send(_page("Media Vault", f'<div class="grid">{"".join(cards)}</div>'), "text/html; charset=utf-8")
 
@@ -121,11 +162,11 @@ class _Handler(BaseHTTPRequestHandler):
         """Range requests, so players can seek."""
         size = os.path.getsize(path)
         start, end = 0, size - 1
-        m = re.match(r"bytes=(\d*)-(\d*)", self.headers.get("Range", ""))
+        m = re.fullmatch(r"bytes=(\d{0,18})-(\d{0,18})", self.headers.get("Range", "").strip())
         if m and (m.group(1) or m.group(2)):
             if m.group(1):
                 start = int(m.group(1))
-                end = int(m.group(2)) if m.group(2) else end
+                end = min(int(m.group(2)), size - 1) if m.group(2) else end
             else:
                 start = max(0, size - int(m.group(2)))
             if start > end or start >= size:
@@ -166,12 +207,15 @@ class StreamServer:
         if self._srv:
             return self.base_url()
         self.token = secrets.token_urlsafe(18)
+        host = lan_ip()                          # this network's address only, not every interface (VPNs, public ones)
         for p in (port, 0):                      # the usual port, else any free one
             try:
-                self._srv = ThreadingHTTPServer(("0.0.0.0", p), _Handler)
+                self._srv = ThreadingHTTPServer((host, p), _Handler)
                 break
             except OSError:
                 continue
+        if not self._srv:
+            raise OSError("could not open a port for streaming")
         self._srv.daemon_threads = True
         self._srv.token = self.token
         threading.Thread(target=self._srv.serve_forever, daemon=True, name="stream-server").start()

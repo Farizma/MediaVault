@@ -43,6 +43,12 @@ MPV_RELEASES = "https://api.github.com/repos/zhongfly/mpv-winbuild/releases/late
 MPV_ASSET = re.compile(r"mpv-dev-x86_64-\d{8}-git-[0-9a-f]+\.7z$")
 VLC_INDEX = "https://get.videolan.org/vlc/last/win64/"
 SHADER_URL = "https://github.com/igv/FSRCNN-TensorFlow/releases/download/1.1/FSRCNNX_x2_8-0-4-1.glsl"
+SHADER_SHA256 = "e800dbc5c1c95185cc82216c597724533ff5f2880179f256eef600f03e8dc2ae"      # release 1.1 never changes
+# the stand-alone 7-Zip console, only used when tar.exe and an installed 7-Zip both fail. It is RUN, so it is pinned:
+# a fixed release from 7-Zip's own GitHub, checked against this hash before it is started.
+SEVENZR_URL = "https://github.com/ip7z/7zip/releases/download/24.09/7zr.exe"
+SEVENZR_SHA256 = "d2c0045523cf053a6b43f9315e9672fc2535f06aeadd4ffa53c729cd8b2b6dfe"
+MAX_DOWNLOAD = 600 << 20         # nothing Media Vault fetches is near this; a runaway response is cut off
 UPDATE_EVERY = 7 * 24 * 3600
 NO_WINDOW = 0x08000000  # CREATE_NO_WINDOW: no black console flashes while pip runs
 
@@ -170,19 +176,28 @@ def pip_install(specs: list[str], log=print) -> None:
     importlib.invalidate_caches()
 
 
+def _https(url: str) -> str:
+    """Only ever HTTPS (urllib would also open file:// and plain http://)."""
+    if not url.lower().startswith("https://"):
+        raise ValueError(f"refusing a non-HTTPS address: {url[:80]}")
+    return url
+
+
 def _fetch_text(url: str) -> str:
-    with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=30) as r:
-        return r.read().decode("utf-8", "ignore")
+    with urllib.request.urlopen(urllib.request.Request(_https(url), headers=UA), timeout=30) as r:
+        return r.read(8 << 20).decode("utf-8", "ignore")
 
 
 def _download(url: str, dest: Path, log, sha256: str | None = None) -> None:
     log(f"Downloading {url}")
     digest, done, mark = hashlib.sha256(), 0, 5
-    with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=60) as r, open(dest, "wb") as f:
+    with urllib.request.urlopen(urllib.request.Request(_https(url), headers=UA), timeout=60) as r, open(dest, "wb") as f:
         for chunk in iter(lambda: r.read(1 << 20), b""):
             digest.update(chunk)
             f.write(chunk)
             done += len(chunk)
+            if done > MAX_DOWNLOAD:
+                raise RuntimeError(f"download from {url} is far larger than expected: stopped")
             if done >> 20 >= mark:
                 log(f"  {done >> 20} MB downloaded")
                 mark += 5
@@ -313,7 +328,7 @@ def _extract_7z(archive: Path, member_suffixes: tuple, out: Path, log) -> Path:
         tried.append(f"{name}: {(r.stderr or r.stdout).strip()[-120:]}")
     try:  # last resorts: the official stand-alone 7-Zip console (HTTPS, from 7-zip.org), then py7zr
         exe = out.parent / "7zr.exe"
-        _download("https://www.7-zip.org/a/7zr.exe", exe, log)
+        _download(SEVENZR_URL, exe, log, SEVENZR_SHA256)       # a mismatch deletes it before it can run
         r = subprocess.run([str(exe), "x", "-y", f"-o{out}", str(archive), "*.dll", "-r"],
                            capture_output=True, text=True, errors="replace", creationflags=flags)
         if r.returncode == 0 and find():
@@ -350,10 +365,12 @@ def download_mpv(bin_dir: Path, log=print) -> None:
 
 def download_shader(bin_dir: Path, log=print) -> Path:
     """FSRCNNX super-resolution shader for upscaling level 2+. Optional, so it is not part of setup.
-    Fetched over HTTPS from the author's repository; no checksum is published, so NOT integrity-checked."""
+    Fetched over HTTPS from the author's repository and checked against the release's known SHA-256."""
     dest = bin_dir / "shaders" / "FSRCNNX_x2_8-0-4-1.glsl"
     dest.parent.mkdir(parents=True, exist_ok=True)
-    _download(SHADER_URL, dest, log)
+    tmp = dest.with_name(dest.name + ".part")
+    _download(SHADER_URL, tmp, log, SHADER_SHA256)
+    tmp.replace(dest)
     return dest
 
 
