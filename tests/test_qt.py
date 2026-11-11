@@ -82,7 +82,7 @@ class QtTests(unittest.TestCase):
         save_box_art(Image.new("RGB", (1000, 500), "blue"), [item, None], "front")               # wide image, cropped
         self.assertEqual(scraper.cover_path(item), scraper.custom_front_path(item))
         with Image.open(scraper.cover_path(item)) as im:
-            self.assertAlmostEqual(im.width / im.height, 2 / 3, places=2)
+            self.assertAlmostEqual(im.width / im.height, 135 / 190, places=2)   # a real DVD case
         save_box_art(Image.new("RGB", (400, 600), "green"), [item], "back")
         tex = dvd_box.box_textures(item)
         self.assertTrue(tex["customFront"] and tex["customBack"])
