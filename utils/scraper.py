@@ -52,11 +52,13 @@ _SXE = re.compile(r"[Ss](\d{1,2})[ ._-]?[Ee](\d{1,3})")
 _YEAR = re.compile(r"[\s(]((?:19|20)\d{2})\b")
 _JUNK = re.compile(r"\b(?:480p|576p|720p|1080p|1440p|2160p|4k|uhd|bluray|blu-ray|brrip|bdrip|web-?dl|webrip|"
                    r"hdrip|dvdrip|hdtv|x264|x265|h\.?26[45]|hevc|avc|aac|ac3|eac3|dts|ddp?5?|hdr10?\+?|"
-                   r"remux|proper|repack|extended|unrated|imax|10bit)\b", re.I)
+                   r"remux|proper|repack|extended|unrated|uncensored|imax|10bit)\b", re.I)
 
 
-# anime releases: "[Group] Title - 07 (1080p)", "Title - 07v2", "Title S2 - 07", "Title Ep 07", "Title E07"
-_ANIME_EP = re.compile(r"(?:\s(?:S|Season\s?)(\d{1,2}))?\s(?:-\s|Ep\.?\s?|E|#)(\d{1,4})(?:v\d)?(?=\s|$|[(\[])", re.I)
+# anime releases: "[Group] Title - 07 (1080p)", "Title - 07v2", "Title S2 - 07", "Title Ep 07", "Title E07",
+# "Title Episode 1", "Title - Episode 01", "Title OVA 1", and a zero-padded "Title 01"
+_ANIME_EP = re.compile(r"(?:\s(?:S|Season\s?)(\d{1,2}))?\s(?:-\s(?:Episode\s?|Ep\.?\s?)?|Episode\s?|Ep\.?\s?|OVA\s?|OAD\s?|E|#|(?=0\d))"
+                       r"(\d{1,4})(?:v\d)?(?=\s|$|[(\[])", re.I)
 _SEASON_DIR = re.compile(r"^(?:season|s)\s*(\d{1,2})$", re.I)
 
 
@@ -159,16 +161,16 @@ def _tmdb_json(path: str, key: str, **q) -> dict:
 
 
 def tmdb_search(kind: str, query: str, year: str, key: str) -> list[dict]:
-    """Fix match: up to 12 candidates for a title (TMDB only; OMDb has no search with ids)."""
+    """Fix Scraped Data: up to 12 TMDB candidates for a title (adult titles included: you are searching by hand)."""
     if not key:
-        raise ScrapeError("Fix match needs a TMDB API key (Settings \u203A Integrations)")
+        raise ScrapeError("TMDB needs an API key (Settings \u203A Integrations & APIs)")
     path = "search/tv" if kind == "show" else "search/movie"
     year_key = "first_air_date_year" if kind == "show" else "year"
-    data = _tmdb_json(path, key, query=query, **({year_key: year} if year else {}))
+    data = _tmdb_json(path, key, query=query, include_adult="true", **({year_key: year} if year else {}))
     out = []
     for r in (data.get("results") or [])[:12]:
         poster = r.get("poster_path")
-        out.append({"tmdbId": r.get("id"), "title": r.get("title") or r.get("name") or "",
+        out.append({"id": str(r.get("id")), "source": "tmdb", "title": r.get("title") or r.get("name") or "",
                     "year": (r.get("release_date") or r.get("first_air_date") or "")[:4],
                     "overview": r.get("overview") or "",
                     "thumb": f"{IMG}w185{poster}" if poster else ""})
@@ -258,6 +260,10 @@ def _omdb(kind: str, p: Parsed, key: str) -> dict | None:
         if "invalid api key" in str(r.get("Error", "")).lower():
             raise ScrapeError("OMDb rejected the API key")
         return None
+    return _omdb_shape(r)
+
+
+def _omdb_shape(r: dict) -> dict:
     poster = r.get("Poster")
     try:
         imdb = round(float(r.get("imdbRating")), 1)
@@ -268,7 +274,29 @@ def _omdb(kind: str, p: Parsed, key: str) -> dict | None:
             "original_title": None, "romaji_title": None, "score": imdb, "title": r.get("Title"), "release_date": r.get("Released") if r.get("Released") != "N/A" else r.get("Year"),
             "synopsis": r.get("Plot") if r.get("Plot") != "N/A" else None,
             "poster_url": poster if poster and poster != "N/A" else None,
-            "genres": [g.strip() for g in (r.get("Genre") or "").split(",") if g.strip() and g != "N/A"]}
+            "genres": [g.strip() for g in (r.get("Genre") or "").split(",") if g.strip() and g != "N/A"],
+            "imdb_id": r.get("imdbID"), "tmdb_id": None, "cast": [], "gallery_urls": [],
+            "collection_id": None, "collection_name": None, "collection_poster_url": None}
+
+
+def omdb_search(kind: str, query: str, year: str, key: str) -> list[dict]:
+    """Fix Scraped Data candidates from OMDb (IMDb data); the id is the IMDb id ("tt0113277")."""
+    q = {"apikey": key, "s": query, "type": "series" if kind == "show" else "movie", **({"y": year} if year else {})}
+    r = _get_json(f"https://www.omdbapi.com/?{urllib.parse.urlencode(q)}")
+    if r.get("Response") != "True":
+        if "invalid api key" in str(r.get("Error", "")).lower():
+            raise ScrapeError("OMDb rejected the API key")
+        return []
+    return [{"id": str(x.get("imdbID")), "source": "omdb", "title": x.get("Title") or "", "year": (x.get("Year") or "")[:4],
+             "overview": "", "thumb": x["Poster"] if (x.get("Poster") or "N/A") != "N/A" else ""}
+            for x in (r.get("Search") or [])[:8] if x.get("imdbID")]
+
+
+def omdb_details(imdb_id: str, key: str) -> dict:
+    r = _get_json(f"https://www.omdbapi.com/?{urllib.parse.urlencode({'apikey': key, 'i': imdb_id, 'plot': 'full'})}")
+    if r.get("Response") != "True":
+        raise ScrapeError(f"OMDb: {r.get('Error') or 'no entry with that id'}")
+    return _omdb_shape(r)
 
 
 def disc_url(tmdb_id, key: str) -> str | None:

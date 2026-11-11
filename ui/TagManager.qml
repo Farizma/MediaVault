@@ -170,7 +170,7 @@ Sheet {
                     enabled: root.pickedCount > 0
                     opacity: enabled ? 1 : 0.4
                     prefix: "Remove: "
-                    // your tags on the picked titles (computed ones change by rule, genres by Fix match)
+                    // your tags on the picked titles (computed ones change by rule, genres by Fix Scraped Data)
                     options: {
                         var seen = {}, out = [{ value: "", label: "choose a tag" }]
                         root.titles.forEach(function(t) { if (root.picked[t.key]) t.tags.forEach(function(g) { seen[g] = true }) })

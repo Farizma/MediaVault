@@ -101,13 +101,19 @@ def _shape(m: dict) -> dict:
             "certification": "18+" if m.get("isAdult") else None}
 
 
+_TAIL = re.compile(r"\s+(?:\d{1,3}|ova|oad|ona|special|specials|uncensored|raw)$", re.I)
+
+
 def lookup(title: str, year: str | None = None) -> dict | None:
-    """The best match for a series or film title (with its year when that narrows it), or None."""
+    """The best match for a series or film title (with its year when that narrows it), or None. Adult titles are
+    included. When nothing matches, a trailing episode number or "OVA" is dropped and it asks once more."""
     data = {}
     if year and str(year).isdigit():
         data = _post(_ONE, {"q": title, "y": int(year)})
     if not data.get("Media"):
         data = _post(_ANY, {"q": title})
+    if not data.get("Media") and (short := _TAIL.sub("", title).strip()) and short != title:
+        return lookup(short)
     return _shape(data["Media"]) if data.get("Media") else None
 
 
@@ -119,9 +125,9 @@ def details(anilist_id: int) -> dict:
 
 
 def search(query: str) -> list[dict]:
-    """Fix match candidates, in the same shape as scraper.tmdb_search."""
+    """Fix Scraped Data candidates, in the same shape as scraper.tmdb_search."""
     media = ((_post(_SEARCH, {"q": query}).get("Page") or {}).get("media")) or []
-    return [{"tmdbId": m["id"], "source": "anilist", "title": _title(m.get("title")),
+    return [{"id": str(m["id"]), "source": "anilist", "title": _title(m.get("title")),
              "year": str(m.get("seasonYear") or ""), "overview": _clean(m.get("description"))[:400],
              "thumb": (m.get("coverImage") or {}).get("large") or (m.get("coverImage") or {}).get("medium") or ""}
             for m in media]

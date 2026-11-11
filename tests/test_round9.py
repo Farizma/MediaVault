@@ -74,7 +74,7 @@ class FixMatchTests(unittest.TestCase):
         with mock.patch.object(scraper, "_get_json", return_value=fake) as g:
             out = scraper.tmdb_search("movie", "blade runner", "2017", "KEY")
         self.assertIn("year=2017", g.call_args[0][0])
-        self.assertEqual(out[0], {"tmdbId": 335984, "title": "Blade Runner 2049", "year": "2017", "overview": "K.",
+        self.assertEqual(out[0], {"id": "335984", "source": "tmdb", "title": "Blade Runner 2049", "year": "2017", "overview": "K.",
                                   "thumb": "https://image.tmdb.org/t/p/w185/x.jpg"})
         self.assertEqual(out[1]["thumb"], "")
 

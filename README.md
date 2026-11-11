@@ -7,7 +7,7 @@ everything in a full-screen player with a glass HUD. PySide6 + QML front end, Py
 
 Get the latest **MediaVault_v…_setup.exe** from [Releases](https://github.com/Farizma/MediaVault/releases/latest) and run it.
 The setup wizard installs wherever you choose: your user folder needs no administrator rights, while Program Files
-or "Install for all users" asks Windows for permission. Updates: Settings › Components checks GitHub and installs
+or "Install for all users" asks Windows for permission. Updates: Settings › About & Updates checks GitHub and installs
 the new setup for you.
 
 ## Run from source
@@ -37,14 +37,14 @@ in `version.py` and push to `main`; the workflow tests, builds the setup on Wind
 - **Per-folder scraping:** when you add a folder, pick what to scrape (titles, synopsis, genres, box art, disc
   art, box sets, actors, actor photos); change it later in Settings › Library › Configure. "Fetch missing" fills gaps for
   titles already there without touching your edits.
-- **Fix match:** search TMDB by hand from View More when a title was scraped wrong; title, details, genres,
+- **Fix Scraped Data:** search TMDB, AniList and OMDb at once by hand from View More when a title was scraped wrong; title, details, genres,
   cover, disc and box set are pulled again. Your own tags, rating, notes and art stay.
 - **3D DVD box:** posters fly into a spinning, draggable box (no GPU needed) with front, spine, back and disc art.
   Scraped art first; your own art always wins.
 - **Player:** mpv or VLC chosen from your hardware (override in Settings), Audio and Video panel with track,
   audio delay (lip sync), subtitle, timing, style, speed (0.5×–3×), upscaling, HDR and VR options, skip intro, skip credits into the next-episode
   countdown, picture in picture, snapshot to box art or fanart.
-- **Library health:** duplicates (best copy marked), missing episodes, missing artwork and offline folders, each
+- **Library Status:** duplicates (best copy marked), missing episodes, missing artwork and offline folders, each
   ignorable for now or forever.
 - **Streaming:** a private link any browser on your Wi-Fi can open, plus AirPlay and Chromecast with optional add-ons.
 - **HDR:** HDR10 / HLG detected; tone mapping for normal screens with per-scene adaptation and a brightness
@@ -52,7 +52,7 @@ in `version.py` and push to `main`; the workflow tests, builds the setup on Wind
 - **Discord status:** optional "Watching …" status with three detail levels; home videos never show their name.
 - **Themes:** eight dark themes including a custom one with a colour wheel, optional animated glow.
 - **Backups:** automatic database backups, plus portable `.mvault` files with the whole library and its artwork.
-- **Components:** Settings › Components lists every tool Media Vault uses with its version, and updates them;
+- **About & Updates:** Settings › About & Updates lists every tool Media Vault uses with its version, and updates them;
   Media Vault itself is checked against GitHub releases.
 - **Help:** shortcut sheet in Settings › Help; hover any button for a hint.
 
@@ -77,6 +77,7 @@ _Nothing decided yet. Ideas move here once we choose to build them._
 | View More fix, setup elevation fix, smooth wheel scrolling, smoother parallax, Black Out button, Insights window | 1.0.1 |
 | Anime (AniList), crop editor, Gallery, auto tags, hide from All / Insights, tab and layout dragging, full Custom theme, player window and PiP fixes | 1.0.2 |
 | Age ratings, original / romaji titles, Tag Manager, tag rules, folder Configure window, themed player | 1.0.3 |
+| Fix Scraped Data across TMDB, AniList and OMDb, AniList % scores, adult / OVA file names | 1.0.4 |
 
 ### Proposed
 

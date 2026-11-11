@@ -319,7 +319,7 @@ Item {
                         }
                         GlassButton { small: true; visible: root.setSlide; label: "Ungroup"; tip: "Split this box set back into separate films"
                             onClicked: { Backend.ungroupSet(root.itemKey); root.close() } }
-                        GlassButton { id: matchBtn; small: true; visible: root.info.canMatch === true; label: "Fix match\u2026"
+                        GlassButton { id: matchBtn; small: true; visible: root.info.canMatch === true; label: "Fix Scraped Data\u2026"
                             tip: matchMenu.opened ? "" : "Wrong title or cover? Search TMDB yourself"; onClicked: matchMenu.begin() }
                     }
                     // the sections, in the order chosen in Settings > Appearance > View More layout
@@ -411,19 +411,34 @@ Item {
                 id: secRating
                 ColumnLayout {
                     spacing: 6
+                    // TMDB / IMDb: five stars out of 10
                     RowLayout {
-                        visible: root.info.score !== undefined && root.info.score !== null
+                        visible: root.info.score !== undefined && root.info.score !== null && root.info.scoreSource !== "anilist"
                         spacing: 10
                         Caption { text: "AUDIENCE"; Layout.preferredWidth: 84 }
                         Item {
                             implicitWidth: audBack.implicitWidth; implicitHeight: audBack.implicitHeight
-                            Text { id: audBack; text: "\u2605\u2605\u2605\u2605\u2605"; color: "#33FFFFFF"; font.pixelSize: 18 }
+                            Text { id: audBack; text: "\u2605\u2605\u2605\u2605\u2605"; color: Theme.edge; font.pixelSize: 18 }
                             Item {   // filled part: the score as a fraction of five stars
                                 width: audBack.width * Math.max(0, Math.min(1, (root.info.score || 0) / 10)); height: audBack.height; clip: true
                                 Text { text: "\u2605\u2605\u2605\u2605\u2605"; color: Theme.amber; font.pixelSize: 18 }
                             }
                         }
-                        Text { text: (root.info.score || 0).toFixed(1) + " / 10"; color: "#B3FFFFFF"; font.family: Theme.mono; font.pixelSize: 12 }
+                        Text { text: (root.info.score || 0).toFixed(1) + " / 10"; color: Theme.dim; font.family: Theme.mono; font.pixelSize: 12 }
+                    }
+                    // AniList: its average score as a percentage, with AniList's own colours (green 75+, orange 61+, red below)
+                    RowLayout {
+                        readonly property int pct: Math.round((root.info.score || 0) * 10)
+                        readonly property color tone: pct >= 75 ? "#7BD555" : pct >= 61 ? "#F79A63" : "#E85D75"
+                        visible: root.info.score !== undefined && root.info.score !== null && root.info.scoreSource === "anilist"
+                        spacing: 10
+                        Caption { text: "ANILIST"; Layout.preferredWidth: 84 }
+                        Text { text: parent.pct + "%"; color: parent.tone; font.pixelSize: 20; font.weight: Font.ExtraBold }
+                        Rectangle {
+                            Layout.preferredWidth: 120; Layout.preferredHeight: 6; radius: 3; color: Theme.fill
+                            Rectangle { width: parent.width * Math.min(1, parent.parent.pct / 100); height: parent.height; radius: 3; color: parent.parent.tone }
+                        }
+                        Text { text: "average score"; color: Theme.dim; font.family: Theme.mono; font.pixelSize: 11 }
                     }
                     RowLayout {
                         spacing: 10
@@ -854,7 +869,7 @@ Item {
     // custom box art: the crop editor opens on the picture you picked
     ArtCropper { id: cropper; anchors.fill: parent }
 
-    // Fix match: search TMDB by hand; picking a result re-pulls the title, details, genres, cover and disc
+    // Fix Scraped Data: search TMDB, AniList and OMDb by hand; picking a result re-pulls the title, details, genres, cover and disc
     Popup {
         id: matchMenu
         property var results: []
@@ -883,7 +898,7 @@ Item {
         background: Rectangle { radius: 14; color: Theme.graphite; border.color: "#33FFFFFF" }
         contentItem: ColumnLayout {
             spacing: 10
-            Text { text: "FIX MATCH"; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10 }
+            Text { text: "FIX SCRAPED DATA"; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10 }
             RowLayout {
                 Layout.fillWidth: true
                 spacing: 6
@@ -896,7 +911,7 @@ Item {
             Text {
                 visible: matchMenu.phase !== "" || matchMenu.results.length === 0
                 Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.muted; font.pixelSize: 12
-                text: matchMenu.phase === "searching" ? "Searching TMDB\u2026" : matchMenu.phase === "applying" ? "Updating title, details and artwork\u2026"
+                text: matchMenu.phase === "searching" ? "Searching every database\u2026" : matchMenu.phase === "applying" ? "Updating title, details and artwork\u2026"
                       : matchMenu.phase !== "" ? matchMenu.phase : "No results. Try the original title, or leave the year empty."
             }
             ListView {
@@ -922,13 +937,25 @@ Item {
                     Column {
                         anchors { left: mThumb.right; leftMargin: 12; right: parent.right; rightMargin: 10; verticalCenter: parent.verticalCenter }
                         spacing: 3
-                        Text { width: parent.width; elide: Text.ElideRight; color: "#FFFFFF"; font.pixelSize: 13; font.weight: Font.DemiBold
-                            text: modelData.title + (modelData.year ? "  \u00B7  " + modelData.year : "") }
+                        Row {
+                            width: parent.width
+                            spacing: 8
+                            Rectangle {     // where this result comes from
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: srcText.implicitWidth + 10; height: 16; radius: 4; color: "transparent"
+                                border.color: modelData.source === "anilist" ? Theme.blue : modelData.source === "omdb" ? Theme.amber : Theme.green
+                                Text { id: srcText; anchors.centerIn: parent; font.family: Theme.mono; font.pixelSize: 9
+                                    text: modelData.source === "anilist" ? "ANILIST" : modelData.source === "omdb" ? "IMDB" : "TMDB"
+                                    color: parent.border.color }
+                            }
+                            Text { width: parent.width - x; elide: Text.ElideRight; color: Theme.text; font.pixelSize: 13; font.weight: Font.DemiBold
+                                text: modelData.title + (modelData.year ? "  \u00B7  " + modelData.year : "") }
+                        }
                         Text { width: parent.width; maximumLineCount: 2; wrapMode: Text.Wrap; elide: Text.ElideRight; color: Theme.faint; font.pixelSize: 11
                             text: modelData.overview || "No description." }
                     }
                     MouseArea { id: mArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                        onClicked: { matchMenu.phase = "applying"; Backend.applyMatch(root.infoKey, modelData.tmdbId) } }
+                        onClicked: { matchMenu.phase = "applying"; Backend.applyMatch(root.infoKey, modelData.source, modelData.id) } }
                 }
             }
         }

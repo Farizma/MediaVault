@@ -28,8 +28,8 @@ Item {
     property real shown: 0                   // 0..1: the sheet materialises (scale + fade), and dematerialises faster
     // name, icon tint, icon: fixed system colours (like macOS) so they read the same in every theme
     readonly property var sections: [["Library", "#0A84FF", "folders"], ["Appearance", "#AF52DE", "appearance"], ["Playback", "#FF3B30", "playback"],
-                                     ["Library health", "#FF9F0A", "health"], ["Integrations", "#8E8E93", "integrations"],
-                                     ["Streaming", "#5AC8FA", "streaming"], ["Components", "#FF9500", "components"], ["Backups", "#34C759", "backups"],
+                                     ["Library Status", "#FF9F0A", "health"], ["Integrations & APIs", "#8E8E93", "integrations"],
+                                     ["Streaming", "#5AC8FA", "streaming"], ["About & Updates", "#FF9500", "components"], ["Backups", "#34C759", "backups"],
                                      ["Help", "#5E5CE6", "help"]]
     readonly property string sectionName: sections[section][0]
     signal configureFolder(int id, var source)      // the dashboard opens the folder's Configure window
@@ -47,9 +47,9 @@ Item {
     property bool searching: false
     function refreshHealth() { report = Backend.health() }
     onSectionNameChanged: {
-        if (sectionName === "Library health") refreshHealth()
+        if (sectionName === "Library Status") refreshHealth()
         if (sectionName === "Streaming") { castLibs = Backend.castSupport(); castDevices = Backend.devices() }
-        if (sectionName === "Components") { comps = Backend.components(); checking = true; Backend.checkComponents() }
+        if (sectionName === "About & Updates") { comps = Backend.components(); checking = true; Backend.checkComponents() }
     }
     Connections {
         target: Backend
@@ -57,7 +57,7 @@ Item {
         function onComponentsChecked(list) { root.comps = list; root.checking = false }
         function onAppUpdateProgress(p) { root.downloading = p }
         function onStreamChanged() { root.castLibs = Backend.castSupport() }
-        function onBoxArtChanged(key) { if (root.visible && root.sectionName === "Library health") root.refreshHealth() }
+        function onBoxArtChanged(key) { if (root.visible && root.sectionName === "Library Status") root.refreshHealth() }
         function onLibraryChanged() { if (root.visible && root.sectionName === "Library") root.folders = Backend.directories() }
     }
     readonly property var levelNames: ["Standard", "High Quality", "AI Ultra"]
@@ -150,7 +150,8 @@ Item {
                             anchors { left: parent.left; leftMargin: 8; verticalCenter: parent.verticalCenter }
                             spacing: 10
                             SettingsIcon { tint: modelData[1]; kind: modelData[2]; anchors.verticalCenter: parent.verticalCenter }
-                            Text { text: modelData[0]; color: parent.parent.on ? "#FFFFFF" : "#99FFFFFF"; font.pixelSize: 12; font.weight: Font.DemiBold }
+                            Text { text: modelData[0]; anchors.verticalCenter: parent.verticalCenter
+                                color: parent.parent.on ? Theme.text : Theme.faint; font.pixelSize: 12; font.weight: Font.DemiBold }
                         }
                         MouseArea { id: navArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: root.section = index }
                     }
@@ -477,7 +478,7 @@ Item {
                         Rectangle {
                             id: folderCard
                             Layout.fillWidth: true
-                            implicitHeight: 62
+                            implicitHeight: 64
                             radius: 12; color: Theme.slate; border.color: Theme.line
                             RowLayout {
                                 anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; leftMargin: 14; rightMargin: 10 }
@@ -486,21 +487,19 @@ Item {
                                     Layout.fillWidth: true
                                     Layout.preferredWidth: 0           // never pushes the buttons out; the name elides instead
                                     spacing: 3
+                                    // the name gets the whole line; what the folder is sits under it, beside its path
+                                    Text { Layout.fillWidth: true; text: modelData.name; color: Theme.text; font.pixelSize: 14; font.weight: Font.Bold; elide: Text.ElideRight }
                                     RowLayout {
                                         Layout.fillWidth: true
-                                        spacing: 8
-                                        Text { id: folderName; text: modelData.name; color: Theme.text; font.pixelSize: 14; font.weight: Font.Bold; elide: Text.ElideRight
-                                            Layout.fillWidth: true; Layout.maximumWidth: Math.min(260, implicitWidth) }
-                                        // what this folder is, at a glance
+                                        spacing: 6
                                         Repeater {
                                             model: [modelData.scrape ? (modelData.anime ? "Anime \u00B7 AniList" : "TMDB") : "Not scraped",
                                                     modelData.inAll ? "" : "Not in All", modelData.inInsights ? "" : "Not in Insights"].filter(function(t) { return t !== "" })
                                             Rectangle { implicitWidth: chip.implicitWidth + 12; implicitHeight: 18; radius: 5; color: "transparent"; border.color: Theme.lineStrong
                                                 Text { id: chip; anchors.centerIn: parent; text: modelData; color: Theme.muted; font.family: Theme.mono; font.pixelSize: 9 } }
                                         }
-                                        Item { Layout.fillWidth: true }
+                                        Text { Layout.fillWidth: true; Layout.leftMargin: 2; text: modelData.path || ""; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10; elide: Text.ElideMiddle }
                                     }
-                                    Text { Layout.fillWidth: true; text: modelData.path || ""; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10; elide: Text.ElideMiddle }
                                 }
                                 // tab order (the tabs can also be dragged in the top bar)
                                 GlassButton { small: true; label: "\u2191"; implicitWidth: 30; enabled: index > 0; opacity: enabled ? 1 : 0.3
@@ -593,7 +592,7 @@ Item {
 
                 // Library health
                 ColumnLayout {
-                    visible: root.sectionName === "Library health"
+                    visible: root.sectionName === "Library Status"
                     Layout.fillWidth: true
                     spacing: 10
                     component IgnoreButtons: Row {
@@ -610,7 +609,7 @@ Item {
                         radius: 12; color: Theme.slate; border.color: Theme.line
                         ColumnLayout { id: inner; anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12 } spacing: 6 }
                     }
-                    Heading { title: "Library health"; sub: "Copies you have twice, gaps in series, titles without a cover, and folders that cannot be reached. Nothing is ever deleted from here."; Layout.rightMargin: 48 }
+                    Heading { title: "Library Status"; sub: "Copies you have twice, gaps in series, titles without a cover, and folders that cannot be reached. Nothing is ever deleted from here."; Layout.rightMargin: 48 }
                     Row {
                         spacing: 8
                         GlassButton { small: true; label: "Check again"; glyph: "\u21BB"; onClicked: root.refreshHealth() }
@@ -699,10 +698,10 @@ Item {
 
                 // Integrations
                 ColumnLayout {
-                    visible: root.sectionName === "Integrations"
+                    visible: root.sectionName === "Integrations & APIs"
                     Layout.fillWidth: true
                     spacing: 10
-                    Heading { title: "Integrations"; sub: "Keys stay on this PC. TMDB is used first, OMDb only when TMDB has nothing; fanart.tv adds disc art."; Layout.rightMargin: 48 }
+                    Heading { title: "Integrations & APIs"; sub: "Keys stay on this PC. TMDB is used first, OMDb only when TMDB has nothing; fanart.tv adds disc art."; Layout.rightMargin: 48 }
                     Caption { text: "TMDB API KEY" }
                     Field { Layout.fillWidth: true; placeholderText: "Paste your TMDB key"; echoMode: TextInput.Password; text: Backend.setting("tmdb_key"); onActiveFocusChanged: if (!activeFocus) Backend.setSetting("tmdb_key", text) }
                     Caption { text: "OMDB API KEY (FALLBACK)" }
@@ -764,7 +763,7 @@ Item {
                                 color: root.discordState === "Connected" ? Theme.green : root.discordState.indexOf("Needs") === 0 ? Theme.amber : Theme.faint }
                             Text { text: root.discordState; color: Theme.muted; font.pixelSize: 12 }
                         }
-                        Timer { interval: 2000; repeat: true; running: root.visible && root.sectionName === "Integrations" && discordOn.checked
+                        Timer { interval: 2000; repeat: true; running: root.visible && root.sectionName === "Integrations & APIs" && discordOn.checked
                             onTriggered: root.discordState = Backend.discordStatus() }
                     }
                     Caption { text: "WINDOWS"; Layout.topMargin: 8 }
@@ -910,7 +909,7 @@ Item {
                             "Click a poster to open its 3D box. Drag the box to spin it; Box art lets you set your own front, spine, back and disc.",
                             "Shelf view shows your library as DVD spines. Put a Movie-spine.jpg next to a film to use a real spine scan.",
                             "Series: press O in the player where the credits start once, and every episode jumps to the next one there.",
-                            "Library health finds copies you have twice, gaps in seasons and titles without covers. It never deletes anything.",
+                            "Library Status finds copies you have twice, gaps in seasons and titles without covers. It never deletes anything.",
                             "Animated colours (Appearance) tint the page from the poster you hover. The Custom theme lets you pick your own two colours.",
                             "Portable backup (Settings › Backups) carries your whole library and artwork to another PC."
                         ]
@@ -925,10 +924,10 @@ Item {
 
                 // Components: every tool Media Vault uses, its version here, and updates (Media Vault itself from GitHub)
                 ColumnLayout {
-                    visible: root.sectionName === "Components"
+                    visible: root.sectionName === "About & Updates"
                     Layout.fillWidth: true
                     spacing: 10
-                    Heading { title: "Components"; sub: "The tools Media Vault is built on, the versions on this PC, and whether newer ones exist. Media Vault checks GitHub for its own releases."; Layout.rightMargin: 48 }
+                    Heading { title: "About & Updates"; sub: "The tools Media Vault is built on, the versions on this PC, and whether newer ones exist. Media Vault checks GitHub for its own releases."; Layout.rightMargin: 48 }
 
                     // Media Vault itself
                     Rectangle {

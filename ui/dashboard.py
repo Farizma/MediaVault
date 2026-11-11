@@ -529,6 +529,7 @@ class Dashboard(QObject):
             "resume": resume and not films,
             "resumeAt": duration_clock(item["last_position"]) if resume else "",
             "score": item.get("score") if not films else None,
+            "scoreSource": "anilist" if item.get("anilist_id") and not films else "",   # AniList scores in %, not stars
             "order": db.detail_order(),
             "slides": self._slides(key, art, films) if films else [],
             "cast": [] if films else self._cast_list(item),
@@ -551,38 +552,56 @@ class Dashboard(QObject):
 
     @Slot(str, str, str)
     def searchMatch(self, key: str, query: str, year: str):
+        """Fix Scraped Data: ask every source that can answer (AniList always; TMDB and OMDb with a key) at once.
+        The folder's own source comes first; one source failing does not hide the others."""
         kind = "show" if key.startswith("show:") else "movie"
         anime = self._is_anime(key)
+        q, y = query.strip(), year.strip()
+        keys = scraper.api_keys()
 
         def work():
-            try:
-                if anime:
-                    from utils import anilist
-                    self.matchResults.emit(key, anilist.search(query.strip()))
-                else:
-                    self.matchResults.emit(key, scraper.tmdb_search(kind, query.strip(), year.strip(), scraper.api_keys()["tmdb"]))
-            except Exception as e:   # ScrapeError, AniListError
-                self.matchFailed.emit(key, str(e))
-        if query.strip():
+            from concurrent.futures import ThreadPoolExecutor
+            from utils import anilist
+            jobs = {"anilist": lambda: anilist.search(q)}
+            if keys.get("tmdb"):
+                jobs["tmdb"] = lambda: scraper.tmdb_search(kind, q, y, keys["tmdb"])
+            if keys.get("omdb"):
+                jobs["omdb"] = lambda: scraper.omdb_search(kind, q, y, keys["omdb"])
+            order = ["anilist", "tmdb", "omdb"] if anime else ["tmdb", "anilist", "omdb"]
+            with ThreadPoolExecutor(len(jobs)) as pool:
+                futures = {name: pool.submit(fn) for name, fn in jobs.items()}
+            results, errors = [], []
+            for name in order:
+                if name in futures:
+                    try:
+                        results += futures[name].result()
+                    except Exception as e:   # ScrapeError, AniListError, offline
+                        errors.append(str(e))
+            if results or not errors:
+                self.matchResults.emit(key, results)
+            else:
+                self.matchFailed.emit(key, "; ".join(errors))
+        if q:
             threading.Thread(target=work, daemon=True, name="match-search").start()
 
-    @Slot(str, int)
-    def applyMatch(self, key: str, tmdb_id: int):
-        threading.Thread(target=self._apply_match, args=(key, tmdb_id), daemon=True, name="match-apply").start()
+    @Slot(str, str, str)
+    def applyMatch(self, key: str, source: str, ident: str):
+        threading.Thread(target=self._apply_match, args=(key, source, ident), daemon=True, name="match-apply").start()
 
-    def _apply_match(self, key: str, tmdb_id: int):
+    def _apply_match(self, key: str, source: str, ident: str):
         show = key.startswith("show:")
         items = [i for i in (db.get_media(u) for u in db.uuids_for(key)) if i]
         if not items:
             return
         keys = scraper.api_keys()
-        anime = self._is_anime(key)
         try:
-            if anime:
+            if source == "anilist":
                 from utils import anilist
-                hit = anilist.details(tmdb_id)
+                hit = anilist.details(int(ident))
+            elif source == "omdb":
+                hit = scraper.omdb_details(ident, keys["omdb"])
             else:
-                hit = scraper.tmdb_details("show" if show else "movie", tmdb_id, keys["tmdb"])
+                hit = scraper.tmdb_details("show" if show else "movie", int(ident), keys["tmdb"])
         except Exception as e:   # ScrapeError, AniListError
             self.matchFailed.emit(key, str(e))
             return
@@ -595,9 +614,8 @@ class Dashboard(QObject):
         with db._tx() as c:   # a fix replaces these outright (the old match's values were wrong)
             c.executemany("UPDATE media_items SET certification=?, original_title=?, romaji_title=? WHERE uuid=?",
                           [(hit.get("certification"), hit.get("original_title"), hit.get("romaji_title"), i["uuid"]) for i in items])
-        if anime and hit.get("anilist_id"):
-            with db._tx() as c:
-                c.executemany("UPDATE media_items SET anilist_id=? WHERE uuid=?", [(hit["anilist_id"], i["uuid"]) for i in items])
+        with db._tx() as c:   # which source the title now comes from (an AniList id means AniList scoring)
+            c.executemany("UPDATE media_items SET anilist_id=? WHERE uuid=?", [(hit.get("anilist_id"), i["uuid"]) for i in items])
         if hit.get("gallery_urls"):
             scraper.save_gallery(items[0], hit["gallery_urls"], replace=True)
         if hit.get("cast"):

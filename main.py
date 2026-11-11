@@ -247,10 +247,10 @@ class App:
 
     def _updates_found(self, found):
         if found.get("app"):
-            self.dashboard.toast.emit(f"Media Vault {found['app']} is available. Settings > Components.")
+            self.dashboard.toast.emit(f"Media Vault {found['app']} is available. Settings > About & Updates.")
             return
         names = ", ".join(found["packages"] + (["libmpv"] if found["mpv"] else []))
-        self.dashboard.toast.emit(f"Updates available: {names}. Settings > Components.")
+        self.dashboard.toast.emit(f"Updates available: {names}. Settings > About & Updates.")
 
     def quit(self):
         """Media Vault ends: the player and its windows go too (a picture-in-picture window never stays behind)."""

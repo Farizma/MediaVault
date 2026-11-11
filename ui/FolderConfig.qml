@@ -69,7 +69,7 @@ Sheet {
                     }
                 }
             }
-            Note { text: root.f.anime === true ? "AniList needs no key, and understands “[Group] Show - 07” file names." : "Needs a TMDB key (Settings › Integrations); OMDb fills in when TMDB has nothing." }
+            Note { text: root.f.anime === true ? "AniList needs no key, and understands “[Group] Show - 07” file names." : "Needs a TMDB key (Settings › Integrations & APIs); OMDb fills in when TMDB has nothing." }
         }
         Text { text: "WHAT TO SCRAPE"; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10; opacity: scrapeOn.checked ? 1 : 0.4 }
         ScrapeParts { Layout.fillWidth: true; enabled: scrapeOn.checked; selected: root.f.parts || []

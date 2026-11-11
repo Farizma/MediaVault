@@ -198,3 +198,61 @@ import unittest.mock  # noqa: E402
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class V104Tests(unittest.TestCase):
+    """1.0.4: adult / OVA file names, AniList retry, Fix Scraped Data across every source, AniList scores."""
+
+    def test_more_episode_names(self):
+        for f, want in [("Ane wa Yanmama Junyuu-chuu Episode 1.mp4", 1), ("Ane wa Yanmama Junyuu-chuu - Episode 02 (Uncensored).mp4", 2),
+                        ("Ane wa Yanmama Junyuu-chuu OVA 3.mkv", 3), ("Ane wa Yanmama Junyuu-chuu 04.mkv", 4)]:
+            p = scraper.clean_name(f)
+            self.assertEqual((p.title, p.episode), ("Ane wa Yanmama Junyuu-chuu", want), f)
+        for f, title in [("Apollo 13 (1995).mkv", "Apollo 13"), ("Ocean's 11.mkv", "Ocean's 11")]:
+            self.assertEqual((scraper.clean_name(f).title, scraper.clean_name(f).episode), (title, None), f)
+
+    def test_anilist_retries_without_a_trailing_number(self):
+        asked = []
+        media = {"id": 115138, "isAdult": True, "format": "OVA", "title": {"romaji": "Ane wa Yanmama Junyuu-chuu"}, "startDate": {}}
+
+        def fake(q, v, retries=2):
+            asked.append(v["q"])
+            return {"Media": media} if v["q"] == "Ane wa Yanmama Junyuu-chuu" else {}
+        with unittest.mock.patch.object(anilist, "_post", side_effect=fake):
+            hit = anilist.lookup("Ane wa Yanmama Junyuu-chuu 1")
+        self.assertEqual((hit["title"], hit["certification"]), ("Ane wa Yanmama Junyuu-chuu", "18+"))
+        self.assertEqual(asked, ["Ane wa Yanmama Junyuu-chuu 1", "Ane wa Yanmama Junyuu-chuu"])
+
+    def test_omdb_search_and_details(self):
+        found = {"Response": "True", "Search": [{"Title": "Heat", "Year": "1995", "imdbID": "tt0113277", "Poster": "N/A"}]}
+        with unittest.mock.patch.object(scraper, "_get_json", return_value=found):
+            self.assertEqual(scraper.omdb_search("movie", "heat", "", "k"),
+                             [{"id": "tt0113277", "source": "omdb", "title": "Heat", "year": "1995", "overview": "", "thumb": ""}])
+        one = {"Response": "True", "Title": "Heat", "Released": "15 Dec 1995", "imdbRating": "8.3", "Rated": "R", "Genre": "Crime, Drama",
+               "imdbID": "tt0113277", "Plot": "A heist."}
+        with unittest.mock.patch.object(scraper, "_get_json", return_value=one):
+            d = scraper.omdb_details("tt0113277", "k")
+        self.assertEqual((d["score"], d["certification"], d["genres"], d["tmdb_id"]), (8.3, "R", ["Crime", "Drama"], None))
+
+    def test_search_every_source(self):
+        from PySide6.QtGui import QGuiApplication
+        QGuiApplication.instance() or QGuiApplication([])
+        from ui.dashboard import Dashboard, LibraryModel, TabsModel
+        from ui.dvd_box import FrameProvider
+        db.init_db()
+        app = types.SimpleNamespace(engine=types.SimpleNamespace(hw=None), presence=None, play=lambda *a: None)
+        d = Dashboard(app, LibraryModel(), TabsModel(), FrameProvider())
+        got, done = [], __import__("threading").Event()
+        d.matchResults.connect(lambda k, r: (got.append(r), done.set()))
+        d.matchFailed.connect(lambda k, e: (got.append(e), done.set()))
+        with unittest.mock.patch.object(d, "_is_anime", return_value=True), \
+                unittest.mock.patch.object(scraper, "api_keys", return_value={"tmdb": "k", "omdb": "", "fanart": ""}), \
+                unittest.mock.patch.object(anilist, "search", return_value=[{"id": "1", "source": "anilist", "title": "A"}]), \
+                unittest.mock.patch.object(scraper, "tmdb_search", side_effect=scraper.ScrapeError("TMDB down")):
+            d.searchMatch("x", "a", "")
+            import time
+            end = time.time() + 10
+            while not done.is_set() and time.time() < end:    # results arrive queued, on this thread
+                QGuiApplication.processEvents()
+                time.sleep(0.02)
+        self.assertEqual(got, [[{"id": "1", "source": "anilist", "title": "A"}]])   # TMDB failing does not hide AniList
