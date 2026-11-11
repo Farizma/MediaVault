@@ -11,12 +11,15 @@ import re
 import time
 import urllib.request
 
+from utils import alttitles
+
 API = "https://graphql.anilist.co"
 PERSON_OFFSET = 1_000_000_000      # AniList staff ids, kept apart from TMDB person ids in the shared photo cache
 
 _FIELDS = """
   id idMal format episodes seasonYear isAdult
   title { english romaji native }
+  synonyms
   startDate { year month day }
   description(asHtml: false)
   coverImage { extraLarge large }
@@ -128,6 +131,7 @@ def _shape(m: dict) -> dict:
             # English (or romaji when there is no English title) is the title; the others ride along for display
             "romaji_title": (m.get("title") or {}).get("romaji"),
             "original_title": (m.get("title") or {}).get("native"),
+            "alt_titles": alttitles.dumps(alttitles.from_anilist(m.get("title"), m.get("synonyms"))),
             "certification": "18+" if m.get("isAdult") else None}
 
 

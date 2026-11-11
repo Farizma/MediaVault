@@ -404,6 +404,41 @@ Item {
                     color: Theme.muted; font.pixelSize: 15; font.weight: Font.Medium
                     elide: Text.ElideRight
                 }
+                // every other title: English, Romanized, Native, then other languages (folded away until asked for)
+                ColumnLayout {
+                    id: altGrid
+                    property bool showOther: false
+                    visible: (root.info.altTitles || []).length > 0
+                    Layout.fillWidth: true
+                    Layout.rightMargin: 40
+                    Layout.topMargin: 6
+                    spacing: 4
+                    Repeater {
+                        model: root.info.altTitles || []
+                        delegate: Item {     // one row per group: its name, then its titles
+                            readonly property bool folded: modelData.group === "other" && !altGrid.showOther
+                            Layout.fillWidth: true
+                            implicitHeight: altRow.implicitHeight
+                            RowLayout {
+                                id: altRow
+                                width: altGrid.width
+                                spacing: 12
+                                Text { Layout.preferredWidth: 104; Layout.alignment: Qt.AlignTop; topPadding: 1
+                                    text: modelData.label.toUpperCase(); color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10 }
+                                Text {
+                                    Layout.fillWidth: true
+                                    text: parent.parent.folded ? modelData.titles.length + (modelData.titles.length === 1 ? " title" : " titles") + " \u2014 show"
+                                                               : modelData.titles.join("  \u00B7  ")
+                                    color: parent.parent.folded ? Theme.blue : Theme.muted
+                                    font.pixelSize: 12; wrapMode: Text.Wrap
+                                    MouseArea { anchors.fill: parent; enabled: modelData.group === "other"
+                                        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                        onClicked: altGrid.showOther = !altGrid.showOther }
+                                }
+                            }
+                        }
+                    }
+                }
                 }
             }
 

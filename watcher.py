@@ -115,6 +115,7 @@ def _scrape_into(rows, tags, opts=None, source: str = "tmdb") -> None:
                 row["release_date"] = hit["release_date"] or row["release_date"]
             if "titles" in opts:
                 row["original_title"], row["romaji_title"] = hit.get("original_title"), hit.get("romaji_title")
+                row["alt_titles"] = hit.get("alt_titles")
             if "certification" in opts:
                 row["certification"] = hit.get("certification")
             if "synopsis" in opts:
@@ -217,6 +218,7 @@ def fetch_missing(directory: dict) -> int:
             # anime: AniList's tags became genres in 1.0.6, so a lone genre ("Hentai") is filled out too
             "genres": "genres" in opts and sum(t.startswith("genre:") for t in tags) < (2 if anime else 1),
             "studio": anime and not any(t.startswith("studio:") for t in tags),
+            "alt": "titles" in opts and not first.get("alt_titles"),
             "synopsis": "synopsis" in opts and not first.get("synopsis"),
             "score": "score" in opts and first.get("score") is None,
             "certification": "certification" in opts and not first.get("certification"),
@@ -264,7 +266,8 @@ def fetch_missing(directory: dict) -> int:
             db.set_score(uids, hit["score"])
         db.set_scraped(uids, certification=hit.get("certification") if "certification" in opts else None,
                        original_title=hit.get("original_title") if "titles" in opts else None,
-                       romaji_title=hit.get("romaji_title") if "titles" in opts else None)
+                       romaji_title=hit.get("romaji_title") if "titles" in opts else None,
+                       alt_titles=hit.get("alt_titles") if "titles" in opts else None)
         if need["sets"] and hit.get("collection_id"):
             db.add_to_set(uids, hit["collection_id"], hit["collection_name"])
             if hit.get("collection_poster_url"):

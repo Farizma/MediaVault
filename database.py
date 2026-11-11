@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS media_items (
     certification TEXT,                 -- age rating: PG, PG-13, R, TV-MA ... (US, from TMDB / OMDb)
     original_title TEXT,                -- the title in its own language and alphabet (TMDB original title, AniList native)
     romaji_title TEXT,                  -- anime: the title in Latin letters (AniList romaji)
+    alt_titles TEXT,                    -- JSON: other titles grouped english / romanized / native / other
     anilist_id INTEGER,
     FOREIGN KEY(parent_directory_id) REFERENCES scanned_directories(id)
 );
@@ -123,7 +124,7 @@ EDITABLE = ("title", "synopsis", "release_date")
 _TECH = ("duration", "resolution", "codec", "container", "audio_layout", "frame_rate")
 _COLS = ("uuid", "file_path", "parent_directory_id", "title", "media_type",
          "release_date", "synopsis", "tmdb_id", "collection_id", "collection_name", "score", "anilist_id",
-         "certification", "original_title", "romaji_title") + _TECH
+         "certification", "original_title", "romaji_title", "alt_titles") + _TECH
 
 _local = threading.local()
 
@@ -212,7 +213,8 @@ def init_db() -> None:
         c.execute("ALTER TABLE scanned_directories ADD COLUMN sort_order INTEGER DEFAULT 0")
         c.execute("UPDATE scanned_directories SET sort_order = id")   # keep the order they were added in
     for col, kind in (("tmdb_id", "INTEGER"), ("collection_id", "INTEGER"), ("collection_name", "TEXT"), ("score", "REAL"), ("anilist_id", "INTEGER"),
-                      ("certification", "TEXT"), ("original_title", "TEXT"), ("romaji_title", "TEXT")):
+                      ("certification", "TEXT"), ("original_title", "TEXT"), ("romaji_title", "TEXT"),
+                      ("alt_titles", "TEXT")):
         if col not in cols:
             c.execute(f"ALTER TABLE media_items ADD COLUMN {col} {kind}")
     c.commit()
@@ -531,7 +533,7 @@ def rename_collection(cid, name: str) -> None:
 
 def set_scraped(uids, **cols) -> None:
     """Fill scraped fields that are still empty (a value you or an earlier scrape set is kept)."""
-    allowed = {"certification", "original_title", "romaji_title", "score", "synopsis"}
+    allowed = {"certification", "original_title", "romaji_title", "alt_titles", "score", "synopsis"}
     cols = {k: v for k, v in cols.items() if k in allowed and v not in (None, "")}
     if not cols:
         return

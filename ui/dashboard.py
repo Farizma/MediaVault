@@ -11,7 +11,7 @@ from pathlib import Path
 from PySide6.QtCore import Property, QAbstractListModel, QModelIndex, QObject, Qt, QTimer, Signal, Slot
 
 import database as db
-from utils import backup_manager, health, hw_accelerator, media_probe, scraper, streaming
+from utils import alttitles, backup_manager, health, hw_accelerator, media_probe, scraper, streaming
 from PIL import Image, ImageOps
 
 from . import dvd_box, file_url, pick_folder, pick_image
@@ -177,7 +177,7 @@ def library_view(cards: list[dict], index: dict, query: str = "", sort: str = "t
         if quality and quality_of(c["resolution"]) != quality:
             continue
         if words:
-            hay = " ".join((c["title"], c.get("original_title") or "", c.get("romaji_title") or "", c.get("synopsis") or "", " ".join(info.get("tags", ())), " ".join(info.get("genres", ())),
+            hay = " ".join((c["title"], c.get("original_title") or "", c.get("romaji_title") or "", alttitles.haystack(c.get("alt_titles")), c.get("synopsis") or "", " ".join(info.get("tags", ())), " ".join(info.get("genres", ())),
                             info.get("note", ""), (c.get("release_date") or "")[:4], c.get("codec") or "", c.get("resolution") or "",
                             os.path.basename(c["file_path"]))).lower()
             if not all(w in hay for w in words):
@@ -537,6 +537,8 @@ class Dashboard(QObject):
             "key": key, "isShow": bool(eps), "isSet": bool(films), "kind": "show" if eps or item["media_type"] == "show" else "movie",
             "canMatch": not films and item["media_type"] != "clip", "title": display_titles({**item, "key": key})[0] if not films else item["title"],
             "subtitle": display_titles({**item, "key": key})[1] if not films else "", "synopsis": item["synopsis"] or "",
+            # every other title, grouped English / Romanized / Native / Other languages (not the ones shown above)
+            "altTitles": [] if films else alttitles.for_display(item.get("alt_titles"), display_titles({**item, "key": key})),
             "year": (item["release_date"] or "")[:4], "facts": facts, "cover": tex["front"], "back": tex["back"],
             "customFront": tex["customFront"], "customBack": tex["customBack"],
             "spine": tex["spine"], "customSpine": tex["customSpine"],
@@ -634,8 +636,9 @@ class Dashboard(QObject):
             db.set_score([i["uuid"] for i in items], hit["score"])
         db.set_tag_group([i["uuid"] for i in items], "studio:", hit.get("studios") or [])   # AniList only; others clear it
         with db._tx() as c:   # a fix replaces these outright (the old match's values were wrong)
-            c.executemany("UPDATE media_items SET certification=?, original_title=?, romaji_title=? WHERE uuid=?",
-                          [(hit.get("certification"), hit.get("original_title"), hit.get("romaji_title"), i["uuid"]) for i in items])
+            c.executemany("UPDATE media_items SET certification=?, original_title=?, romaji_title=?, alt_titles=? WHERE uuid=?",
+                          [(hit.get("certification"), hit.get("original_title"), hit.get("romaji_title"), hit.get("alt_titles"),
+                            i["uuid"]) for i in items])
         with db._tx() as c:   # which source the title now comes from (an AniList id means AniList scoring)
             c.executemany("UPDATE media_items SET anilist_id=? WHERE uuid=?", [(hit.get("anilist_id"), i["uuid"]) for i in items])
         if hit.get("anilist_id"):

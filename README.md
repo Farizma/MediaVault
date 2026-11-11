@@ -80,7 +80,7 @@ _Nothing decided yet. Ideas move here once we choose to build them._
 | Age ratings, original / romaji titles, Tag Manager, tag rules, folder Configure window, themed player | 1.0.3 |
 | Fix Scraped Data across TMDB, AniList and OMDb, AniList % scores, adult / OVA file names | 1.0.4 |
 | Updates inside Media Vault (no wizard), Update all, update badge, rollbacks | 1.0.5 |
-| Tag suggestions, adult OVAs as box sets, AniList tags as genres, studio tags, whole-cover scans, DVD-shaped box, close and libmpv update fixes | 1.0.6 |
+| Alternate titles (English / Romanized / Native / Other), tag suggestions, adult OVAs as box sets, AniList tags as genres, studio tags, whole-cover scans, DVD-shaped box, close and libmpv update fixes | 1.0.6 |
 
 ### Proposed
 

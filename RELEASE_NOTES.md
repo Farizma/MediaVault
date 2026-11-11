@@ -7,6 +7,9 @@ or download `MediaVault_v1.0.6_setup.exe` below.
 Choose *More info* › *Run anyway*. The SHA-256 of the setup file is listed below.
 
 ### New
+- **Alternate titles** under the title in View More, grouped **English**, **Romanized**, **Native**, then **Other
+  languages** (folded away; click to show). From AniList's synonyms and TMDB's translations and alternative titles;
+  every one is searchable. Titles already in your library get them with **Fetch missing**.
 - **Tag suggestions:** typing a tag (in View More or the Tag Manager) lists tags you have used before, most used
   first; Up / Down to pick, Enter or Tab to take one.
 - **Adult OVAs as box sets:** an adult OVA from AniList is no longer a series with seasons. Each episode is its own

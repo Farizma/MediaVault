@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import database as db
+from utils import alttitles
 
 log = logging.getLogger(__name__)
 
@@ -181,8 +182,8 @@ def tmdb_details(kind: str, tmdb_id: int, key: str) -> dict:
     """Everything for one title by id, in the same shape as a search hit, plus its collection (films only)."""
     credits = "aggregate_credits" if kind == "show" else "credits"
     ratings = "content_ratings" if kind == "show" else "release_dates"
-    r = _tmdb_json(f"{'tv' if kind == 'show' else 'movie'}/{int(tmdb_id)}", key, append_to_response=f"{credits},images,{ratings}",
-                   include_image_language="null,en")
+    r = _tmdb_json(f"{'tv' if kind == 'show' else 'movie'}/{int(tmdb_id)}", key,
+                   append_to_response=f"{credits},images,{ratings},alternative_titles,translations", include_image_language="null,en")
     poster, coll = r.get("poster_path"), r.get("belongs_to_collection") or {}
     return {"tmdb_id": r.get("id"), "title": r.get("title") or r.get("name"),
             "release_date": r.get("release_date") or r.get("first_air_date"),
@@ -194,7 +195,8 @@ def tmdb_details(kind: str, tmdb_id: int, key: str) -> dict:
             "collection_poster_url": f"{IMG}w500{coll['poster_path']}" if coll.get("poster_path") else None,
             "cast": _cast((r.get(credits) or {}).get("cast") or []),
             "gallery_urls": _backdrops(r.get("images") or {}),
-            "certification": certification(r, kind), "original_title": _original(r), "romaji_title": None}
+            "certification": certification(r, kind), "original_title": _original(r), "romaji_title": None,
+            "alt_titles": alttitles.dumps(alttitles.from_tmdb(r))}
 
 
 GALLERY_MAX = 6
@@ -327,7 +329,7 @@ def _lookup(kind: str, p: Parsed, keys: dict, source: str = "tmdb") -> dict | No
             try:   # one more request: the search result has no cast, and does not say which collection a film is in
                 d = tmdb_details(kind, hit["tmdb_id"], keys["tmdb"])
                 hit.update({k: d[k] for k in ("collection_id", "collection_name", "collection_poster_url", "cast", "gallery_urls",
-                                              "certification", "original_title")})
+                                              "certification", "original_title", "alt_titles")})
                 if kind == "show":
                     hit["collection_id"] = hit["collection_name"] = None
             except ScrapeError:

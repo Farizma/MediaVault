@@ -237,3 +237,50 @@ class ClosingTests(unittest.TestCase):
         self.assertNotIn("closing.connect", (root / "main.py").read_text(encoding="utf-8"))
         from ui.dashboard import Dashboard
         self.assertTrue(hasattr(Dashboard, "windowClosing"))
+
+
+class AltTitleTests(unittest.TestCase):
+    def test_anilist_groups(self):
+        from utils import alttitles
+        g = alttitles.from_anilist({"english": "Spirited Away", "romaji": "Sen to Chihiro no Kamikakushi", "native": "千と千尋の神隠し"},
+                                   ["Le Voyage de Chihiro", "千与千寻", "Унесённые призраками", "Spirited Away", "SA"])
+        self.assertEqual(g["english"], ["Spirited Away"])
+        self.assertEqual(g["romanized"], ["Sen to Chihiro no Kamikakushi"])
+        self.assertEqual(g["native"], ["千と千尋の神隠し"])
+        self.assertEqual(g["other"], ["Le Voyage de Chihiro", "千与千寻", "Унесённые призраками"])   # duplicates and nicknames go
+
+    def test_kana_is_native_for_anime_with_a_latin_native_title(self):
+        from utils import alttitles
+        g = alttitles.from_anilist({"english": "ONE PIECE", "romaji": "ONE PIECE", "native": "ONE PIECE"}, ["ワンピース", "Ван-Пис"])
+        self.assertEqual((g["native"], g["other"]), (["ワンピース"], ["Ван-Пис"]))
+
+    def test_tmdb_groups_by_language(self):
+        from utils import alttitles
+        r = {"original_language": "ko", "original_title": "기생충", "title": "Parasite",
+             "translations": {"translations": [{"iso_639_1": "en", "data": {"title": "Parasite"}},
+                                               {"iso_639_1": "fr", "data": {"title": "Parasite (FR)"}},
+                                               {"iso_639_1": "ko", "data": {"title": "기생충"}}]},
+             "alternative_titles": {"titles": [{"iso_3166_1": "KR", "title": "Gisaengchung", "type": "Romanization"},
+                                               {"iso_3166_1": "US", "title": "Parasite: Black and White", "type": ""}]}}
+        g = alttitles.from_tmdb(r)
+        self.assertEqual(g["native"], ["기생충"])
+        self.assertEqual(g["english"], ["Parasite", "Parasite: Black and White"])
+        self.assertEqual(g["romanized"], ["Gisaengchung"])
+        self.assertEqual(g["other"], ["Parasite (FR)"])
+
+    def test_display_hides_what_is_shown_and_search_finds_all(self):
+        from utils import alttitles
+        text = alttitles.dumps({"english": ["Spirited Away"], "romanized": ["Sen to Chihiro no Kamikakushi"],
+                                "native": ["千と千尋の神隠し"], "other": ["El Viaje de Chihiro"]})
+        rows = alttitles.for_display(text, ("Spirited Away", "千と千尋の神隠し"))
+        self.assertEqual([r["group"] for r in rows], ["romanized", "other"])
+        self.assertIn("El Viaje de Chihiro", alttitles.haystack(text))
+        self.assertEqual(alttitles.for_display(None), [])
+        self.assertIsNone(alttitles.dumps(alttitles.empty()))
+
+    def test_search_matches_an_alternate_title(self):
+        from ui.dashboard import library_view
+        from utils import alttitles
+        card = {"key": "k", "uuid": "u", "title": "Spirited Away", "media_type": "movie", "synopsis": "", "release_date": "2001", "file_path": "/x/s.mkv",
+                "alt_titles": alttitles.dumps({"other": ["El Viaje de Chihiro"]})}
+        self.assertEqual(len(library_view([card], {}, query="viaje")), 1)
