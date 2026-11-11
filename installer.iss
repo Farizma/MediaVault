@@ -67,6 +67,14 @@ Filename: "{app}\MediaVault.exe"; Description: "Start Media Vault"; Flags: nowai
 ; as the person who asked for it (not as administrator, when an all-users copy needed elevation)
 Filename: "{app}\MediaVault.exe"; Flags: nowait runasoriginaluser; Check: RelaunchAfterUpdate
 
+[Registry]
+; Media Vault itself writes its "Open with" entries (Settings › Integrations & APIs); uninstalling removes them.
+; dontcreatekey: setup never adds them, it only cleans them up.
+Root: HKCU; Subkey: "Software\Classes\MediaVault.Video"; Flags: uninsdeletekey dontcreatekey
+Root: HKCU; Subkey: "Software\Classes\.mp4\OpenWithProgids"; ValueType: none; ValueName: "MediaVault.Video"; Flags: uninsdeletevalue dontcreatekey
+Root: HKCU; Subkey: "Software\Classes\.mkv\OpenWithProgids"; ValueType: none; ValueName: "MediaVault.Video"; Flags: uninsdeletevalue dontcreatekey
+Root: HKCU; Subkey: "Software\Classes\.avi\OpenWithProgids"; ValueType: none; ValueName: "MediaVault.Video"; Flags: uninsdeletevalue dontcreatekey
+
 [UninstallDelete]
 ; things Media Vault downloads into its own folder after install (video engines, shader)
 Type: filesandordirs; Name: "{app}\bin"

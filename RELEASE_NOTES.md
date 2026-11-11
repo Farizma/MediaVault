@@ -60,5 +60,8 @@ Choose *More info* › *Run anyway*. The SHA-256 of the setup file is listed bel
   aside and replaced; libVLC, which used to be deleted half-way when in use, waits for the next start instead.
 - AniList searches (automatic and Fix Scraped Data) retry with words only when punctuation in a file name
   ("Title-Name", "Title!") stopped a match, and join a split short name ("Drop Out" finds "Dropout").
+- **"Offer Media Vault in Open with" always showed off** after a restart or update, even though Media Vault stayed
+  in Open with (the switch never looked at Windows). It now shows what Windows has. If Media Vault has moved, its
+  Open with entry is pointed at the new copy when it starts, and uninstalling removes the entries.
 - The hover preview on cards could not jump back to its start for its 15-second loop.
 - Titles already in your library pick up the new genres, studios and OVA box sets with **Fetch missing** on the folder.

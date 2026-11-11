@@ -1285,6 +1285,12 @@ class Dashboard(QObject):
     def setFileTypes(self, on: bool):
         self.app.set_file_types(on)
 
+    @Slot(result=bool)
+    def fileTypesOn(self):
+        """Whether Media Vault is offered in "Open with" right now (read from Windows, not a saved guess)."""
+        import setup
+        return setup.file_types_command() is not None
+
     @Slot()
     def installRuntime(self):
         def work():

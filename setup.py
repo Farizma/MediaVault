@@ -680,6 +680,29 @@ def register_file_types(extensions=EXTENSIONS) -> None:
     ctypes.windll.shell32.SHChangeNotify(0x08000000, 0, None, None)  # SHCNE_ASSOCCHANGED
 
 
+def file_types_command() -> str | None:
+    """The command Windows runs for "Open with › Media Vault", or None when Media Vault is not offered there."""
+    if sys.platform != "win32":
+        return None
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, rf"Software\Classes\{PROG_ID}\shell\open\command") as k:
+            return winreg.QueryValueEx(k, None)[0]
+    except OSError:
+        return None
+
+
+def refresh_file_types() -> bool:
+    """At start-up: if Media Vault is offered in "Open with" but the entry points at another copy (it was moved or
+    reinstalled elsewhere), point it at this one. Returns True when it is offered."""
+    cmd = file_types_command()
+    if cmd is None:
+        return False
+    if cmd != _open_command():
+        register_file_types()
+    return True
+
+
 def unregister_file_types(extensions=EXTENSIONS) -> None:
     """Undo register_file_types(): removes only what it wrote."""
     if sys.platform != "win32":

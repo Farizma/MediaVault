@@ -101,6 +101,10 @@ class App:
             self.engine.player_geo = QRect(x, y, w, h)
         except ValueError:
             pass
+        try:                                  # "Open with" still pointing at this copy (it may have moved)
+            setup.refresh_file_types()
+        except Exception:
+            logging.exception("file types")
         from utils.discord_presence import Presence
         self.presence = Presence(db.get_setting)
         self.ready = True

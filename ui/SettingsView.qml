@@ -846,7 +846,7 @@ Item {
                         Layout.fillWidth: true
                         text: "Offer Media Vault in “Open with”"
                         hint: ".mp4  .mkv  .avi"
-                        checked: false
+                        checked: Backend.fileTypesOn()       // what Windows has now, not a remembered guess
                         onToggled: Backend.setFileTypes(checked)
                     }
                 }

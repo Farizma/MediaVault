@@ -385,3 +385,24 @@ class DiscordTests(unittest.TestCase):
         self.assertTrue(presence.configure.called)
         pv = d.discordPreview("{title} — {type}", "{episode}", "show")
         self.assertEqual((pv["movie"], pv["showState"]), ("Blade Runner 2049 — Movie", "S01E02"))
+
+
+class OpenWithTests(unittest.TestCase):
+    def test_toggle_reads_windows_not_a_constant(self):
+        qml = (Path(__file__).resolve().parent.parent / "ui" / "SettingsView.qml").read_text(encoding="utf-8")
+        self.assertIn("checked: Backend.fileTypesOn()", qml)
+
+    def test_refresh_repoints_a_moved_copy(self):
+        import setup
+        with mock.patch.object(setup, "file_types_command", return_value='"D:\\\\Old\\\\MediaVault.exe" "%1"'), \
+                mock.patch.object(setup, "_open_command", return_value='"E:\\\\New\\\\MediaVault.exe" "%1"'), \
+                mock.patch.object(setup, "register_file_types") as reg:
+            self.assertTrue(setup.refresh_file_types())
+        reg.assert_called_once()
+        with mock.patch.object(setup, "file_types_command", return_value=None), mock.patch.object(setup, "register_file_types") as reg:
+            self.assertFalse(setup.refresh_file_types())          # not offered: stays that way
+        reg.assert_not_called()
+
+    def test_uninstall_cleans_up(self):
+        iss = (Path(__file__).resolve().parent.parent / "installer.iss").read_text(encoding="utf-8")
+        self.assertIn('Subkey: "Software\\Classes\\MediaVault.Video"; Flags: uninsdeletekey dontcreatekey', iss)
