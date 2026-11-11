@@ -25,12 +25,12 @@ ComboBox {
         id: label
         leftPadding: 12; rightPadding: 28
         text: drop.prefix + (drop.currentIndex >= 0 && drop.options.length ? drop.options[drop.currentIndex].label : "")
-        color: "#E6FFFFFF"; font.pixelSize: 12; font.weight: Font.DemiBold
+        color: Theme.soft; font.pixelSize: 12; font.weight: Font.DemiBold
         verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight
     }
     indicator: Text {
         x: drop.width - width - 10; anchors.verticalCenter: parent.verticalCenter
-        text: "⌄"; color: "#99FFFFFF"; font.pixelSize: 13
+        text: "⌄"; color: Theme.faint; font.pixelSize: 13
         rotation: drop.popup.visible ? 180 : 0
         Behavior on rotation { NumberAnimation { duration: 180 * Theme.motion; easing.type: Easing.OutCubic } }
     }
@@ -42,7 +42,7 @@ ComboBox {
         contentItem: Item {
             Text { anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; rightMargin: 20 }
                 text: modelData.label; elide: Text.ElideRight; font.pixelSize: 12
-                color: modelData.value === drop.value ? "#FFFFFF" : "#CCFFFFFF"; font.weight: modelData.value === drop.value ? Font.Bold : Font.Normal }
+                color: modelData.value === drop.value ? Theme.text : Theme.soft; font.weight: modelData.value === drop.value ? Font.Bold : Font.Normal }
             Text { visible: modelData.value === drop.value; anchors { right: parent.right; verticalCenter: parent.verticalCenter }
                 text: "✓"; color: Theme.green; font.pixelSize: 12; font.weight: Font.Bold }
         }
@@ -59,6 +59,6 @@ ComboBox {
         exit: Transition { NumberAnimation { property: "opacity"; to: 0; duration: 120 * Theme.motion } }
         contentItem: ListView { clip: true; implicitHeight: contentHeight; model: drop.popup.visible ? drop.delegateModel : null
             currentIndex: drop.highlightedIndex; ScrollIndicator.vertical: ScrollIndicator {} }
-        background: Rectangle { radius: 12; color: Theme.panel; border.color: "#33FFFFFF" }
+        background: Rectangle { radius: 12; color: Theme.panel; border.color: Theme.edge }
     }
 }

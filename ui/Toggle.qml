@@ -16,7 +16,7 @@ Switch {
         Rectangle {
             width: 20; height: 20; radius: 10; y: 2
             x: control.checked ? parent.width - width - 2 : 2
-            color: "#FFFFFF"
+            color: Theme.text
             Behavior on x { NumberAnimation { duration: 180 * Theme.motion; easing.type: Easing.OutCubic } }
         }
     }

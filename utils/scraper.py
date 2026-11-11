@@ -115,7 +115,34 @@ def _tmdb(kind: str, p: Parsed, key: str) -> dict | None:
             "synopsis": r.get("overview"),
             "poster_url": f"https://image.tmdb.org/t/p/w500{poster}" if poster else None,
             "genres": [GENRES[i] for i in r.get("genre_ids", []) if i in GENRES],
-            "score": _score(r)}
+            "score": _score(r), "original_title": _original(r)}
+
+
+def _original(r: dict) -> str | None:
+    """The title in its own language and alphabet, when that is not simply the English one."""
+    orig = r.get("original_title") or r.get("original_name")
+    shown = r.get("title") or r.get("name")
+    return orig if orig and orig.casefold() != (shown or "").casefold() else None
+
+
+CERT_COUNTRY = "US"
+_CERT_ORDER = (3, 4, 5, 6, 2, 1)          # theatrical, digital, physical, TV, limited, premiere
+
+
+def certification(r: dict, kind: str) -> str | None:
+    """The US age rating from a details response: PG-13, R, TV-MA ... (None when TMDB has none)."""
+    if kind == "show":
+        for c in (r.get("content_ratings") or {}).get("results") or []:
+            if c.get("iso_3166_1") == CERT_COUNTRY and (c.get("rating") or "").strip():
+                return c["rating"].strip()
+        return None
+    for c in (r.get("release_dates") or {}).get("results") or []:
+        if c.get("iso_3166_1") == CERT_COUNTRY:
+            dates = sorted((d for d in c.get("release_dates") or [] if (d.get("certification") or "").strip()),
+                           key=lambda d: _CERT_ORDER.index(d.get("type")) if d.get("type") in _CERT_ORDER else 9)
+            if dates:
+                return dates[0]["certification"].strip()
+    return None
 
 
 def _score(r: dict) -> float | None:
@@ -151,7 +178,8 @@ def tmdb_search(kind: str, query: str, year: str, key: str) -> list[dict]:
 def tmdb_details(kind: str, tmdb_id: int, key: str) -> dict:
     """Everything for one title by id, in the same shape as a search hit, plus its collection (films only)."""
     credits = "aggregate_credits" if kind == "show" else "credits"
-    r = _tmdb_json(f"{'tv' if kind == 'show' else 'movie'}/{int(tmdb_id)}", key, append_to_response=credits + ",images",
+    ratings = "content_ratings" if kind == "show" else "release_dates"
+    r = _tmdb_json(f"{'tv' if kind == 'show' else 'movie'}/{int(tmdb_id)}", key, append_to_response=f"{credits},images,{ratings}",
                    include_image_language="null,en")
     poster, coll = r.get("poster_path"), r.get("belongs_to_collection") or {}
     return {"tmdb_id": r.get("id"), "title": r.get("title") or r.get("name"),
@@ -163,7 +191,8 @@ def tmdb_details(kind: str, tmdb_id: int, key: str) -> dict:
             "collection_id": coll.get("id"), "collection_name": coll.get("name"),
             "collection_poster_url": f"{IMG}w500{coll['poster_path']}" if coll.get("poster_path") else None,
             "cast": _cast((r.get(credits) or {}).get("cast") or []),
-            "gallery_urls": _backdrops(r.get("images") or {})}
+            "gallery_urls": _backdrops(r.get("images") or {}),
+            "certification": certification(r, kind), "original_title": _original(r), "romaji_title": None}
 
 
 GALLERY_MAX = 6
@@ -234,7 +263,9 @@ def _omdb(kind: str, p: Parsed, key: str) -> dict | None:
         imdb = round(float(r.get("imdbRating")), 1)
     except (TypeError, ValueError):
         imdb = None
-    return {"score": imdb, "title": r.get("Title"), "release_date": r.get("Released") if r.get("Released") != "N/A" else r.get("Year"),
+    rated = (r.get("Rated") or "").strip()
+    return {"certification": rated if rated and rated not in ("N/A", "Not Rated", "Unrated") else None,
+            "original_title": None, "romaji_title": None, "score": imdb, "title": r.get("Title"), "release_date": r.get("Released") if r.get("Released") != "N/A" else r.get("Year"),
             "synopsis": r.get("Plot") if r.get("Plot") != "N/A" else None,
             "poster_url": poster if poster and poster != "N/A" else None,
             "genres": [g.strip() for g in (r.get("Genre") or "").split(",") if g.strip() and g != "N/A"]}
@@ -267,7 +298,8 @@ def _lookup(kind: str, p: Parsed, keys: dict, source: str = "tmdb") -> dict | No
         if hit.get("tmdb_id"):
             try:   # one more request: the search result has no cast, and does not say which collection a film is in
                 d = tmdb_details(kind, hit["tmdb_id"], keys["tmdb"])
-                hit.update({k: d[k] for k in ("collection_id", "collection_name", "collection_poster_url", "cast", "gallery_urls")})
+                hit.update({k: d[k] for k in ("collection_id", "collection_name", "collection_poster_url", "cast", "gallery_urls",
+                                              "certification", "original_title")})
                 if kind == "show":
                     hit["collection_id"] = hit["collection_name"] = None
             except ScrapeError:

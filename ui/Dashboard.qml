@@ -8,7 +8,7 @@ Item {
     id: dash
     property int currentTab: -1
     property string currentTabName: "All"
-    readonly property bool overlayOpen: detail.visible || picker.visible || settings.visible || insightsSheet.visible || folderSheet.visible
+    readonly property bool overlayOpen: detail.visible || picker.visible || settings.visible || insightsSheet.visible || folderSheet.visible || folderConfig.isOpen || tagManager.isOpen
     // content column: the page uses the whole window at any size (more columns as it widens), with margins that grow a little
     readonly property real gutter: width < 1100 ? 24 : width < 1900 ? 32 : 48
 
@@ -327,6 +327,14 @@ Item {
                                 lineHeight: 1.08
                                 wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight
                             }
+                            Text {      // original title, small, under the one shown
+                                Layout.fillWidth: true
+                                Layout.topMargin: -6
+                                visible: (modelData.subtitle || "") !== ""
+                                text: modelData.subtitle || ""
+                                color: "#CCFFFFFF"; font.pixelSize: billboard.compact ? 14 : 16; font.weight: Font.Medium
+                                elide: Text.ElideRight
+                            }
                             Text {
                                 Layout.fillWidth: true
                                 visible: text !== ""
@@ -407,7 +415,7 @@ Item {
                                 Dropdown { options: dash.opts.genres || []; value: dash.genre; onChosen: (v) => { dash.genre = v; dash.applyView() } }
                                 Dropdown { options: dash.opts.qualities || []; value: dash.quality; onChosen: (v) => { dash.quality = v; dash.applyView() } }
                                 Pill { height: 32; label: "Unwatched"; selected: dash.unwatched; accent: Theme.blue; onClicked: { dash.unwatched = !dash.unwatched; dash.applyView() } }
-                                // box sets on or off, right here (also in Settings > Folders)
+                                // box sets on or off, right here (also in Settings > Library)
                                 Pill { height: 32; label: "Box sets"; selected: dash.boxSets; accent: Theme.amber
                                     onClicked: { dash.boxSets = !dash.boxSets; Backend.setSetting("group_collections", dash.boxSets ? "1" : "0") }
                                     Tip { visible: boxSetHover.hovered; delay: 600; text: dash.boxSets ? "Showing films of a series as one box set" : "Showing every film on its own" }
@@ -728,7 +736,9 @@ Item {
                     x: box.x; y: box.y + box.height + 10; width: box.width; spacing: 3
                     visible: !dash.shelf
                     opacity: cell.lifted ? 0 : offline ? 0.5 : 1
-                    Marquee { text: title; width: parent.width; active: cell.pointerIn; color: cell.pointerIn ? Theme.blue : "#FFFFFF"; font.pixelSize: 13; font.weight: Font.Bold; font.letterSpacing: -0.1 }
+                    Marquee { text: title; width: parent.width; active: cell.pointerIn; color: cell.pointerIn ? Theme.blue : Theme.text; font.pixelSize: 13; font.weight: Font.Bold; font.letterSpacing: -0.1 }
+                    // the original title (Titles setting), small, under the one shown
+                    Text { visible: subtitle !== ""; text: subtitle; width: parent.width; color: Theme.muted; font.pixelSize: 11; elide: Text.ElideRight }
                     Text { text: meta; width: parent.width; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 11; elide: Text.ElideRight }
                 }
             }
@@ -871,7 +881,11 @@ Item {
     // ---- overlays
     DetailView { id: detail; anchors.fill: parent; onChooseThumbnail: (key, source) => picker.begin(key, source); onPlayRequested: (start) => dash.launch(start, "", 450) }
     PickerView { id: picker; anchors.fill: parent }
-    SettingsView { id: settings; anchors.fill: parent; onThemeChosen: (id) => dash.switchTheme(id) }
+    SettingsView { id: settings; anchors.fill: parent; onThemeChosen: (id) => dash.switchTheme(id)
+        onConfigureFolder: (id, source) => folderConfig.show(id, source)
+        onOpenTagManager: (source) => tagManager.show(source, 0) }
+    FolderConfig { id: folderConfig; anchors.fill: parent; onChanged: settings.folders = Backend.directories() }
+    TagManager { id: tagManager; anchors.fill: parent }
     FolderSheet { id: folderSheet; anchors.fill: parent }
     InsightsSheet { id: insightsSheet; anchors.fill: parent }
     Connections { target: Backend; function onFolderPicked(path, name) { folderSheet.open(path, name) } }

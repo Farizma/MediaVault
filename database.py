@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS scanned_directories (
     tab_name TEXT NOT NULL,
     should_scrape INTEGER DEFAULT 1,
     scrape_opts TEXT DEFAULT '',         -- what to scrape (comma list of SCRAPE_PARTS); '' = everything
-    sort_order INTEGER DEFAULT 0,        -- tab order (drag the tabs, or Settings > Folders)
+    sort_order INTEGER DEFAULT 0,        -- tab order (drag the tabs, or Settings > Library)
     source TEXT DEFAULT 'tmdb'           -- where details come from: 'tmdb' (films and series) or 'anilist' (anime)
 );
 CREATE TABLE IF NOT EXISTS media_items (
@@ -50,6 +50,9 @@ CREATE TABLE IF NOT EXISTS media_items (
     collection_id INTEGER,              -- TMDB collection (box set) the film belongs to
     collection_name TEXT,
     score REAL,                         -- scraped audience rating, 0-10 (TMDB vote average / IMDb / AniList)
+    certification TEXT,                 -- age rating: PG, PG-13, R, TV-MA ... (US, from TMDB / OMDb)
+    original_title TEXT,                -- the title in its own language and alphabet (TMDB original title, AniList native)
+    romaji_title TEXT,                  -- anime: the title in Latin letters (AniList romaji)
     anilist_id INTEGER,
     FOREIGN KEY(parent_directory_id) REFERENCES scanned_directories(id)
 );
@@ -119,7 +122,8 @@ CREATE INDEX IF NOT EXISTS idx_tags_media ON tags(media_uuid);
 EDITABLE = ("title", "synopsis", "release_date")
 _TECH = ("duration", "resolution", "codec", "container", "audio_layout", "frame_rate")
 _COLS = ("uuid", "file_path", "parent_directory_id", "title", "media_type",
-         "release_date", "synopsis", "tmdb_id", "collection_id", "collection_name", "score", "anilist_id") + _TECH
+         "release_date", "synopsis", "tmdb_id", "collection_id", "collection_name", "score", "anilist_id",
+         "certification", "original_title", "romaji_title") + _TECH
 
 _local = threading.local()
 
@@ -207,7 +211,8 @@ def init_db() -> None:
     if "sort_order" not in dir_cols:
         c.execute("ALTER TABLE scanned_directories ADD COLUMN sort_order INTEGER DEFAULT 0")
         c.execute("UPDATE scanned_directories SET sort_order = id")   # keep the order they were added in
-    for col, kind in (("tmdb_id", "INTEGER"), ("collection_id", "INTEGER"), ("collection_name", "TEXT"), ("score", "REAL"), ("anilist_id", "INTEGER")):
+    for col, kind in (("tmdb_id", "INTEGER"), ("collection_id", "INTEGER"), ("collection_name", "TEXT"), ("score", "REAL"), ("anilist_id", "INTEGER"),
+                      ("certification", "TEXT"), ("original_title", "TEXT"), ("romaji_title", "TEXT")):
         if col not in cols:
             c.execute(f"ALTER TABLE media_items ADD COLUMN {col} {kind}")
     c.commit()
@@ -226,6 +231,7 @@ def _one(cursor) -> dict | None:
 
 # what a folder can scrape; a folder with scraping on gets all of them unless the user unticked some
 SCRAPE_PARTS = (("titles", "Titles and years"), ("synopsis", "Synopsis"), ("genres", "Genres"), ("score", "Star rating"),
+                ("certification", "Age rating"),
                 ("poster", "Box art (front cover)"), ("disc", "Disc art"), ("sets", "Box sets"),
                 ("cast", "Actors"), ("photos", "Actor photos"), ("gallery", "Gallery images"))
 
@@ -518,6 +524,17 @@ def rename_collection(cid, name: str) -> None:
         c.execute("UPDATE media_items SET collection_name=? WHERE collection_id=?", (name, int(cid)))
 
 
+def set_scraped(uids, **cols) -> None:
+    """Fill scraped fields that are still empty (a value you or an earlier scrape set is kept)."""
+    allowed = {"certification", "original_title", "romaji_title", "score", "synopsis"}
+    cols = {k: v for k, v in cols.items() if k in allowed and v not in (None, "")}
+    if not cols:
+        return
+    with _tx() as c:
+        for k, v in cols.items():
+            c.executemany(f"UPDATE media_items SET {k}=? WHERE uuid=? AND ({k} IS NULL OR {k}='')", [(v, u) for u in uids])
+
+
 def set_score(uids, score) -> None:
     with _tx() as c:
         c.executemany("UPDATE media_items SET score=? WHERE uuid=?", [(score, u) for u in uids])
@@ -608,6 +625,34 @@ def add_tag(uid: str, name: str) -> None:
 def remove_tag(uid: str, name: str) -> None:
     with _tx() as c:
         c.execute("DELETE FROM tags WHERE media_uuid=? AND tag_name=?", (uid, name))
+
+
+def tag_counts() -> list[dict]:
+    """Every tag with how many titles carry it (a series counts each episode file)."""
+    return _rows(conn().execute("SELECT tag_name AS name, COUNT(DISTINCT media_uuid) AS n FROM tags "
+                                "WHERE tag_name NOT LIKE 'rating:%' GROUP BY tag_name ORDER BY tag_name COLLATE NOCASE"))
+
+
+def rename_tag(old: str, new: str) -> None:
+    """Rename a tag everywhere; renaming onto a tag that exists merges the two."""
+    new = new.strip()
+    if not new or new == old:
+        return
+    with _tx() as c:
+        c.execute("INSERT INTO tags (media_uuid, tag_name) SELECT media_uuid, ? FROM tags t WHERE tag_name=? "
+                  "AND NOT EXISTS (SELECT 1 FROM tags x WHERE x.media_uuid=t.media_uuid AND x.tag_name=?)", (new, old, new))
+        c.execute("DELETE FROM tags WHERE tag_name=?", (old,))
+
+
+def delete_tag(name: str) -> None:
+    with _tx() as c:
+        c.execute("DELETE FROM tags WHERE tag_name=?", (name,))
+
+
+def add_tag_many(uids, name: str) -> None:
+    with _tx() as c:
+        c.executemany("INSERT INTO tags (media_uuid, tag_name) SELECT ?,? WHERE NOT EXISTS "
+                      "(SELECT 1 FROM tags WHERE media_uuid=? AND tag_name=?)", [(u, name, u, name) for u in uids])
 
 
 def user_tags() -> list[str]:

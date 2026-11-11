@@ -27,11 +27,13 @@ Item {
     property int section: 0
     property real shown: 0                   // 0..1: the sheet materialises (scale + fade), and dematerialises faster
     // name, icon tint, icon: fixed system colours (like macOS) so they read the same in every theme
-    readonly property var sections: [["Appearance", "#AF52DE", "appearance"], ["Playback", "#FF3B30", "playback"], ["Folders", "#0A84FF", "folders"],
+    readonly property var sections: [["Library", "#0A84FF", "folders"], ["Appearance", "#AF52DE", "appearance"], ["Playback", "#FF3B30", "playback"],
                                      ["Library health", "#FF9F0A", "health"], ["Integrations", "#8E8E93", "integrations"],
                                      ["Streaming", "#5AC8FA", "streaming"], ["Components", "#FF9500", "components"], ["Backups", "#34C759", "backups"],
                                      ["Help", "#5E5CE6", "help"]]
     readonly property string sectionName: sections[section][0]
+    signal configureFolder(int id, var source)      // the dashboard opens the folder's Configure window
+    signal openTagManager(var source)
     property string discordDetail: Backend.setting("discord_detail") || "title"
     property string discordState: Backend.discordStatus()
     property var report: ({})
@@ -56,7 +58,7 @@ Item {
         function onAppUpdateProgress(p) { root.downloading = p }
         function onStreamChanged() { root.castLibs = Backend.castSupport() }
         function onBoxArtChanged(key) { if (root.visible && root.sectionName === "Library health") root.refreshHealth() }
-        function onLibraryChanged() { if (root.visible && root.sectionName === "Folders") root.folders = Backend.directories() }
+        function onLibraryChanged() { if (root.visible && root.sectionName === "Library") root.folders = Backend.directories() }
     }
     readonly property var levelNames: ["Standard", "High Quality", "AI Ultra"]
     signal themeChosen(string id)            // the dashboard cross-fades the whole window into the new colours
@@ -133,7 +135,7 @@ Item {
                         Text { anchors.centerIn: parent; text: "⚙"; color: Theme.green; font.pixelSize: 16 } }
                     Column {
                         anchors.verticalCenter: parent.verticalCenter
-                        Text { text: "Vault Settings"; color: "#FFFFFF"; font.pixelSize: 14; font.weight: Font.ExtraBold }
+                        Text { text: "Vault Settings"; color: Theme.text; font.pixelSize: 14; font.weight: Font.ExtraBold }
                         Text { text: "Changes save as you go"; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10 }
                     }
                 }
@@ -462,126 +464,130 @@ Item {
                     }
                 }
 
-                // Folders
+                // Library: the folders (each with its own Configure window), how titles read, box sets, and tags
                 ColumnLayout {
-                    visible: root.sectionName === "Folders"
+                    visible: root.sectionName === "Library"
                     Layout.fillWidth: true
                     spacing: 10
-                    Heading { title: "Folders"; sub: "Each folder is a tab, named after the folder until you rename it (clear the name to go back), in this order (drag the tabs in the top bar, or use the arrows). Scraping fetches posters and details; turn it off for home videos."; Layout.rightMargin: 48 }
+                    Heading { title: "Library"; sub: "Your folders, how titles read, box sets and tags. Each folder is a tab, in this order (drag the tabs in the top bar, or use the arrows); Configure holds everything about one folder."; Layout.rightMargin: 48 }
+
+                    Caption { text: "FOLDERS" }
                     Repeater {
                         model: root.folders
                         Rectangle {
                             id: folderCard
-                            property bool open: false
                             Layout.fillWidth: true
-                            implicitHeight: folderCol.implicitHeight + 24
+                            implicitHeight: 62
                             radius: 12; color: Theme.slate; border.color: Theme.line
-                            Behavior on implicitHeight { NumberAnimation { duration: 220 * Theme.motion; easing.type: Easing.OutCubic } }
-                            clip: true
-                            ColumnLayout {
-                                id: folderCol
-                                anchors { left: parent.left; right: parent.right; top: parent.top; margins: 14; topMargin: 12 }
+                            RowLayout {
+                                anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; leftMargin: 14; rightMargin: 10 }
                                 spacing: 10
-                                RowLayout {
-                                    id: folderRow
-                                    Layout.fillWidth: true
-                                    spacing: 12
-                                    ColumnLayout {
-                                        Layout.fillWidth: true
-                                        spacing: 2
-                                        Field {
-                                            Layout.fillWidth: true
-                                            text: modelData.name
-                                            placeholderText: "Tab name"
-                                            font.weight: Font.Bold
-                                            topPadding: 6; bottomPadding: 6
-                                            onEditingFinished: if (text !== modelData.name) text = Backend.renameTab(modelData.id, text)
-                                        }
-                                        Text { Layout.fillWidth: true; text: modelData.path || ""; color: "#66FFFFFF"; font.family: Theme.mono; font.pixelSize: 10; elide: Text.ElideMiddle }
-                                    }
-                                    Toggle { id: scrapeToggle; text: "Scrape"; checked: modelData.scrape; onToggled: Backend.setScrape(modelData.id, checked) }
-                                    // tab order (the tabs can also be dragged in the top bar)
-                                    GlassButton { small: true; label: "\u2191"; implicitWidth: 30; enabled: index > 0; opacity: enabled ? 1 : 0.3
-                                        tip: "Move this tab left (or drag the tabs in the top bar)"
-                                        onClicked: { Backend.moveTab(modelData.id, index - 1); root.folders = Backend.directories() } }
-                                    GlassButton { small: true; label: "\u2193"; implicitWidth: 30; enabled: index < root.folders.length - 1; opacity: enabled ? 1 : 0.3
-                                        tip: "Move this tab right"
-                                        onClicked: { Backend.moveTab(modelData.id, index + 1); root.folders = Backend.directories() } }
-                                    GlassButton { small: true; label: folderCard.open ? "Done" : "Options"; active: folderCard.open; onClicked: folderCard.open = !folderCard.open }
-                                    GlassButton { small: true; label: "Remove"; onClicked: { Backend.removeFolder(modelData.id); root.folders = Backend.directories() } }
-                                }
                                 ColumnLayout {
-                                    visible: folderCard.open
                                     Layout.fillWidth: true
-                                    spacing: 8
+                                    Layout.preferredWidth: 0           // never pushes the buttons out; the name elides instead
+                                    spacing: 3
                                     RowLayout {
                                         Layout.fillWidth: true
-                                        spacing: 16
-                                        Toggle { Layout.fillWidth: true; text: "Show in the All tab"; hint: "Its own tab always shows it"
-                                            checked: modelData.inAll; onToggled: Backend.toggleHidden("all_dirs", String(modelData.id)) }
-                                        Toggle { Layout.fillWidth: true; text: "Count in Insights"; hint: "Watch time and top genres"
-                                            checked: modelData.inInsights; onToggled: Backend.toggleHidden("insights_dirs", String(modelData.id)) }
+                                        spacing: 8
+                                        Text { id: folderName; text: modelData.name; color: Theme.text; font.pixelSize: 14; font.weight: Font.Bold; elide: Text.ElideRight
+                                            Layout.fillWidth: true; Layout.maximumWidth: Math.min(260, implicitWidth) }
+                                        // what this folder is, at a glance
+                                        Repeater {
+                                            model: [modelData.scrape ? (modelData.anime ? "Anime \u00B7 AniList" : "TMDB") : "Not scraped",
+                                                    modelData.inAll ? "" : "Not in All", modelData.inInsights ? "" : "Not in Insights"].filter(function(t) { return t !== "" })
+                                            Rectangle { implicitWidth: chip.implicitWidth + 12; implicitHeight: 18; radius: 5; color: "transparent"; border.color: Theme.lineStrong
+                                                Text { id: chip; anchors.centerIn: parent; text: modelData; color: Theme.muted; font.family: Theme.mono; font.pixelSize: 9 } }
+                                        }
+                                        Item { Layout.fillWidth: true }
                                     }
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        spacing: 16
-                                        Toggle { Layout.fillWidth: true; text: "Anime"; hint: "Details from AniList instead of TMDB"
-                                            checked: modelData.anime; onToggled: Backend.setAnime(modelData.id, checked) }
-                                        GlassButton { small: true; label: "Re-tag from names"; tip: "Tags from this folder's sub-folders and file names, worked out again"
-                                            onClicked: Backend.retag(modelData.id) }
-                                    }
-                                    Text { text: "WHAT TO SCRAPE"; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10; opacity: scrapeToggle.checked ? 1 : 0.4 }
-                                    ScrapeParts { Layout.fillWidth: true; enabled: scrapeToggle.checked; selected: modelData.parts
-                                        onEdited: (csv) => Backend.setScrapeParts(modelData.id, csv) }
-                                    RowLayout {
-                                        Layout.fillWidth: true
-                                        Text { Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 11
-                                            text: "New files follow these choices. For titles already here, Fetch missing adds what they lack (actors, photos, covers, discs, box sets, genres, synopses) and leaves titles and your edits alone." }
-                                        GlassButton { small: true; label: "Fetch missing"; enabled: scrapeToggle.checked; opacity: enabled ? 1 : 0.4
-                                            onClicked: Backend.fetchMissing(modelData.id) }
-                                    }
+                                    Text { Layout.fillWidth: true; text: modelData.path || ""; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10; elide: Text.ElideMiddle }
                                 }
+                                // tab order (the tabs can also be dragged in the top bar)
+                                GlassButton { small: true; label: "\u2191"; implicitWidth: 30; enabled: index > 0; opacity: enabled ? 1 : 0.3
+                                    tip: "Move this tab left (or drag the tabs in the top bar)"
+                                    onClicked: { Backend.moveTab(modelData.id, index - 1); root.folders = Backend.directories() } }
+                                GlassButton { small: true; label: "\u2193"; implicitWidth: 30; enabled: index < root.folders.length - 1; opacity: enabled ? 1 : 0.3
+                                    tip: "Move this tab right"
+                                    onClicked: { Backend.moveTab(modelData.id, index + 1); root.folders = Backend.directories() } }
+                                GlassButton { id: configBtn; small: true; label: "Configure"; tip: "Name, scraping, anime, tagging, and where it shows"
+                                    onClicked: root.configureFolder(modelData.id, configBtn) }
                             }
                         }
                     }
                     Text { visible: root.folders.length === 0; text: "No folders yet."; color: Theme.faint; font.pixelSize: 13 }
                     GlassButton { small: true; label: "Add folder"; glyph: "+"; onClicked: Backend.pickFolder() }
-                    Caption { text: "AUTOMATIC TAGS"; Layout.topMargin: 8 }
+
+                    Caption { text: "TITLES"; Layout.topMargin: 10 }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 14
+                        Rectangle {      // English | Romaji | Original
+                            id: titleSeg
+                            property string value: Backend.setting("title_language") || "english"
+                            implicitWidth: 300; implicitHeight: 34; radius: 10; color: "#99000000"; border.color: Theme.line
+                            Rectangle { width: (parent.width - 6) / 3; height: parent.height - 6; y: 3; radius: 8; color: Theme.text
+                                x: 3 + width * ["english", "romaji", "original"].indexOf(titleSeg.value)
+                                Behavior on x { NumberAnimation { duration: 240 * Theme.motion; easing.type: Easing.OutCubic } } }
+                            Row {
+                                anchors { fill: parent; margins: 3 }
+                                Repeater {
+                                    model: [["english", "English"], ["romaji", "Romaji"], ["original", "Original"]]
+                                    Item {
+                                        width: parent.width / 3; height: parent.height
+                                        Text { anchors.centerIn: parent; text: modelData[1]; font.pixelSize: 12; font.weight: Font.Bold
+                                            color: titleSeg.value === modelData[0] ? Theme.black : Theme.muted }
+                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                            onClicked: { titleSeg.value = modelData[0]; Backend.setSetting("title_language", modelData[0]) } }
+                                    }
+                                }
+                            }
+                        }
+                        Text { Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 11
+                            text: titleSeg.value === "original" ? "Titles in their own language and alphabet (\u5343\u3068\u5343\u5C0B\u306E\u795E\u96A0\u3057), with the English title in small underneath."
+                                : titleSeg.value === "romaji" ? "Anime in Latin letters (Sen to Chihiro no Kamikakushi), with the original underneath. Others stay in English."
+                                : "English titles, with the original in small underneath when it is different. Every version is searchable." }
+                    }
+
+                    Caption { text: "BOX SETS"; Layout.topMargin: 10 }
+                    Toggle {
+                        Layout.fillWidth: true
+                        text: "Group films into box sets"
+                        hint: "Films of the same series share one card when a tab has two or more of them (also the Box sets pill on the dashboard)"
+                        checked: Backend.setting("group_collections") !== "0"
+                        onToggled: Backend.setSetting("group_collections", checked ? "1" : "0")
+                    }
+
+                    Caption { text: "TAGS"; Layout.topMargin: 10 }
+                    Rectangle {
+                        Layout.fillWidth: true
+                        implicitHeight: tagCardRow.implicitHeight + 28
+                        radius: 12; color: Theme.slate; border.color: Theme.line
+                        RowLayout {
+                            id: tagCardRow
+                            anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: 14 }
+                            spacing: 14
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 3
+                                Text { text: "Tag Manager"; color: Theme.text; font.pixelSize: 14; font.weight: Font.Bold }
+                                Text { Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 11
+                                    text: "Tag many titles at once, rename or merge tags, choose which stay out of the All tab, and write rules like \u201Cif the file name contains Remux, tag it Remux\u201D." }
+                            }
+                            GlassButton { id: tagMgrBtn; label: "Open Tag Manager"; primary: true; onClicked: root.openTagManager(tagMgrBtn) }
+                        }
+                    }
                     RowLayout {
                         Layout.fillWidth: true
                         spacing: 12
                         Toggle {
                             Layout.fillWidth: true
-                            text: "Tag new titles from their folders and file names"
-                            hint: "Sub-folder names (Action, Kids, ...), 4K / HDR / Dolby Vision, Blu-ray / Remux / Web, HEVC, Atmos / DTS, Director's Cut / Extended / IMAX, 3D, the decade, an anime release group"
+                            text: "Tag titles from their folders and file names"
+                            hint: "Sub-folders (Action, Kids ...), 4K / HDR, Remux / Blu-ray / Web, codec, Atmos / DTS, editions, 3D, the decade, the age rating"
                             checked: Backend.setting("auto_tags") !== "0"
                             onToggled: Backend.setSetting("auto_tags", checked ? "1" : "0")
                         }
-                        GlassButton { small: true; label: "Tag the whole library"; onClicked: Backend.retag(-1) }
-                    }
-                    Caption { text: "TAGS HIDDEN FROM THE ALL TAB"; Layout.topMargin: 8 }
-                    Text { Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 11
-                        text: "Titles with a highlighted tag or genre stay out of All (they still show in their folder's tab). Tap to change." }
-                    Flow {
-                        id: hideFlow
-                        Layout.fillWidth: true
-                        spacing: 6
-                        property var hidden: Backend.hiddenFrom("all_tags")
-                        Repeater {
-                            model: root.visible && root.sectionName === "Folders" ? Backend.allTags() : []
-                            Pill { label: (hideFlow.hidden.indexOf(modelData.name) >= 0 ? "Hidden: " : "") + modelData.label
-                                selected: hideFlow.hidden.indexOf(modelData.name) >= 0; accent: Theme.red
-                                onClicked: { Backend.toggleHidden("all_tags", modelData.name); hideFlow.hidden = Backend.hiddenFrom("all_tags") } }
-                        }
-                        Text { visible: Backend.allTags().length === 0; text: "No tags or genres yet."; color: Theme.faint; font.pixelSize: 12 }
-                    }
-                    Caption { text: "COLLECTIONS"; Layout.topMargin: 8 }
-                    Toggle {
-                        Layout.fillWidth: true
-                        text: "Group films into box sets"
-                        hint: "Films of the same series (from TMDB) share one card when a tab has two or more of them"
-                        checked: Backend.setting("group_collections") !== "0"
-                        onToggled: Backend.setSetting("group_collections", checked ? "1" : "0")
+                        GlassButton { small: true; label: "Work out tags again"; tip: "Names, age ratings and your rules, for the whole library"
+                            onClicked: Backend.applyTagRules() }
                     }
                 }
 

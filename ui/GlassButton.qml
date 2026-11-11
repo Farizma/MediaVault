@@ -8,7 +8,7 @@ Rectangle {
     property string label: ""
     property string glyph: ""                 // optional leading symbol, e.g. "▶"
     property string iconKind: ""              // optional line icon from HudIcon (airplay, snapshot, ...), instead of a glyph
-    property color glyphColor: primary ? "#000000" : Theme.text
+    property color glyphColor: primary ? Theme.black : Theme.text
     property bool primary: false
     property bool small: false                // header / toolbar size
     property bool active: false               // toggled on (Insights, an open HUD picker)
@@ -18,7 +18,7 @@ Rectangle {
     implicitWidth: row.implicitWidth + (small ? 26 : 40)
     implicitHeight: small ? 32 : 42
     radius: small ? 10 : 12
-    color: primary ? (area.containsMouse ? "#E6FFFFFF" : "#FFFFFF")
+    color: primary ? (area.containsMouse ? Theme.soft : Theme.text)
                    : Qt.rgba(1, 1, 1, (active ? 0.12 : 0) + (area.containsMouse ? 0.20 : 0.10))
     border.color: primary ? "transparent" : Theme.lineStrong
     scale: area.pressed ? 0.97 : 1
@@ -47,7 +47,7 @@ Rectangle {
             visible: root.label !== ""
             anchors.verticalCenter: parent.verticalCenter
             text: root.label
-            color: root.primary ? "#000000" : Theme.text
+            color: root.primary ? Theme.black : Theme.text
             font.pixelSize: root.small ? 12 : 14
             font.weight: root.primary ? Font.ExtraBold : Font.DemiBold
         }

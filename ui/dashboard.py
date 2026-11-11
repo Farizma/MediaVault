@@ -21,7 +21,41 @@ BILLBOARD_SIZE = 8  # titles in the recommended carousel
 SETTINGS = {"tmdb_key", "omdb_key", "night_mode", "reduce_motion", "upscale_level", "show_insights", "core", "theme",
             "custom_accent", "custom_highlight", "custom_page", "custom_surface", "custom_card", "custom_text",
             "custom_muted", "custom_amber", "custom_red", "auto_credits", "auto_tags",
-            "fanart_key", "animated_theme", "detail_order", "group_collections", "discord", "discord_detail", "discord_app_id"}
+            "fanart_key", "animated_theme", "detail_order", "title_language", "group_collections", "discord", "discord_detail", "discord_app_id"}
+
+
+TITLE_LANGUAGES = [("english", "English"), ("romaji", "Romaji"), ("original", "Original")]
+
+
+def _same(a: str, b: str) -> bool:
+    simple = lambda t: re.sub(r"[^0-9a-z]+", "", (t or "").casefold())
+    return simple(a) == simple(b)
+
+
+def title_pref() -> str:
+    """Settings > Library > Titles: english, romaji or original (english before the library exists)."""
+    try:
+        return db.get_setting("title_language", "english") or "english"
+    except Exception:
+        return "english"
+
+
+def display_titles(card: dict, pref: str | None = None) -> tuple[str, str]:
+    """(title, small line under it) by the Titles setting: English (the stored title), Romaji or Original (its own
+    language and alphabet). The line under it is the original title, or the English one when the original is shown;
+    empty when they are the same. Series use the series name (no SxxEyy)."""
+    pref = pref or title_pref()
+    stored = card["title"]
+    if card.get("media_type") == "show" and not card.get("key", "").startswith("set:"):
+        stored = db.series_title(stored)
+    original, romaji = card.get("original_title") or "", card.get("romaji_title") or ""
+    if card.get("key", "").startswith("set:"):
+        original = romaji = ""
+    main = {"romaji": romaji or stored, "original": original or stored}.get(pref, stored)
+    sub = stored if pref == "original" and original else (original or "")
+    if pref == "romaji" and romaji and not original:
+        sub = stored
+    return main, ("" if _same(sub, main) else sub)
 
 
 def art_item(card: dict) -> dict:
@@ -75,6 +109,7 @@ def conn_has_path(path: str) -> bool:
 def billboard_deck(cards: list[dict], keep: list[str], size: int = BILLBOARD_SIZE) -> dict:
     """Random picks for the recommended carousel. Unfinished titles first; finished ones only fill a short deck.
     Titles from `keep` that are still unfinished stay, in order, so a library refresh does not reshuffle."""
+    pref = title_pref()
     fresh = [c for c in cards if not c["is_completed"]]
     by_key = {c["key"]: c for c in fresh}
     deck = [by_key[k] for k in keep if k in by_key][:size]
@@ -90,7 +125,8 @@ def billboard_deck(cards: list[dict], keep: list[str], size: int = BILLBOARD_SIZ
         length = f"{c['episodes']} episodes" if c["episodes"] else duration_label(c["duration"])
         meta = " · ".join(x for x in ((c["release_date"] or "")[:4], c["resolution"], c["codec"],
                                       c["audio_layout"], length) if x)
-        items.append({"key": c["key"], "title": c["title"], "meta": meta, "synopsis": c["synopsis"] or "",
+        title, subtitle = display_titles(c, pref)
+        items.append({"key": c["key"], "title": title, "subtitle": subtitle, "meta": meta, "synopsis": c["synopsis"] or "",
                       "art": file_url(art) if art else ""})
     return {"visible": bool(items), "items": items}
 
@@ -141,7 +177,7 @@ def library_view(cards: list[dict], index: dict, query: str = "", sort: str = "t
         if quality and quality_of(c["resolution"]) != quality:
             continue
         if words:
-            hay = " ".join((c["title"], c.get("synopsis") or "", " ".join(info.get("tags", ())), " ".join(info.get("genres", ())),
+            hay = " ".join((c["title"], c.get("original_title") or "", c.get("romaji_title") or "", c.get("synopsis") or "", " ".join(info.get("tags", ())), " ".join(info.get("genres", ())),
                             info.get("note", ""), (c.get("release_date") or "")[:4], c.get("codec") or "", c.get("resolution") or "",
                             os.path.basename(c["file_path"]))).lower()
             if not all(w in hay for w in words):
@@ -163,19 +199,21 @@ def library_view(cards: list[dict], index: dict, query: str = "", sort: str = "t
 
 class LibraryModel(QAbstractListModel):
     """One row per card. QML's GridView only creates delegates for what is on screen and recycles them."""
-    KEY, TITLE, META, POSTER, PROGRESS, DONE, BADGE, VIDEO, DURATION, OFFLINE, SPINE, YEAR, DISC = (Qt.UserRole + i for i in range(1, 14))
+    KEY, TITLE, META, POSTER, PROGRESS, DONE, BADGE, VIDEO, DURATION, OFFLINE, SPINE, YEAR, DISC, SUBTITLE = \
+        (Qt.UserRole + i for i in range(1, 15))
     NAMES = {KEY: b"key", TITLE: b"title", META: b"meta", POSTER: b"poster", PROGRESS: b"progress",
              DONE: b"done", BADGE: b"badge", VIDEO: b"videoUrl", DURATION: b"durationMs",
-             OFFLINE: b"offline", SPINE: b"spine", YEAR: b"year", DISC: b"disc"}
+             OFFLINE: b"offline", SPINE: b"spine", YEAR: b"year", DISC: b"disc", SUBTITLE: b"subtitle"}
     FIELDS = {KEY: "key", TITLE: "title", META: "meta", POSTER: "poster", PROGRESS: "progress", DONE: "done",
               BADGE: "badge", VIDEO: "video", DURATION: "duration_ms", OFFLINE: "offline", SPINE: "spine", YEAR: "year",
-              DISC: "disc"}
+              DISC: "disc", SUBTITLE: "subtitle"}
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._rows: list[dict] = []
         self.view: dict = {}           # search / sort / filters (Dashboard.setView)
         self.spines = False            # look up spine art only while the shelf view is on (it costs file checks)
+        self.title_pref = "english"    # Settings > Library > Titles (set by reload)
 
     def roleNames(self):
         return self.NAMES
@@ -204,7 +242,8 @@ class LibraryModel(QAbstractListModel):
         meta = " · ".join(x for x in ((card["release_date"] or "")[:4], card["resolution"] if not films else "",
                                       duration_label(card["duration"]) if not (shows or films) else "") if x)
         spine = scraper.spine_path(art) if (self.spines and online) else None
-        return {"key": card["key"], "title": card["title"], "meta": meta,
+        title, subtitle = display_titles(card, self.title_pref)
+        return {"key": card["key"], "title": title, "subtitle": subtitle, "meta": meta,
                 "poster": file_url(poster) if online and poster.exists() else "", "progress": progress,
                 "done": bool(card["is_completed"]), "badge": f"{shows} episodes" if shows else f"{films} films" if films else "",
                 "video": file_url(card["file_path"], bust=False), "duration_ms": int((card["duration"] or 0) * 1000),
@@ -222,6 +261,7 @@ class LibraryModel(QAbstractListModel):
     def reload(self, dir_id) -> list[dict]:
         """Refresh the cards (searched, filtered, sorted by `view`). Returns ALL of the tab's cards, unfiltered,
         so the billboard picks from the whole tab without a second query."""
+        self.title_pref = db.get_setting("title_language", "english") or "english"
         cards = db.list_library(dir_id)
         index = db.search_index()
         if dir_id is None:                 # the All tab leaves out the folders and tags you chose to hide from it
@@ -468,14 +508,15 @@ class Dashboard(QObject):
             ("Resolution", item["resolution"]), ("Codec", item["codec"]), ("File type", os.path.splitext(item["file_path"])[1].lower()),
             ("Audio", item["audio_layout"]),
             ("Frame rate", f"{item['frame_rate']:g} fps" if item.get("frame_rate") else ""),
-            ("Length", duration_label(item["duration"]))) if v]
+            ("Length", duration_label(item["duration"])), ("Rated", item.get("certification") or "")) if v]
         if films:
             facts = [{"label": "Films", "value": str(len(films))},
                      {"label": "Length", "value": duration_label(sum(f["duration"] or 0 for f in films))}]
         resume = item["last_position"] > 10 and not item["is_completed"]
         return {
             "key": key, "isShow": bool(eps), "isSet": bool(films), "kind": "show" if eps or item["media_type"] == "show" else "movie",
-            "canMatch": not films and item["media_type"] != "clip", "title": item["title"], "synopsis": item["synopsis"] or "",
+            "canMatch": not films and item["media_type"] != "clip", "title": display_titles({**item, "key": key})[0] if not films else item["title"],
+            "subtitle": display_titles({**item, "key": key})[1] if not films else "", "synopsis": item["synopsis"] or "",
             "year": (item["release_date"] or "")[:4], "facts": facts, "cover": tex["front"], "back": tex["back"],
             "customFront": tex["customFront"], "customBack": tex["customBack"],
             "spine": tex["spine"], "customSpine": tex["customSpine"],
@@ -551,6 +592,9 @@ class Dashboard(QObject):
                      None if show else cid, None if show else cname, hit["genres"])
         if hit.get("score") is not None:
             db.set_score([i["uuid"] for i in items], hit["score"])
+        with db._tx() as c:   # a fix replaces these outright (the old match's values were wrong)
+            c.executemany("UPDATE media_items SET certification=?, original_title=?, romaji_title=? WHERE uuid=?",
+                          [(hit.get("certification"), hit.get("original_title"), hit.get("romaji_title"), i["uuid"]) for i in items])
         if anime and hit.get("anilist_id"):
             with db._tx() as c:
                 c.executemany("UPDATE media_items SET anilist_id=? WHERE uuid=?", [(hit["anilist_id"], i["uuid"]) for i in items])
@@ -582,6 +626,13 @@ class Dashboard(QObject):
             scraper.save_collection_poster(hit["collection_id"], hit["collection_poster_url"], cache)
         new_key = key
         self.toast.emit(f"Matched to {hit['title']}" + (f" ({hit['release_date'][:4]})" if hit.get("release_date") else ""))
+        try:     # the new age rating and titles can change computed tags
+            from utils import tagrules
+            d = db.get_directory(items[0]["parent_directory_id"])
+            if d:
+                tagrules.retag_all([d])
+        except Exception:
+            log.warning("retag after fix match", exc_info=True)
         self.libraryChanged.emit()
         self.boxArtChanged.emit(key)
         self.matchApplied.emit(key, new_key)
@@ -631,7 +682,7 @@ class Dashboard(QObject):
     def _slide(key, item, label, uuid=""):
         tex = dvd_box.box_textures(item)
         disc = scraper.disc_art(item)
-        return {"key": key, "uuid": uuid, "label": label, "title": item["title"],
+        return {"key": key, "uuid": uuid, "label": label, "title": display_titles({**item, "key": key})[0] if uuid else item["title"],
                 "year": (item.get("release_date") or "")[:4], "cover": tex["front"], "back": tex["back"],
                 "spine": tex["spine"], "disc": file_url(disc) if disc else "",
                 "customFront": tex["customFront"], "customBack": tex["customBack"], "customSpine": tex["customSpine"],
@@ -642,6 +693,102 @@ class Dashboard(QObject):
         n = len(films)
         return [self._slide(key, {**art, "release_date": films[0]["release_date"]}, "Box set")] + [
             self._slide(f["uuid"], f, f"Film {i + 1} of {n}", f["uuid"]) for i, f in enumerate(films)]
+
+    # -- Tag Manager (its own window): every tag, bulk tagging, and your rules
+    @Slot(result="QVariantList")
+    def tagSummary(self):
+        out = []
+        for t in db.tag_counts():
+            name = t["name"]
+            kind = "genre" if name.startswith("genre:") else "auto" if name.startswith("auto:") else "user"
+            out.append({"name": name, "label": name.split(":", 1)[1] if kind != "user" else name, "kind": kind, "count": t["n"]})
+        return out
+
+    @Slot(str, str, result="QVariantList")
+    def taggingTitles(self, query: str, tag: str):
+        """Titles for bulk tagging: one row per film, series or clip (box sets are split into their films)."""
+        index = db.search_index()
+        cards = db.list_library(None, sets=False)
+        if query.strip():
+            cards = library_view(cards, index, query=query)
+        out = []
+        for c in cards:
+            uids = db.uuids_for(c["key"])
+            tags = sorted({t for u in uids[:1] for t in db.tags_for(u) if not t.startswith("rating:")}, key=str.casefold)
+            if tag and tag not in tags:
+                continue
+            title, subtitle = display_titles(c)
+            poster = scraper.cover_path(c)
+            out.append({"key": c["key"], "title": title, "subtitle": subtitle, "year": (c.get("release_date") or "")[:4],
+                        "kind": c["media_type"], "poster": file_url(poster) if poster.exists() else "",
+                        "tags": [t.split(":", 1)[1] if t.startswith(("auto:", "genre:")) else t for t in tags]})
+            if len(out) >= 2000:
+                break
+        return out
+
+    @Slot("QVariantList", str, bool)
+    def bulkTag(self, keys, tag: str, add: bool):
+        tag = tag.strip()
+        if not tag or tag.startswith(("auto:", "rating:")):
+            return
+        uids = [u for k in keys for u in db.uuids_for(str(k))]
+        if add:
+            db.add_tag_many(uids, tag)
+        else:
+            db.remove_tag_many(uids, tag)
+        self.toast.emit(f"{'Tagged' if add else 'Untagged'} {len(keys)} title{'s' if len(keys) != 1 else ''}: {tag}")
+        self._refresh_insights()
+        self.libraryChanged.emit()
+
+    @Slot(str, str)
+    def renameTag(self, old: str, new: str):
+        if old.startswith(("auto:", "rating:")) or new.strip().startswith(("auto:", "rating:")):
+            return
+        db.rename_tag(old, new)
+        self.libraryChanged.emit()
+
+    @Slot(str)
+    def deleteTag(self, name: str):
+        if name.startswith("auto:"):
+            return        # computed: change the rule or the names instead
+        db.delete_tag(name)
+        self._refresh_insights()
+        self.libraryChanged.emit()
+
+    @Slot(result="QVariantMap")
+    def tagRules(self):
+        from utils import tagrules
+        return {"rules": tagrules.load(),
+                "fields": [{"value": f, "label": l, "kind": k} for f, l, k in tagrules.FIELDS],
+                "tests": [{"value": t, "label": l, "kinds": k} for t, l, k in tagrules.TESTS],
+                "folders": [{"id": d["id"], "name": d["tab_name"]} for d in db.list_directories()],
+                "names": db.get_setting("auto_tags", "1") != "0"}
+
+    @Slot("QVariantList", result="QVariantList")
+    def saveTagRules(self, rules):
+        from utils import tagrules
+        return tagrules.save([dict(r) for r in rules])
+
+    @Slot("QVariantMap", result=int)
+    def previewTagRule(self, rule):
+        from utils import tagrules
+        return tagrules.preview(dict(rule))
+
+    @Slot()
+    def applyTagRules(self):
+        """Work out every computed tag again (names, age ratings, rules), on a worker thread."""
+        def work():
+            from utils import tagrules
+            try:
+                n = tagrules.retag_all()
+                self.toast.emit(f"Tags worked out again: {n} title{'s' if n != 1 else ''} have computed tags")
+            except Exception as e:
+                log.exception("apply rules")
+                self.toast.emit(f"Could not apply the rules: {e}")
+            self._refresh_insights()
+            self.libraryChanged.emit()
+        self.toast.emit("Applying tag rules\u2026")
+        threading.Thread(target=work, daemon=True, name="tag-rules").start()
 
     @Slot(str, bool)
     def playFrom(self, key: str, from_start: bool):
@@ -666,7 +813,14 @@ class Dashboard(QObject):
         text = text.strip()
         if not text:
             return
-        if key.startswith("show:"):
+        # with Titles set to Romaji or Original, the title you see (and edit) is that one
+        pref = db.get_setting("title_language", "english") or "english"
+        item = None if key.startswith("set:") else self._target(key)
+        column = {"romaji": "romaji_title", "original": "original_title"}.get(pref)
+        if column and item and item.get(column):
+            with db._tx() as c:
+                c.executemany(f"UPDATE media_items SET {column}=? WHERE uuid=?", [(text, u) for u in db.uuids_for(key)])
+        elif key.startswith("show:"):
             db.rename_series(key[5:], text)
         elif key.startswith("set:"):
             db.rename_collection(key[4:], text)
@@ -843,7 +997,7 @@ class Dashboard(QObject):
             engine.core_pref = value
         elif key == "auto_credits":
             engine.auto_credits = value != "0"
-        elif key == "group_collections":
+        elif key in ("group_collections", "title_language"):
             self.reload()
         elif key.startswith("discord") and self.app.presence:
             self.app.presence.configure()

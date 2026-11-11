@@ -35,7 +35,7 @@ in `version.py` and push to `main`; the workflow tests, builds the setup on Wind
   TMDB / IMDb beside your own score; file type shown as the extension; Resume and From start for part-watched titles.
 - **Cast:** actors with their part and a round photo in View More (TMDB), shared across titles.
 - **Per-folder scraping:** when you add a folder, pick what to scrape (titles, synopsis, genres, box art, disc
-  art, box sets, actors, actor photos); change it later in Settings › Folders. "Fetch missing" fills gaps for
+  art, box sets, actors, actor photos); change it later in Settings › Library › Configure. "Fetch missing" fills gaps for
   titles already there without touching your edits.
 - **Fix match:** search TMDB by hand from View More when a title was scraped wrong; title, details, genres,
   cover, disc and box set are pulled again. Your own tags, rating, notes and art stay.
@@ -76,6 +76,7 @@ _Nothing decided yet. Ideas move here once we choose to build them._
 | v1.0.0: Windows setup, Components and GitHub update checks | 1.0.0 |
 | View More fix, setup elevation fix, smooth wheel scrolling, smoother parallax, Black Out button, Insights window | 1.0.1 |
 | Anime (AniList), crop editor, Gallery, auto tags, hide from All / Insights, tab and layout dragging, full Custom theme, player window and PiP fixes | 1.0.2 |
+| Age ratings, original / romaji titles, Tag Manager, tag rules, folder Configure window, themed player | 1.0.3 |
 
 ### Proposed
 

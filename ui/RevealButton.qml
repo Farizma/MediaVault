@@ -8,12 +8,19 @@ Rectangle {
     property string label: ""
     property color iconColor: Theme.text
     property bool active: false
-    property bool toggled: false              // an on/off switch that is on (Black Out): tinted, ringed, with a dot
-    property color onColor: Theme.amber
+    property bool toggled: false              // an on/off switch that is on (Black Out): accent tint and ring
+    property color onColor: Theme.green
+    // Switching: the label fades out, "On" / "Off" fades in, then the label comes back. Opens the box while it plays,
+    // so a keyboard shortcut shows it too.
+    property bool flashing: false
+    property bool ready: false
+    Timer { running: true; interval: 1500; onTriggered: root.ready = true }    // the player's first state is not a switch
+    onToggledChanged: if (ready) { flashing = true; flashTimer.restart() }
+    Timer { id: flashTimer; interval: 1100; onTriggered: root.flashing = false }
     property string tip: ""
     signal clicked()
 
-    readonly property bool open: area.containsMouse
+    readonly property bool open: area.containsMouse || flashing
     readonly property int pad: 12
     readonly property real restIcon: 24
     readonly property real openIcon: 18
@@ -32,12 +39,6 @@ Rectangle {
 
     Rectangle { anchors.fill: parent; radius: parent.radius; color: root.onColor; opacity: root.toggled ? 0.22 : 0
         Behavior on opacity { NumberAnimation { duration: 160 * Theme.motion } } }
-    Rectangle {      // "on" dot, top right
-        width: 7; height: 7; radius: 3.5; color: root.onColor
-        anchors { top: parent.top; right: parent.right; margins: 6 }
-        scale: root.toggled ? 1 : 0
-        Behavior on scale { NumberAnimation { duration: 200 * Theme.motion; easing.type: Easing.OutBack } }
-    }
     HudIcon {
         id: ico
         kind: root.iconKind
@@ -57,10 +58,20 @@ Rectangle {
         font.pixelSize: 14; font.weight: Font.DemiBold
         anchors.verticalCenter: parent.verticalCenter
         x: root.pad + root.openIcon + 8 + (root.open ? 0 : 10)
-        opacity: root.open ? 1 : 0
+        opacity: root.open && !root.flashing ? 1 : 0
         Behavior on x { NumberAnimation { duration: 260 * Theme.motion; easing.type: Easing.OutQuint } }
         // fade in a beat after the box starts opening; fade out fast so it never spills while closing
         Behavior on opacity { NumberAnimation { duration: (root.open ? 220 : 90) * Theme.motion; easing.type: Easing.OutCubic } }
+    }
+    Text {          // "On" / "Off" while switching, in the label's place
+        text: root.toggled ? "On" : "Off"
+        color: root.toggled ? root.onColor : Theme.muted
+        font: label_.font
+        anchors.verticalCenter: parent.verticalCenter
+        x: label_.x + (root.flashing ? 0 : 6)
+        opacity: root.open && root.flashing ? 1 : 0
+        Behavior on x { NumberAnimation { duration: 260 * Theme.motion; easing.type: Easing.OutQuint } }
+        Behavior on opacity { NumberAnimation { duration: 180 * Theme.motion; easing.type: Easing.OutCubic } }
     }
     MouseArea {
         id: area

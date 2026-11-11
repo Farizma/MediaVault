@@ -14,7 +14,7 @@ API = "https://graphql.anilist.co"
 PERSON_OFFSET = 1_000_000_000      # AniList staff ids, kept apart from TMDB person ids in the shared photo cache
 
 _FIELDS = """
-  id idMal format episodes seasonYear
+  id idMal format episodes seasonYear isAdult
   title { english romaji native }
   startDate { year month day }
   description(asHtml: false)
@@ -94,7 +94,11 @@ def _shape(m: dict) -> dict:
             "score": round(score / 10, 1) if score else None, "cast": cast[:15],
             "gallery_urls": [m["bannerImage"]] if m.get("bannerImage") else [],
             "collection_id": None, "collection_name": None, "collection_poster_url": None, "disc_url": None,
-            "format": m.get("format")}
+            "format": m.get("format"),
+            # English (or romaji when there is no English title) is the title; the others ride along for display
+            "romaji_title": (m.get("title") or {}).get("romaji"),
+            "original_title": (m.get("title") or {}).get("native"),
+            "certification": "18+" if m.get("isAdult") else None}
 
 
 def lookup(title: str, year: str | None = None) -> dict | None:

@@ -13,7 +13,7 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 import database as db
-from utils import autotag, media_probe, scraper
+from utils import autotag, media_probe, scraper, tagrules
 
 log = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ def index_paths(directory: dict, paths) -> int:
     if not new:
         return 0
     scrape = bool(directory["should_scrape"])
-    auto = db.get_setting("auto_tags", "1") != "0"     # tags from folders and file names (Settings > Folders)
+    auto = db.get_setting("auto_tags", "1") != "0"     # tags from folders and file names (Settings > Library)
     hp = _headless()
     rows, tags = [], []
     try:
@@ -67,13 +67,18 @@ def index_paths(directory: dict, paths) -> int:
             rows.append((row, parsed))
             if kind == "clip":
                 tags.append((row["uuid"], "Personal"))  # lets analytics hide home video with one tag toggle
-            if auto:
-                tags.extend((row["uuid"], autotag.PREFIX + t) for t in autotag.tags_for(p, directory["folder_path"], kind == "show"))
     finally:
         if hp:
             hp.close()
     if scrape:
         _scrape_into(rows, tags, db.scrape_opts(directory), directory.get("source") or "tmdb")
+    # computed tags (folder and file names, age rating, your rules) once the scrape has filled in what it found
+    rules = tagrules.load()
+    for row, _ in rows:
+        info = {"genres": [t[6:] for u, t in tags if u == row["uuid"] and t.startswith("genre:")],
+                "tags": [t for u, t in tags if u == row["uuid"] and ":" not in t]}
+        tags.extend((row["uuid"], autotag.PREFIX + t)
+                    for t in tagrules.computed_tags(row, info, directory["folder_path"], rules, auto))
     db.add_items([r for r, _ in rows], tags)  # the one collective write
     return len(rows)
 
@@ -101,6 +106,10 @@ def _scrape_into(rows, tags, opts=None, source: str = "tmdb") -> None:
                 row["title"] = hit["title"] + (f" S{parsed.season or 1:02d}E{parsed.episode:02d}"
                                                if row["media_type"] == "show" else "")
                 row["release_date"] = hit["release_date"] or row["release_date"]
+            if "titles" in opts:
+                row["original_title"], row["romaji_title"] = hit.get("original_title"), hit.get("romaji_title")
+            if "certification" in opts:
+                row["certification"] = hit.get("certification")
             if "synopsis" in opts:
                 row["synopsis"] = hit["synopsis"]
             row["tmdb_id"] = hit.get("tmdb_id")
@@ -142,17 +151,9 @@ def _scrape_into(rows, tags, opts=None, source: str = "tmdb") -> None:
 
 
 def retag(directory: dict) -> int:
-    """Tags from folders and file names, worked out again for every title in a folder (after a reorganise, or for
-    a library scanned before this existed). Only "auto:" tags change; yours stay. Returns titles tagged."""
-    items = db.list_media(directory["id"])
-    pairs = []
-    for it in items:
-        pairs += [(it["uuid"], autotag.PREFIX + t) for t in autotag.tags_for(it["file_path"], directory["folder_path"],
-                                                                            it["media_type"] == "show")]
-    with db._tx() as c:
-        c.executemany("DELETE FROM tags WHERE media_uuid=? AND tag_name LIKE 'auto:%'", [(it["uuid"],) for it in items])
-        c.executemany("INSERT INTO tags (media_uuid, tag_name) VALUES (?,?)", pairs)
-    return len({u for u, _ in pairs})
+    """Computed tags (folder and file names, age rating, your rules) worked out again for every title in a folder.
+    Only "auto:" tags change; yours stay. Returns titles tagged."""
+    return tagrules.retag_all([directory])
 
 
 def fetch_missing(directory: dict) -> int:
@@ -182,6 +183,7 @@ def fetch_missing(directory: dict) -> int:
             "genres": "genres" in opts and not any(t.startswith("genre:") for t in tags),
             "synopsis": "synopsis" in opts and not first.get("synopsis"),
             "score": "score" in opts and first.get("score") is None,
+            "certification": "certification" in opts and not first.get("certification"),
             "gallery": "gallery" in opts and not scraper.gallery_images(first),
         }
         if "photos" in opts and need["cast"]:
@@ -221,6 +223,9 @@ def fetch_missing(directory: dict) -> int:
                 c.executemany("INSERT INTO tags (media_uuid, tag_name) VALUES (?,?)", [(u, f"genre:{g}") for u in uids for g in hit["genres"]])
         if need["score"] and hit.get("score") is not None:
             db.set_score(uids, hit["score"])
+        db.set_scraped(uids, certification=hit.get("certification") if "certification" in opts else None,
+                       original_title=hit.get("original_title") if "titles" in opts else None,
+                       romaji_title=hit.get("romaji_title") if "titles" in opts else None)
         if need["sets"] and hit.get("collection_id"):
             db.add_to_set(uids, hit["collection_id"], hit["collection_name"])
             if hit.get("collection_poster_url"):
@@ -248,6 +253,8 @@ def fetch_missing(directory: dict) -> int:
                 except Exception:
                     log.warning("disc art failed for %s", first["title"], exc_info=True)
         updated += 1
+    if updated:
+        tagrules.retag_all([directory])     # new age ratings and titles can change computed tags
     return updated
 
 

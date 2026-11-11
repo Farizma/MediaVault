@@ -26,6 +26,7 @@ THEME = {  # matches the web app (media-vault-googleAI): Tailwind white/NN overl
     "motion": 1,  # multiplier for every animation duration; 0 = reduced motion
     "panel": "#F2121212", "theme": "midnight",                        # modal sheets; current colourway id
     "onBlue": "#FFFFFF", "onGreen": "#000000",                        # text on highlight / accent fills
+    "soft": "#CCF5F5F7", "dim": "#B3F5F5F7", "edge": "#33F5F5F7",     # text at 80% / 70%, edges at 20% (player HUD)
 }
 
 
@@ -109,7 +110,10 @@ def apply_theme(theme_id: str, accent: str = "", highlight: str = "", custom: di
     THEME.update({"black": page, "graphite": surface, "slate": card, "chrome": "#BF" + card[1:],
                   "panel": "#F2" + surface[1:], "scrim": "#BF" + page[1:], "green": accent, "blue": highlight,
                   "onBlue": _ink(highlight), "onGreen": _ink(accent), "theme": t[0],
-                  **extra, "faint": "#80" + extra["text"][1:]})
+                  **extra, "faint": "#80" + extra["text"][1:], "soft": "#CC" + extra["text"][1:],
+                  "dim": "#B3" + extra["text"][1:], "edge": "#33" + extra["text"][1:],
+                  "line": "#1A" + extra["text"][1:], "lineStrong": "#26" + extra["text"][1:],
+                  "fill": "#0D" + extra["text"][1:], "fillHover": "#1A" + extra["text"][1:]})
     return t[0]
 
 

@@ -59,7 +59,7 @@ Item {
             Text { text: "WHAT TO SCRAPE"; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10; opacity: scrapeOn.checked ? 1 : 0.4 }
             ScrapeParts { id: parts; Layout.fillWidth: true; enabled: scrapeOn.checked }
             Text { Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 11; opacity: scrapeOn.checked ? 1 : 0.4
-                text: "Change this any time in Settings › Folders. Your own titles, art and notes always win over scraped ones." }
+                text: "Change this any time in Settings › Library › Configure. Your own titles, art and notes always win over scraped ones." }
             RowLayout {
                 Layout.fillWidth: true
                 Layout.topMargin: 8

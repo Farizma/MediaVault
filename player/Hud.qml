@@ -161,13 +161,13 @@ Window {
                 Text {
                     Layout.fillWidth: true
                     text: win.st.title || ""
-                    color: "#FFFFFF"; font.pixelSize: 18; font.weight: Font.Bold; font.letterSpacing: -0.3
+                    color: Theme.text; font.pixelSize: 18; font.weight: Font.Bold; font.letterSpacing: -0.3
                     elide: Text.ElideRight
                 }
                 Rectangle {
                     implicitWidth: coreText.implicitWidth + 16; implicitHeight: 22; radius: 6
-                    color: "#26FFFFFF"
-                    Text { id: coreText; anchors.centerIn: parent; text: (win.st.core || "").toUpperCase() + " CORE"; color: "#E6FFFFFF"; font.family: Theme.mono; font.pixelSize: 11; font.weight: Font.DemiBold }
+                    color: Theme.lineStrong
+                    Text { id: coreText; anchors.centerIn: parent; text: (win.st.core || "").toUpperCase() + " CORE"; color: Theme.soft; font.family: Theme.mono; font.pixelSize: 11; font.weight: Font.DemiBold }
                 }
             }
         }
@@ -179,7 +179,7 @@ Window {
             height: barCol.implicitHeight + 32
             radius: 16
             color: Theme.hud
-            border.color: "#1FFFFFFF"
+            border.color: Theme.line
             opacity: root.controlsOn && !root.cropping && !root.shrunk && !root.pip ? 1 : 0
             visible: opacity > 0
             Behavior on opacity { NumberAnimation { duration: 200 * Theme.motion; easing.type: Easing.OutCubic } }
@@ -200,14 +200,14 @@ Window {
                         onMoved: Player.seekTo(value)
                         background: Rectangle {
                             x: seek.leftPadding; y: seek.topPadding + seek.availableHeight / 2 - height / 2
-                            width: seek.availableWidth; height: seek.hovered || seek.pressed ? 8 : 5; radius: height / 2; color: "#33FFFFFF"
+                            width: seek.availableWidth; height: seek.hovered || seek.pressed ? 8 : 5; radius: height / 2; color: Theme.edge
                             Behavior on height { NumberAnimation { duration: 120 * Theme.motion } }
                             Rectangle { width: seek.visualPosition * parent.width; height: parent.height; radius: parent.radius; color: Theme.green }
                         }
                         handle: Rectangle {
                             x: seek.leftPadding + seek.visualPosition * (seek.availableWidth - width)
                             y: seek.topPadding + seek.availableHeight / 2 - height / 2
-                            width: 16; height: 16; radius: 8; color: "white"
+                            width: 16; height: 16; radius: 8; color: Theme.text
                             scale: seek.pressed ? 1.25 : 1
                             Behavior on scale { NumberAnimation { duration: 120 * Theme.motion } }
                         }
@@ -225,7 +225,7 @@ Window {
                     Rectangle {
                         Layout.leftMargin: 6
                         implicitWidth: volRow.implicitWidth + 24; implicitHeight: 48; radius: 14
-                        color: Qt.rgba(1, 1, 1, 0.10); border.color: Theme.lineStrong
+                        color: Theme.fillHover; border.color: Theme.lineStrong
                         Row {
                             id: volRow
                             anchors.centerIn: parent
@@ -243,26 +243,26 @@ Window {
                                 onMoved: root.setVol(value)
                                 background: Rectangle {
                                     x: barVol.leftPadding; y: barVol.topPadding + barVol.availableHeight / 2 - height / 2
-                                    width: barVol.availableWidth; height: barVol.hovered || barVol.pressed ? 6 : 4; radius: 3; color: "#33FFFFFF"
+                                    width: barVol.availableWidth; height: barVol.hovered || barVol.pressed ? 6 : 4; radius: 3; color: Theme.edge
                                     Behavior on height { NumberAnimation { duration: 120 * Theme.motion } }
-                                    Rectangle { width: barVol.visualPosition * parent.width; height: parent.height; radius: 3; color: "#FFFFFF" }
+                                    Rectangle { width: barVol.visualPosition * parent.width; height: parent.height; radius: 3; color: Theme.green }
                                 }
                                 handle: Rectangle {
                                     x: barVol.leftPadding + barVol.visualPosition * (barVol.availableWidth - width)
                                     y: barVol.topPadding + barVol.availableHeight / 2 - height / 2
-                                    width: 14; height: 14; radius: 7; color: "#FFFFFF"
+                                    width: 14; height: 14; radius: 7; color: Theme.text
                                     scale: barVol.pressed ? 1.2 : 1
                                     Behavior on scale { NumberAnimation { duration: 120 * Theme.motion } }
                                 }
                             }
-                            Text { text: root.vol + "%"; width: 34; color: "#FFFFFF"; font.family: Theme.mono; font.pixelSize: 12
+                            Text { text: root.vol + "%"; width: 34; color: Theme.text; font.family: Theme.mono; font.pixelSize: 12
                                 horizontalAlignment: Text.AlignRight; anchors.verticalCenter: parent.verticalCenter }
                         }
                     }
                     Item { Layout.fillWidth: true }
                     RevealButton { tip: "AirPlay or Chromecast"; id: castBtn; label: "Cast"; iconKind: "airplay"; active: root.popup === "cast"
                         onClicked: { root.castList = Backend.devices(); if (root.castList.length === 0) Backend.findDevices(); root.togglePopup("cast", castBtn) } }
-                    RevealButton { tip: (win.st.screens || 1) > 1 ? "Shortcut  B" : "Only one screen is connected"; iconKind: "blackout"; label: win.st.blackout === true ? "Black Out: On" : "Black Out: Off"
+                    RevealButton { tip: (win.st.screens || 1) > 1 ? "Shortcut  B" : "Only one screen is connected"; iconKind: "blackout"; label: "Black Out"
                         toggled: win.st.blackout === true; opacity: (win.st.screens || 1) > 1 ? 1 : 0.45
                         onClicked: Player.toggleBlackout() }
                     RevealButton { tip: "Shortcut  F, or double-click the picture"; iconKind: win.st.fullscreen ? "windowed" : "fullscreen"
@@ -285,10 +285,10 @@ Window {
             signal picked()
             Layout.fillWidth: true
             height: 34; radius: 8
-            color: choiceArea.containsMouse ? Qt.rgba(1, 1, 1, 0.10) : "transparent"
+            color: choiceArea.containsMouse ? Theme.fillHover : "transparent"
             Text { anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; leftMargin: 10; rightMargin: 30 }
                 text: choice.label; elide: Text.ElideRight; font.pixelSize: 13
-                color: choice.on ? "#FFFFFF" : "#CCFFFFFF"; font.weight: choice.on ? Font.Bold : Font.Normal }
+                color: choice.on ? Theme.text : Theme.soft; font.weight: choice.on ? Font.Bold : Font.Normal }
             Text { visible: choice.on; anchors { right: parent.right; rightMargin: 10; verticalCenter: parent.verticalCenter }
                 text: "\u2713"; color: Theme.green; font.pixelSize: 14; font.weight: Font.Bold }
             MouseArea { id: choiceArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: choice.picked() }
@@ -302,7 +302,7 @@ Window {
             onWavesChanged: requestPaint()
             onPaint: {
                 var c = getContext("2d"); c.reset()
-                c.fillStyle = "#FFFFFF"; c.strokeStyle = "#FFFFFF"; c.lineWidth = 1.7; c.lineCap = "round"
+                c.fillStyle = Theme.text; c.strokeStyle = Theme.text; c.lineWidth = 1.7; c.lineCap = "round"
                 c.beginPath(); c.moveTo(1, 7); c.lineTo(4.5, 7); c.lineTo(9, 3); c.lineTo(9, 17); c.lineTo(4.5, 13); c.lineTo(1, 13); c.closePath(); c.fill()
                 if (waves < 0) { c.beginPath(); c.moveTo(13, 7); c.lineTo(19, 13); c.moveTo(19, 7); c.lineTo(13, 13); c.stroke(); return }
                 for (var i = 0; i < waves; i++) { c.beginPath(); c.arc(9, 10, 4 + i * 3.6, -Math.PI / 3.4, Math.PI / 3.4); c.stroke() }
@@ -312,13 +312,13 @@ Window {
             id: sl
             background: Rectangle {
                 x: sl.leftPadding; y: sl.topPadding + sl.availableHeight / 2 - height / 2
-                width: sl.availableWidth; height: 4; radius: 2; color: "#33FFFFFF"
-                Rectangle { width: sl.visualPosition * parent.width; height: parent.height; radius: 2; color: "#FFFFFF" }
+                width: sl.availableWidth; height: 4; radius: 2; color: Theme.edge
+                Rectangle { width: sl.visualPosition * parent.width; height: parent.height; radius: 2; color: Theme.green }
             }
             handle: Rectangle {
                 x: sl.leftPadding + sl.visualPosition * (sl.availableWidth - width)
                 y: sl.topPadding + sl.availableHeight / 2 - height / 2
-                width: 14; height: 14; radius: 7; color: "#FFFFFF"
+                width: 14; height: 14; radius: 7; color: Theme.text
                 scale: sl.pressed ? 1.2 : 1
                 Behavior on scale { NumberAnimation { duration: 120 * Theme.motion } }
             }
@@ -341,18 +341,18 @@ Window {
             font.pixelSize: 13
             background: Rectangle {
                 radius: 10
-                color: drop.pressed || drop.popup.visible ? Qt.rgba(1, 1, 1, 0.16) : (drop.hovered && drop.enabled ? Qt.rgba(1, 1, 1, 0.12) : Qt.rgba(1, 1, 1, 0.07))
+                color: drop.pressed || drop.popup.visible ? Theme.fillHover : (drop.hovered && drop.enabled ? Theme.fillHover : Theme.fillHover)
                 border.color: drop.popup.visible ? Theme.blue : Theme.line
             }
             contentItem: Text {
                 leftPadding: 12; rightPadding: 30
-                text: drop.displayText; color: drop.enabled ? "#FFFFFF" : Theme.faint
+                text: drop.displayText; color: drop.enabled ? Theme.text : Theme.faint
                 font.pixelSize: 13; font.weight: Font.Medium
                 verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight
             }
             indicator: Text {
                 x: drop.width - width - 12; anchors.verticalCenter: parent.verticalCenter
-                text: "\u2304"; color: drop.enabled ? "#B3FFFFFF" : "transparent"; font.pixelSize: 14
+                text: "\u2304"; color: drop.enabled ? Theme.dim : "transparent"; font.pixelSize: 14
                 rotation: drop.popup.visible ? 180 : 0
                 Behavior on rotation { NumberAnimation { duration: 180 * Theme.motion; easing.type: Easing.OutCubic } }
             }
@@ -360,11 +360,11 @@ Window {
                 width: drop.width - 8
                 height: 34
                 highlighted: drop.highlightedIndex === index
-                background: Rectangle { radius: 8; color: parent.highlighted ? Qt.rgba(1, 1, 1, 0.12) : "transparent" }
+                background: Rectangle { radius: 8; color: parent.highlighted ? Theme.fillHover : "transparent" }
                 contentItem: Item {
                     Text { anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; rightMargin: 22 }
                         text: modelData.title; elide: Text.ElideRight; font.pixelSize: 13
-                        color: modelData.on ? "#FFFFFF" : "#CCFFFFFF"; font.weight: modelData.on ? Font.Bold : Font.Normal }
+                        color: modelData.on ? Theme.text : Theme.soft; font.weight: modelData.on ? Font.Bold : Font.Normal }
                     Text { visible: modelData.on === true; anchors { right: parent.right; verticalCenter: parent.verticalCenter }
                         text: "\u2713"; color: Theme.green; font.pixelSize: 13; font.weight: Font.Bold }
                 }
@@ -382,7 +382,7 @@ Window {
                 transformOrigin: Item.Top
                 contentItem: ListView { clip: true; implicitHeight: contentHeight; model: drop.popup.visible ? drop.delegateModel : null
                     currentIndex: drop.highlightedIndex; ScrollIndicator.vertical: ScrollIndicator {} }
-                background: Rectangle { radius: 12; color: "#F7161618"; border.color: "#33FFFFFF" }
+                background: Rectangle { radius: 12; color: Theme.panel; border.color: Theme.edge }
             }
         }
 
@@ -397,8 +397,8 @@ Window {
             x: Math.max(16, Math.min(root.anchorRight - width, parent.width - width - 16))
             y: bar.y - height - 12
             radius: 16
-            color: "#F2121212"
-            border.color: "#33FFFFFF"
+            color: Theme.panel
+            border.color: Theme.edge
             opacity: Math.min(1, shown * 1.6)
             transform: Scale { origin.x: root.originX - panel.x; origin.y: root.originY - panel.y; xScale: 0.08 + 0.92 * panel.shown; yScale: xScale }
             MouseArea { anchors.fill: parent; onWheel: (w) => w.accepted = true }   // scrolling here never changes the volume
@@ -422,7 +422,7 @@ Window {
                     implicitHeight: 34; radius: 10
                     color: "#99000000"; border.color: Theme.line
                     Rectangle {
-                        width: (parent.width - 8) / 2; height: parent.height - 8; y: 4; radius: 7; color: "#FFFFFF"
+                        width: (parent.width - 8) / 2; height: parent.height - 8; y: 4; radius: 7; color: Theme.text
                         x: 4 + panel.tab * width
                         Behavior on x { NumberAnimation { duration: 260 * Theme.motion; easing.type: Easing.OutCubic } }
                     }
@@ -433,7 +433,7 @@ Window {
                             Item {
                                 width: parent.width / 2; height: parent.height
                                 Text { anchors.centerIn: parent; text: modelData; font.pixelSize: 12; font.weight: Font.Bold
-                                    color: panel.tab === index ? "#000000" : "#B3FFFFFF"
+                                    color: panel.tab === index ? Theme.black : Theme.dim
                                     Behavior on color { ColorAnimation { duration: 200 * Theme.motion } } }
                                 MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: panel.tab = index }
                             }
@@ -453,9 +453,9 @@ Window {
                         Layout.fillWidth: true
                         Layout.topMargin: 4
                         spacing: 6
-                        Text { text: "Audio delay"; color: "#CCFFFFFF"; font.pixelSize: 12; Layout.fillWidth: true }
+                        Text { text: "Audio delay"; color: Theme.soft; font.pixelSize: 12; Layout.fillWidth: true }
                         GlassButton { small: true; label: "\u2212"; implicitWidth: 34; onClicked: Player.setAudioDelay((win.st.audioDelay || 0) - 0.05) }
-                        Text { text: ((win.st.audioDelay || 0) >= 0 ? "+" : "\u2212") + Math.round(Math.abs(win.st.audioDelay || 0) * 1000) + " ms"; color: "#FFFFFF"
+                        Text { text: ((win.st.audioDelay || 0) >= 0 ? "+" : "\u2212") + Math.round(Math.abs(win.st.audioDelay || 0) * 1000) + " ms"; color: Theme.text
                             font.family: Theme.mono; font.pixelSize: 12; Layout.preferredWidth: 58; horizontalAlignment: Text.AlignHCenter }
                         GlassButton { small: true; label: "+"; implicitWidth: 34; onClicked: Player.setAudioDelay((win.st.audioDelay || 0) + 0.05) }
                         GlassButton { small: true; label: "Reset"; visible: (win.st.audioDelay || 0) !== 0; onClicked: Player.setAudioDelay(0) }
@@ -467,9 +467,9 @@ Window {
                         Layout.fillWidth: true
                         Layout.topMargin: 4
                         spacing: 6
-                        Text { text: "Timing"; color: "#CCFFFFFF"; font.pixelSize: 12; Layout.fillWidth: true }
+                        Text { text: "Timing"; color: Theme.soft; font.pixelSize: 12; Layout.fillWidth: true }
                         GlassButton { small: true; label: "\u2212"; implicitWidth: 34; onClicked: Player.setSubDelay((win.st.subDelay || 0) - 0.1) }
-                        Text { text: ((win.st.subDelay || 0) >= 0 ? "+" : "") + (win.st.subDelay || 0).toFixed(1) + " s"; color: "#FFFFFF"
+                        Text { text: ((win.st.subDelay || 0) >= 0 ? "+" : "") + (win.st.subDelay || 0).toFixed(1) + " s"; color: Theme.text
                             font.family: Theme.mono; font.pixelSize: 12; Layout.preferredWidth: 58; horizontalAlignment: Text.AlignHCenter }
                         GlassButton { small: true; label: "+"; implicitWidth: 34; onClicked: Player.setSubDelay((win.st.subDelay || 0) + 0.1) }
                         GlassButton { small: true; label: "Reset"; visible: (win.st.subDelay || 0) !== 0; onClicked: Player.setSubDelay(0) }
@@ -482,18 +482,18 @@ Window {
                         opacity: enabled ? 1 : 0.45
                         RowLayout {
                             Layout.fillWidth: true
-                            Text { text: "Size"; color: "#CCFFFFFF"; font.pixelSize: 12; Layout.preferredWidth: 58 }
+                            Text { text: "Size"; color: Theme.soft; font.pixelSize: 12; Layout.preferredWidth: 58 }
                             Slim { id: subSize; Layout.fillWidth: true; from: 0.5; to: 2.5; stepSize: 0.05; value: win.st.subScale || 1
                                 onMoved: Player.setSubStyle(value, win.st.subPos || 100, win.st.subBox === true) }
-                            Text { text: Math.round((win.st.subScale || 1) * 100) + "%"; color: "#FFFFFF"; font.family: Theme.mono; font.pixelSize: 11; Layout.preferredWidth: 40; horizontalAlignment: Text.AlignRight }
+                            Text { text: Math.round((win.st.subScale || 1) * 100) + "%"; color: Theme.text; font.family: Theme.mono; font.pixelSize: 11; Layout.preferredWidth: 40; horizontalAlignment: Text.AlignRight }
                         }
                         RowLayout {
                             Layout.fillWidth: true
-                            Text { text: "Height"; color: "#CCFFFFFF"; font.pixelSize: 12; Layout.preferredWidth: 58 }
+                            Text { text: "Height"; color: Theme.soft; font.pixelSize: 12; Layout.preferredWidth: 58 }
                             // 100 = bottom edge; lower values lift the text up the picture
                             Slim { Layout.fillWidth: true; from: 100; to: 50; stepSize: 1; value: win.st.subPos || 100
                                 onMoved: Player.setSubStyle(win.st.subScale || 1, value, win.st.subBox === true) }
-                            Text { text: (100 - (win.st.subPos || 100)) + "%"; color: "#FFFFFF"; font.family: Theme.mono; font.pixelSize: 11; Layout.preferredWidth: 40; horizontalAlignment: Text.AlignRight }
+                            Text { text: (100 - (win.st.subPos || 100)) + "%"; color: Theme.text; font.family: Theme.mono; font.pixelSize: 11; Layout.preferredWidth: 40; horizontalAlignment: Text.AlignRight }
                         }
                         Toggle { Layout.fillWidth: true; text: "Dark box behind subtitles"; checked: win.st.subBox === true
                             onToggled: Player.setSubStyle(win.st.subScale || 1, win.st.subPos || 100, checked) }
@@ -522,7 +522,7 @@ Window {
                             value: win.st.speed || 1
                             onMoved: Player.setSpeed(value)
                         }
-                        Text { text: (win.st.speed || 1).toFixed(2).replace(/0$/, "") + "\u00D7"; color: "#FFFFFF"; font.family: Theme.mono; font.pixelSize: 12
+                        Text { text: (win.st.speed || 1).toFixed(2).replace(/0$/, "") + "\u00D7"; color: Theme.text; font.family: Theme.mono; font.pixelSize: 12
                             Layout.preferredWidth: 44; horizontalAlignment: Text.AlignRight }
                         GlassButton { small: true; label: "1\u00D7"; visible: (win.st.speed || 1) !== 1; onClicked: Player.setSpeed(1) }
                     }
@@ -567,11 +567,11 @@ Window {
                         RowLayout {
                             Layout.fillWidth: true
                             visible: win.st.hdrMode !== "display"
-                            Text { text: "Brightness"; color: "#CCFFFFFF"; font.pixelSize: 12; Layout.preferredWidth: 68 }
+                            Text { text: "Brightness"; color: Theme.soft; font.pixelSize: 12; Layout.preferredWidth: 68 }
                             // 0 = auto (a standard SDR screen); brighter screens look better with a higher target
                             Slim { Layout.fillWidth: true; from: 0; to: 600; stepSize: 50; value: win.st.hdrPeak || 0
                                 onMoved: Player.setHdr("tonemap", value < 100 ? 0 : value, win.st.hdrScene !== false) }
-                            Text { text: (win.st.hdrPeak || 0) ? win.st.hdrPeak + " nits" : "Auto"; color: "#FFFFFF"; font.family: Theme.mono; font.pixelSize: 11
+                            Text { text: (win.st.hdrPeak || 0) ? win.st.hdrPeak + " nits" : "Auto"; color: Theme.text; font.family: Theme.mono; font.pixelSize: 11
                                 Layout.preferredWidth: 62; horizontalAlignment: Text.AlignRight }
                         }
                         Toggle { visible: win.st.hdrMode !== "display"; Layout.fillWidth: true; text: "Adapt to each scene"; hint: "Keeps dark scenes detailed and bright ones from clipping"
@@ -601,8 +601,8 @@ Window {
             x: Math.max(16, Math.min(root.anchorRight - width, parent.width - width - 16))
             y: bar.y - height - 12
             radius: 14
-            color: "#F2121212"
-            border.color: "#33FFFFFF"
+            color: Theme.panel
+            border.color: Theme.edge
             opacity: Math.min(1, shown * 1.6)
             transform: Scale { origin.x: root.originX - snapMenu.x; origin.y: root.originY - snapMenu.y; xScale: 0.08 + 0.92 * snapMenu.shown; yScale: xScale }
             MouseArea { anchors.fill: parent; onWheel: (w) => w.accepted = true }
@@ -620,7 +620,7 @@ Window {
         Rectangle {
             id: creditsBadge
             width: creditsRow.implicitWidth + 40; height: 48; radius: 12
-            color: Theme.hud; border.color: "#40FFFFFF"
+            color: Theme.hud; border.color: Theme.edge
             visible: !root.pip
             y: parent.height - height - (root.controlsOn ? bar.height + bar.anchors.margins + 20 : 60)
             x: win.st.creditsActive === true ? parent.width - width - 40 : parent.width + 20
@@ -628,9 +628,9 @@ Window {
             Behavior on y { NumberAnimation { duration: 200 * Theme.motion; easing.type: Easing.OutCubic } }
             Row {
                 id: creditsRow; anchors.centerIn: parent; spacing: 10
-                Text { text: "Skip Credits"; color: "#FFFFFF"; font.pixelSize: 15; font.weight: Font.Bold }
-                Rectangle { width: tabKey2.implicitWidth + 12; height: 20; radius: 5; color: "#26FFFFFF"; anchors.verticalCenter: parent.verticalCenter
-                    Text { id: tabKey2; anchors.centerIn: parent; text: "TAB"; color: "#B3FFFFFF"; font.family: Theme.mono; font.pixelSize: 10 } }
+                Text { text: "Skip Credits"; color: Theme.text; font.pixelSize: 15; font.weight: Font.Bold }
+                Rectangle { width: tabKey2.implicitWidth + 12; height: 20; radius: 5; color: Theme.lineStrong; anchors.verticalCenter: parent.verticalCenter
+                    Text { id: tabKey2; anchors.centerIn: parent; text: "TAB"; color: Theme.dim; font.family: Theme.mono; font.pixelSize: 10 } }
             }
             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: Player.finishNow() }
         }
@@ -688,7 +688,7 @@ Window {
                 }
                 Rectangle {      // progress
                     anchors { left: parent.left; right: parent.right; bottom: parent.bottom; margins: 12 }
-                    height: 4; radius: 2; color: "#40FFFFFF"
+                    height: 4; radius: 2; color: Theme.edge
                     Rectangle { width: parent.width * Math.min(1, (win.st.position || 0) / Math.max(1, win.st.duration || 1)); height: parent.height; radius: 2; color: Theme.green }
                 }
             }
@@ -705,8 +705,8 @@ Window {
             x: Math.max(16, Math.min(root.anchorRight - width, parent.width - width - 16))
             y: bar.y - height - 12
             radius: 14
-            color: "#F2121212"
-            border.color: "#33FFFFFF"
+            color: Theme.panel
+            border.color: Theme.edge
             opacity: Math.min(1, shown * 1.6)
             transform: Scale { origin.x: root.originX - castMenu.x; origin.y: root.originY - castMenu.y; xScale: 0.08 + 0.92 * castMenu.shown; yScale: xScale }
             MouseArea { anchors.fill: parent; onWheel: (w) => w.accepted = true }
@@ -761,12 +761,12 @@ Window {
                 opacity: Math.max(0, Math.min(1, (volPill.grow - 0.55) / 0.4))
                 Speaker { level: root.vol; anchors.verticalCenter: parent.verticalCenter }
                 Rectangle {
-                    width: 140; height: 6; radius: 3; color: "#33FFFFFF"
+                    width: 140; height: 6; radius: 3; color: Theme.edge
                     anchors.verticalCenter: parent.verticalCenter
-                    Rectangle { width: parent.width * root.vol / 100; height: parent.height; radius: 3; color: "#FFFFFF"
+                    Rectangle { width: parent.width * root.vol / 100; height: parent.height; radius: 3; color: Theme.text
                         Behavior on width { NumberAnimation { duration: 120 * Theme.motion; easing.type: Easing.OutCubic } } }
                 }
-                Text { width: 38; text: root.vol + "%"; color: "#FFFFFF"; font.family: Theme.mono; font.pixelSize: 13; font.weight: Font.Bold
+                Text { width: 38; text: root.vol + "%"; color: Theme.text; font.family: Theme.mono; font.pixelSize: 13; font.weight: Font.Bold
                     horizontalAlignment: Text.AlignRight; anchors.verticalCenter: parent.verticalCenter }
             }
         }
@@ -776,16 +776,16 @@ Window {
             id: introBadge
             visible: !root.pip
             width: introRow.implicitWidth + 40; height: 48; radius: 12
-            color: Theme.hud; border.color: "#40FFFFFF"
+            color: Theme.hud; border.color: Theme.edge
             y: parent.height - height - (root.controlsOn ? bar.height + bar.anchors.margins + 20 : 60)
             x: win.st.introActive === true ? parent.width - width - 40 : parent.width + 20
             Behavior on x { NumberAnimation { duration: 280 * Theme.motion; easing.type: Easing.OutCubic } }
             Behavior on y { NumberAnimation { duration: 200 * Theme.motion; easing.type: Easing.OutCubic } }
             Row {
                 id: introRow; anchors.centerIn: parent; spacing: 10
-                Text { text: "Skip Intro"; color: "#FFFFFF"; font.pixelSize: 15; font.weight: Font.Bold }
-                Rectangle { width: tabKey.implicitWidth + 12; height: 20; radius: 5; color: "#26FFFFFF"; anchors.verticalCenter: parent.verticalCenter
-                    Text { id: tabKey; anchors.centerIn: parent; text: "TAB"; color: "#B3FFFFFF"; font.family: Theme.mono; font.pixelSize: 10 } }
+                Text { text: "Skip Intro"; color: Theme.text; font.pixelSize: 15; font.weight: Font.Bold }
+                Rectangle { width: tabKey.implicitWidth + 12; height: 20; radius: 5; color: Theme.lineStrong; anchors.verticalCenter: parent.verticalCenter
+                    Text { id: tabKey; anchors.centerIn: parent; text: "TAB"; color: Theme.dim; font.family: Theme.mono; font.pixelSize: 10 } }
             }
             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: Player.skipIntro() }
         }
@@ -808,12 +808,12 @@ Window {
                     var c = getContext("2d")
                     c.reset()
                     c.lineWidth = 6
-                    c.strokeStyle = "#44FFFFFF"
+                    c.strokeStyle = Theme.edge
                     c.beginPath(); c.arc(42, 42, 36, 0, Math.PI * 2); c.stroke()
                     c.strokeStyle = Theme.green
                     c.beginPath(); c.arc(42, 42, 36, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * frac); c.stroke()
                 }
-                Text { anchors.centerIn: parent; text: win.st.autoplayLeft || ""; color: "white"; font.pixelSize: 28; font.weight: Font.DemiBold }
+                Text { anchors.centerIn: parent; text: win.st.autoplayLeft || ""; color: Theme.text; font.pixelSize: 28; font.weight: Font.DemiBold }
             }
             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: Player.nextNow() }
         }
@@ -822,7 +822,7 @@ Window {
             spacing: 4
             anchors { right: nextUp.left; rightMargin: 24; verticalCenter: nextUp.verticalCenter }
             Text { anchors.right: parent.right; text: "UP NEXT"; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 11 }
-            Text { anchors.right: parent.right; text: win.st.nextTitle || ""; color: "#FFFFFF"; font.pixelSize: 22; font.weight: Font.ExtraBold; font.letterSpacing: -0.4; elide: Text.ElideRight; width: Math.min(implicitWidth, win.width * 0.4) }
+            Text { anchors.right: parent.right; text: win.st.nextTitle || ""; color: Theme.text; font.pixelSize: 22; font.weight: Font.ExtraBold; font.letterSpacing: -0.4; elide: Text.ElideRight; width: Math.min(implicitWidth, win.width * 0.4) }
             Text { anchors.right: parent.right; text: "Press Enter to play now"; color: Theme.muted; font.pixelSize: 13 }
         }
 
@@ -833,7 +833,7 @@ Window {
             visible: opacity > 0
             anchors { horizontalCenter: parent.horizontalCenter; top: parent.top; topMargin: 56 }
             width: Math.min(toastLabel.implicitWidth + 36, parent.width - 48); height: 40; radius: 12
-            color: Theme.hud; border.color: "#33FFFFFF"
+            color: Theme.hud; border.color: Theme.edge
             Behavior on opacity { NumberAnimation { duration: 180 * Theme.motion } }
             Text { id: toastLabel; anchors.centerIn: parent; width: Math.min(implicitWidth, parent.width - 36); elide: Text.ElideRight; color: Theme.text; font.family: Theme.mono; font.pixelSize: 12 }
             Timer { id: toastHide; interval: 2200; onTriggered: toast.opacity = 0 }
@@ -865,7 +865,7 @@ Window {
                         readonly property real ratio: win.st.snapshot === "poster" ? 2 / 3 : 16 / 9
                         height: Math.min(frame.height, frame.width / ratio) * zoom.value
                         width: height * ratio
-                        color: "#1A007AFF"; border.color: Theme.blue; border.width: 2
+                        color: Qt.rgba(Qt.color(Theme.blue).r, Qt.color(Theme.blue).g, Qt.color(Theme.blue).b, 0.1); border.color: Theme.blue; border.width: 2
                         function reset() { x = (frame.width - width) / 2; y = (frame.height - height) / 2 }
                         onWidthChanged: { x = Math.max(0, Math.min(x, frame.width - width)); y = Math.max(0, Math.min(y, frame.height - height)) }
                         MouseArea {

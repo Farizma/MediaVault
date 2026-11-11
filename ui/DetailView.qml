@@ -342,13 +342,17 @@ Item {
             // ---- title. In a box set it is also a dropdown of the set's films (the arrow says so)
             Component {
                 id: secTitle
+                ColumnLayout {
+                id: titleCol
+                spacing: 2
                 RowLayout {
+                    Layout.fillWidth: true
                     spacing: 8
                     TextMetrics { id: tm; font: titleField.font; text: titleField.text }
                     Field {
                         id: titleField
                         readonly property bool picker: root.d.isSet === true && !root.renaming
-                        Layout.preferredWidth: picker ? Math.min(tm.advanceWidth + 6, parent.width - 48) : parent.width - 40
+                        Layout.preferredWidth: picker ? Math.min(tm.advanceWidth + 6, titleCol.width - 48) : titleCol.width - 40
                         Layout.rightMargin: picker ? 0 : 40
                         text: root.info.title || ""
                         font.pixelSize: 28; font.weight: Font.ExtraBold; font.letterSpacing: -0.6
@@ -389,6 +393,16 @@ Item {
                         MouseArea { id: chevArea; anchors.fill: parent; anchors.margins: -4; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: titleMenu.begin(chev) }
                     }
                     Item { Layout.fillWidth: true }
+                }
+                // the original title (or the English one, with Titles set to Original): small, searchable too
+                Text {
+                    visible: (root.info.subtitle || "") !== ""
+                    Layout.fillWidth: true
+                    Layout.rightMargin: 40
+                    text: root.info.subtitle || ""
+                    color: Theme.muted; font.pixelSize: 15; font.weight: Font.Medium
+                    elide: Text.ElideRight
+                }
                 }
             }
 
