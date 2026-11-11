@@ -16,6 +16,8 @@ Choose *More info* › *Run anyway*. The SHA-256 of the setup file is listed bel
 - **Discord privacy:** adult titles (rated 18+ / R18+ / NC-17 / X, or a Hentai / Erotica genre) show only
   "Watching a video" (on by default); pick tags whose titles are never named; and set each folder to show its
   titles, only "Watching a video", or nothing at all (Library › Configure › Discord).
+- **Wheel click for full screen:** clicking the mouse wheel on the picture switches full screen on or off straight
+  away (no pause, no double-click wait). Left click still pauses, double-click still toggles full screen.
 - **Tag suggestions:** typing a tag (in View More or the Tag Manager) lists tags you have used before, most used
   first; Up / Down to pick, Enter or Tab to take one.
 - **Adult OVAs as box sets:** an adult OVA from AniList is no longer a series with seasons. Each episode is its own

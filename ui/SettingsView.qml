@@ -969,7 +969,7 @@ Item {
                                [["\u2212", "="], "Audio earlier / later (lip sync)"],
                                [["Tab"], "Skip intro, or skip credits"], [["Enter"], "Next episode now"],
                                [["I"], "Mark intro start, then end"], [["O"], "Mark where the credits start"],
-                               [["F"], "Full screen (or double-click)"], [["P"], "Picture in picture"], [["B"], "Black out other screens"], [["N"], "Reduce loud sounds"], [["U"], "Next upscaling level"],
+                               [["F"], "Full screen (or double-click, or click the mouse wheel)"], [["P"], "Picture in picture"], [["B"], "Black out other screens"], [["N"], "Reduce loud sounds"], [["U"], "Next upscaling level"],
                                [["V"], "VR view"], [["C"], "Frame as box art"], [["Shift", "C"], "Frame as fanart"],
                                [["Esc"], "Close menu, leave PiP, or back"]]
                     }

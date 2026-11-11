@@ -406,3 +406,11 @@ class OpenWithTests(unittest.TestCase):
     def test_uninstall_cleans_up(self):
         iss = (Path(__file__).resolve().parent.parent / "installer.iss").read_text(encoding="utf-8")
         self.assertIn('Subkey: "Software\\Classes\\MediaVault.Video"; Flags: uninsdeletekey dontcreatekey', iss)
+
+
+class WheelClickTests(unittest.TestCase):
+    def test_middle_button_toggles_full_screen(self):
+        hud = (Path(__file__).resolve().parent.parent / "player" / "Hud.qml").read_text(encoding="utf-8")
+        self.assertIn("acceptedButtons: Qt.LeftButton | Qt.MiddleButton", hud)
+        self.assertIn("m.button === Qt.MiddleButton && !root.cropping && !root.pip", hud)
+        self.assertIn("if (m.button !== Qt.LeftButton) return", hud)       # a wheel click never pauses

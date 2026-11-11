@@ -130,8 +130,12 @@ Window {
             hoverEnabled: true
             cursorShape: root.controlsOn ? Qt.ArrowCursor : Qt.BlankCursor
             onPositionChanged: root.poke()
-            onClicked: { if (root.popup !== "") root.popup = ""; else if (!root.cropping) Player.togglePause() }
-            onDoubleClicked: if (!root.cropping) { Player.togglePause(); Player.toggleFullscreen() }   // the click before it paused: undo that
+            acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+            // wheel click (middle button): full screen on / off, at once (no pause, no double-click wait)
+            onPressed: (m) => { if (m.button === Qt.MiddleButton && !root.cropping && !root.pip) { root.poke(); Player.toggleFullscreen() } }
+            onClicked: (m) => { if (m.button !== Qt.LeftButton) return
+                                if (root.popup !== "") root.popup = ""; else if (!root.cropping) Player.togglePause() }
+            onDoubleClicked: (m) => { if (m.button === Qt.LeftButton && !root.cropping) { Player.togglePause(); Player.toggleFullscreen() } }   // the click before it paused: undo that
             // scroll anywhere over the picture = volume, 5 % a notch (touchpads add up their small steps).
             // The Audio & Video panel swallows its own wheel events, so scrolling there never lands here.
             onWheel: (w) => {
@@ -265,7 +269,7 @@ Window {
                     RevealButton { tip: (win.st.screens || 1) > 1 ? "Shortcut  B" : "Only one screen is connected"; iconKind: "blackout"; label: "Black Out"
                         toggled: win.st.blackout === true; opacity: (win.st.screens || 1) > 1 ? 1 : 0.45
                         onClicked: Player.toggleBlackout() }
-                    RevealButton { tip: "Shortcut  F, or double-click the picture"; iconKind: win.st.fullscreen ? "windowed" : "fullscreen"
+                    RevealButton { tip: "Shortcut  F, double-click or wheel-click the picture"; iconKind: win.st.fullscreen ? "windowed" : "fullscreen"
                         label: win.st.fullscreen ? "Exit full screen" : "Full screen"; onClicked: Player.toggleFullscreen() }
                     RevealButton { tip: "Shortcut  P"; id: pipBtn; label: "Picture in picture"; iconKind: "pip"; onClicked: { root.popup = ""; Player.togglePip() } }
                     RevealButton { tip: "Use this frame as box art or fanart (C)"; id: snapBtn; label: "Snapshot"; iconKind: "snapshot"; iconColor: Theme.blue
