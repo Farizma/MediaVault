@@ -6,6 +6,7 @@ watcher and the first scan of a new folder must run the exact same pipeline.
 import asyncio
 import logging
 import os
+import re
 import threading
 from pathlib import Path
 
@@ -102,8 +103,14 @@ def _scrape_into(rows, tags, opts=None, source: str = "tmdb") -> None:
         elif hit is None:
             missed.append(db.file_hash(row["file_path"]))
         else:
+            from utils import anilist
+            ova = anilist.is_adult_ova(hit)
+            if ova:                     # each episode is its own film in a box set: "Title #2", its own cover
+                row["media_type"] = "movie"
+                row["collection_id"], row["collection_name"] = anilist.ova_set_id(hit), hit["title"]
             if "titles" in opts:
-                row["title"] = hit["title"] + (f" S{parsed.season or 1:02d}E{parsed.episode:02d}"
+                row["title"] = hit["title"] + (f" #{parsed.episode}" if ova and parsed.episode is not None
+                                               else f" S{parsed.season or 1:02d}E{parsed.episode:02d}"
                                                if row["media_type"] == "show" else "")
                 row["release_date"] = hit["release_date"] or row["release_date"]
             if "titles" in opts:
@@ -114,19 +121,22 @@ def _scrape_into(rows, tags, opts=None, source: str = "tmdb") -> None:
                 row["synopsis"] = hit["synopsis"]
             row["tmdb_id"] = hit.get("tmdb_id")
             row["anilist_id"] = hit.get("anilist_id")
-            if "gallery" in opts and hit.get("gallery_urls"):
+            if "gallery" in opts and (hit.get("gallery_urls") or hit.get("mal_id")):
                 owner = db.cast_owner(row)
                 if owner not in gallery_done:            # a series' episodes share one Gallery
                     gallery_done.add(owner)
-                    scraper.save_gallery(row, hit["gallery_urls"])
+                    scraper.save_gallery(row, anilist.gallery_urls(hit) if hit.get("anilist_id") else hit["gallery_urls"])
             if "score" in opts:
                 row["score"] = hit.get("score")
-            if "sets" in opts:
+            if "sets" in opts and not ova:
                 row["collection_id"], row["collection_name"] = hit.get("collection_id"), hit.get("collection_name")
                 if hit.get("collection_id") and hit.get("collection_poster_url") and "poster" in opts:
                     scraper.save_collection_poster(hit["collection_id"], hit["collection_poster_url"], images)
+            if ova and hit.get("poster_url") and "poster" in opts:
+                scraper.save_collection_poster(row["collection_id"], hit["poster_url"], images)
             if "genres" in opts:
                 tags.extend((row["uuid"], f"genre:{g}") for g in hit["genres"])
+            tags.extend((row["uuid"], f"studio:{st}") for st in hit.get("studios") or [])   # AniList: who made it
             if "cast" in opts and hit.get("cast"):
                 owner = db.cast_owner(row)
                 if owner not in cast_done:      # a series' episodes share one cast list
@@ -156,6 +166,30 @@ def retag(directory: dict) -> int:
     return tagrules.retag_all([directory])
 
 
+def _ova_to_set(items: list[dict], hit: dict, owner: str) -> bool:
+    """An adult OVA indexed as a series before 1.0.6: make each episode a film of one box set ("Title #2")."""
+    from utils import anilist
+    if not anilist.is_adult_ova(hit):
+        return False
+    cid, name = anilist.ova_set_id(hit), hit["title"]
+    cast = db.get_cast(owner)
+    with db._tx() as c:
+        for it in items:
+            m = re.search(r"E(\d+)\s*$", it["title"])
+            title = f"{name} #{int(m[1])}" if m else name
+            c.execute("UPDATE media_items SET media_type='movie', title=?, collection_id=?, collection_name=?, anilist_id=? "
+                      "WHERE uuid=?", (title, cid, name, hit["anilist_id"], it["uuid"]))
+    for it in items:                       # films keep their own cast list (a series kept one per folder)
+        if cast:
+            db.set_cast(it["uuid"], [{"id": p["person_id"], "name": p["name"], "role": p["role"]} for p in cast])
+    if hit.get("poster_url"):
+        try:
+            scraper.save_collection_poster(cid, hit["poster_url"])
+        except Exception:
+            log.warning("box set cover failed for %s", name, exc_info=True)
+    return True
+
+
 def fetch_missing(directory: dict) -> int:
     """Fill gaps for titles already in a folder, by what the folder scrapes: cast and photos, cover, disc art,
     box set, genres, synopsis. Titles, and anything you set yourself, are never touched. Returns titles updated."""
@@ -180,11 +214,14 @@ def fetch_missing(directory: dict) -> int:
             "poster": "poster" in opts and not all(scraper.cover_path(i).exists() for i in items),
             "disc": "disc" in opts and kind == "movie" and not scraper.disc_art(first),
             "sets": "sets" in opts and kind == "movie" and first.get("collection_id") is None,
-            "genres": "genres" in opts and not any(t.startswith("genre:") for t in tags),
+            # anime: AniList's tags became genres in 1.0.6, so a lone genre ("Hentai") is filled out too
+            "genres": "genres" in opts and sum(t.startswith("genre:") for t in tags) < (2 if anime else 1),
+            "studio": anime and not any(t.startswith("studio:") for t in tags),
             "synopsis": "synopsis" in opts and not first.get("synopsis"),
             "score": "score" in opts and first.get("score") is None,
             "certification": "certification" in opts and not first.get("certification"),
             "gallery": "gallery" in opts and not scraper.gallery_images(first),
+            "ova": anime and kind == "show",     # an adult OVA kept as a series: becomes a box set
         }
         if "photos" in opts and need["cast"]:
             need["photos"] = True
@@ -219,8 +256,10 @@ def fetch_missing(directory: dict) -> int:
             if need["synopsis"] and hit.get("synopsis"):
                 c.executemany("UPDATE media_items SET synopsis=? WHERE uuid=? AND (synopsis IS NULL OR synopsis='')",
                               [(hit["synopsis"], u) for u in uids])
-            if need["genres"]:
-                c.executemany("INSERT INTO tags (media_uuid, tag_name) VALUES (?,?)", [(u, f"genre:{g}") for u in uids for g in hit["genres"]])
+        if need["genres"] and hit.get("genres"):
+            db.set_tag_group(uids, "genre:", hit["genres"])
+        if need["studio"] and hit.get("studios"):
+            db.set_tag_group(uids, "studio:", hit["studios"])
         if need["score"] and hit.get("score") is not None:
             db.set_score(uids, hit["score"])
         db.set_scraped(uids, certification=hit.get("certification") if "certification" in opts else None,
@@ -243,8 +282,9 @@ def fetch_missing(directory: dict) -> int:
                         scraper.save_webp(img, scraper.poster_path(i))
             except Exception:
                 log.warning("poster failed for %s", first["title"], exc_info=True)
-        if need["gallery"] and hit.get("gallery_urls"):
-            scraper.save_gallery(first, hit["gallery_urls"])
+        if need["gallery"] and (hit.get("gallery_urls") or hit.get("mal_id")):
+            from utils import anilist
+            scraper.save_gallery(first, anilist.gallery_urls(hit) if hit.get("anilist_id") else hit["gallery_urls"])
         if need["disc"] and tid:
             url = scraper.disc_url(tid, keys.get("fanart", ""))
             if url:
@@ -252,6 +292,8 @@ def fetch_missing(directory: dict) -> int:
                     scraper.save_webp(scraper.fetch_image(url), scraper.disc_path(first), box=(500, 500))
                 except Exception:
                     log.warning("disc art failed for %s", first["title"], exc_info=True)
+        if anime and kind == "show":
+            _ova_to_set(items, hit, owner)          # an adult OVA kept as a series becomes a box set
         updated += 1
     if updated:
         tagrules.retag_all([directory])     # new age ratings and titles can change computed tags

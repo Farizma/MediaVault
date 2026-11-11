@@ -13,7 +13,7 @@ import database as db
 from utils import scraper
 from . import file_url
 
-FRONT_W, FRONT_H = 540, 810  # texture size for the 2:3 box faces
+FRONT_W, FRONT_H = 576, 810  # texture size for the box faces: 135 x 190 mm, a real DVD keep case
 FRONT_W_H = (FRONT_W, FRONT_H)
 SPINE_W_H = (60, FRONT_H)  # 22 : 300, a real keep case spine (14 : 190 mm)
 

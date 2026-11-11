@@ -4,6 +4,7 @@ Chosen over the anime-offline-database: that is a 40 MB+ JSON file refreshed wee
 download and keep, while AniList answers each lookup directly and adds nothing to the app's size.
 Rate limit: 90 requests a minute; a scan asks once per series (scraper.scrape_many already de-duplicates titles).
 """
+import functools
 import html
 import json
 import re
@@ -21,6 +22,8 @@ _FIELDS = """
   coverImage { extraLarge large }
   bannerImage
   genres
+  tags { name rank isGeneralSpoiler isMediaSpoiler }
+  studios { edges { isMain node { name isAnimationStudio } } }
   averageScore
   characters(sort: [ROLE, RELEVANCE], perPage: 15) {
     edges { role node { name { full } } voiceActors(language: JAPANESE, sort: RELEVANCE) { id name { full } image { large } } }
@@ -71,6 +74,33 @@ def _clean(text: str | None) -> str:
     return re.sub(r"\n{3,}", "\n\n", t)
 
 
+TAG_MIN_RANK = 60     # AniList tags this relevant or more become genre tags (spoilers never)
+TAG_MAX = 12
+
+
+def _genres(m: dict) -> list[str]:
+    """AniList's genres, then its tags (most relevant first). Adult titles have one genre ("Hentai"): what they
+    are about is in the tags."""
+    out = list(m.get("genres") or [])
+    for t in sorted(m.get("tags") or [], key=lambda t: -(t.get("rank") or 0)):
+        if len(out) >= TAG_MAX:
+            break
+        if (t.get("rank") or 0) >= TAG_MIN_RANK and not (t.get("isGeneralSpoiler") or t.get("isMediaSpoiler")) \
+                and t.get("name") and t["name"] not in out:
+            out.append(t["name"])
+    return out
+
+
+def _studios(m: dict) -> list[str]:
+    """The studio(s) that made it: the main studio, plus the other animation studios when there are only a few
+    (a long series credits dozens for single episodes)."""
+    edges = (m.get("studios") or {}).get("edges") or []
+    main = [e["node"]["name"] for e in edges if e.get("isMain") and (e.get("node") or {}).get("name")]
+    anim = [e["node"]["name"] for e in edges if (e.get("node") or {}).get("isAnimationStudio") and e["node"].get("name")]
+    both = list(dict.fromkeys(main + anim))
+    return both if len(both) <= 3 else (main or anim[:1])
+
+
 def _title(t: dict) -> str:
     return (t or {}).get("english") or (t or {}).get("romaji") or (t or {}).get("native") or ""
 
@@ -88,9 +118,9 @@ def _shape(m: dict) -> dict:
                          "photo_url": (va.get("image") or {}).get("large")})
     cover = m.get("coverImage") or {}
     score = m.get("averageScore")
-    return {"anilist_id": m.get("id"), "tmdb_id": None, "title": _title(m.get("title")), "release_date": date or None,
+    return {"anilist_id": m.get("id"), "mal_id": m.get("idMal"), "tmdb_id": None, "title": _title(m.get("title")), "release_date": date or None,
             "synopsis": _clean(m.get("description")) or None,
-            "poster_url": cover.get("extraLarge") or cover.get("large"), "genres": list(m.get("genres") or []),
+            "poster_url": cover.get("extraLarge") or cover.get("large"), "genres": _genres(m), "studios": _studios(m),
             "score": round(score / 10, 1) if score else None, "cast": cast[:15],
             "gallery_urls": [m["bannerImage"]] if m.get("bannerImage") else [],
             "collection_id": None, "collection_name": None, "collection_poster_url": None, "disc_url": None,
@@ -104,6 +134,52 @@ def _shape(m: dict) -> dict:
 _TAIL = re.compile(r"\s+(?:\d{1,3}|ova|oad|ona|special|specials|uncensored|raw)$", re.I)
 
 
+JIKAN = "https://api.jikan.moe/v4/anime/{}/pictures"
+
+
+@functools.lru_cache(maxsize=256)      # the episodes of an OVA box set ask for the same title's pictures
+def _mal_fetch(mal_id: int, limit: int) -> tuple:
+    req = urllib.request.Request(JIKAN.format(mal_id), headers={"User-Agent": "MediaVault", "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=8) as r:          # a failure raises, so it is not cached
+        data = json.load(r).get("data") or []
+    urls = []
+    for p in data:
+        u = (p.get("jpg") or {}).get("large_image_url") or (p.get("jpg") or {}).get("image_url")
+        if u and u.startswith("https://") and u not in urls:
+            urls.append(u)
+    return tuple(urls[:limit])
+
+
+def mal_pictures(mal_id, limit: int = 5) -> tuple:
+    """More Gallery images: MyAnimeList's pictures for a title, through Jikan (an open-source, keyless MAL API).
+    Best effort: any failure (offline, rate limit) gives none."""
+    if not mal_id:
+        return ()
+    try:
+        return _mal_fetch(int(mal_id), limit)
+    except Exception:
+        return ()
+
+
+def gallery_urls(hit: dict) -> list[str]:
+    """The AniList banner, then MyAnimeList pictures."""
+    own = list(hit.get("gallery_urls") or [])
+    return own + [u for u in mal_pictures(hit.get("mal_id")) if u not in own]
+
+
+OVA_SET_OFFSET = 2_000_000_000     # box set ids for adult OVAs, apart from TMDB collection ids (and yours, below 0)
+
+
+def is_adult_ova(hit: dict | None) -> bool:
+    """An adult OVA: every episode is its own release with its own cover, so its files become films in a box set
+    named after it ("Title #1", "Title #2") instead of a series with seasons."""
+    return bool(hit) and hit.get("format") == "OVA" and hit.get("certification") == "18+" and bool(hit.get("anilist_id"))
+
+
+def ova_set_id(hit: dict) -> int:
+    return OVA_SET_OFFSET + int(hit["anilist_id"])
+
+
 def lookup(title: str, year: str | None = None) -> dict | None:
     """The best match for a series or film title (with its year when that narrows it), or None. Adult titles are
     included. When nothing matches, a trailing episode number or "OVA" is dropped and it asks once more."""
@@ -112,8 +188,12 @@ def lookup(title: str, year: str | None = None) -> dict | None:
         data = _post(_ONE, {"q": title, "y": int(year)})
     if not data.get("Media"):
         data = _post(_ANY, {"q": title})
+    if not data.get("Media") and (plain := " ".join(re.sub(r"[^\w\s]", " ", title).split())) != title:
+        return lookup(plain, year)          # words only: "Title-Name" -> "Title Name", "Title: Sub" -> "Title Sub"
     if not data.get("Media") and (short := _TAIL.sub("", title).strip()) and short != title:
         return lookup(short)
+    if not data.get("Media") and 2 <= len(title.split()) <= 3 and (joined := title.replace(" ", "")) != title:
+        data = _post(_ANY, {"q": joined})     # a short name split by the file name: "Drop Out" -> "DropOut"
     return _shape(data["Media"]) if data.get("Media") else None
 
 
@@ -126,7 +206,12 @@ def details(anilist_id: int) -> dict:
 
 def search(query: str) -> list[dict]:
     """Fix Scraped Data candidates, in the same shape as scraper.tmdb_search."""
-    media = ((_post(_SEARCH, {"q": query}).get("Page") or {}).get("media")) or []
+    media = []
+    plain = " ".join(re.sub(r"[^\w\s]", " ", query).split())
+    for q in dict.fromkeys([query, plain, plain.replace(" ", "") if 2 <= len(plain.split()) <= 3 else plain]):
+        media = ((_post(_SEARCH, {"q": q}).get("Page") or {}).get("media")) or []
+        if media:                            # by hand too: punctuation, then a split short name, can hide a match
+            break
     return [{"id": str(m["id"]), "source": "anilist", "title": _title(m.get("title")),
              "year": str(m.get("seasonYear") or ""), "overview": _clean(m.get("description"))[:400],
              "thumb": (m.get("coverImage") or {}).get("large") or (m.get("coverImage") or {}).get("medium") or ""}

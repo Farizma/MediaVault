@@ -16,7 +16,7 @@ from utils import autotag
 
 FIELDS = [  # id, label, kind ("text" or "number")
     ("file", "File name", "text"), ("folder", "Folder path", "text"), ("title", "Title", "text"),
-    ("original", "Original title", "text"), ("genre", "Genre", "text"), ("tag", "Your tags", "text"),
+    ("original", "Original title", "text"), ("genre", "Genre", "text"), ("studio", "Studio", "text"), ("tag", "Your tags", "text"),
     ("rating", "Age rating", "text"), ("resolution", "Resolution", "text"), ("codec", "Video codec", "text"),
     ("audio", "Audio", "text"), ("type", "Type (movie / show / clip)", "text"),
     ("year", "Year", "number"), ("minutes", "Length (minutes)", "number"), ("score", "Audience score (0-10)", "number"),
@@ -72,8 +72,10 @@ def _values(field: str, item: dict, info: dict) -> list:
         return [t for t in (item.get("original_title"), item.get("romaji_title")) if t]
     if field == "genre":
         return list(info.get("genres", ()))
+    if field == "studio":
+        return [t[7:] for t in info.get("tags", ()) if t.startswith("studio:")]
     if field == "tag":
-        return [t for t in info.get("tags", ()) if not t.startswith(autotag.PREFIX)]
+        return [t for t in info.get("tags", ()) if not t.startswith((autotag.PREFIX, "studio:"))]
     if field == "rating":
         return [item.get("certification") or ""]
     if field == "resolution":

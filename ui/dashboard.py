@@ -136,7 +136,7 @@ CUSTOM_ART = {"front": scraper.custom_front_path, "back": scraper.custom_back_pa
 
 
 def save_box_art(img, items: list[dict], face: str) -> None:
-    """Centre-crop to the face's shape (2:3 cover, or a 22:300 spine) and save as the custom art of each item."""
+    """Centre-crop to the face's shape (135:190 cover, or a 14:190 spine) and save as the custom art of each item."""
     size = dvd_box.SPINE_W_H if face == "spine" else (500, 500) if face == "disc" else dvd_box.FRONT_W_H
     img = ImageOps.exif_transpose(img).convert("RGB")
     if face == "spine" and img.width > img.height:  # spines are often scanned lying down
@@ -543,7 +543,8 @@ class Dashboard(QObject):
             "disc": file_url(scraper.disc_art(art)) if scraper.disc_art(art) else "",
             "customDisc": scraper.custom_disc_path(art).exists(),
             "rating": db.get_rating(item["uuid"]), "note": db.get_note(item["uuid"]),
-            "tags": [{"name": t, "genre": t.startswith("genre:"), "auto": t.startswith("auto:")} for t in db.tags_for(item["uuid"])
+            "tags": [{"name": t, "genre": t.startswith("genre:"), "auto": t.startswith("auto:"), "studio": t.startswith("studio:")}
+                     for t in db.tags_for(item["uuid"])
                      if not t.startswith("rating:")],
             "playLabel": "Resume" if resume else "Play",
             "resume": resume and not films,
@@ -631,11 +632,15 @@ class Dashboard(QObject):
                      None if show else cid, None if show else cname, hit["genres"])
         if hit.get("score") is not None:
             db.set_score([i["uuid"] for i in items], hit["score"])
+        db.set_tag_group([i["uuid"] for i in items], "studio:", hit.get("studios") or [])   # AniList only; others clear it
         with db._tx() as c:   # a fix replaces these outright (the old match's values were wrong)
             c.executemany("UPDATE media_items SET certification=?, original_title=?, romaji_title=? WHERE uuid=?",
                           [(hit.get("certification"), hit.get("original_title"), hit.get("romaji_title"), i["uuid"]) for i in items])
         with db._tx() as c:   # which source the title now comes from (an AniList id means AniList scoring)
             c.executemany("UPDATE media_items SET anilist_id=? WHERE uuid=?", [(hit.get("anilist_id"), i["uuid"]) for i in items])
+        if hit.get("anilist_id"):
+            from utils import anilist
+            hit["gallery_urls"] = anilist.gallery_urls(hit)
         if hit.get("gallery_urls"):
             scraper.save_gallery(items[0], hit["gallery_urls"], replace=True)
         if hit.get("cast"):
@@ -663,6 +668,11 @@ class Dashboard(QObject):
         if hit.get("collection_id") and hit.get("collection_poster_url") and not show:
             scraper.save_collection_poster(hit["collection_id"], hit["collection_poster_url"], cache)
         new_key = key
+        from utils import anilist
+        if show and anilist.is_adult_ova(hit):     # an adult OVA: each episode becomes a film of one box set
+            import watcher
+            if watcher._ova_to_set([db.get_media(i["uuid"]) for i in items], hit, key):
+                new_key = f"set:{anilist.ova_set_id(hit)}"
         self.toast.emit(f"Matched to {hit['title']}" + (f" ({hit['release_date'][:4]})" if hit.get("release_date") else ""))
         try:     # the new age rating and titles can change computed tags
             from utils import tagrules
@@ -738,7 +748,8 @@ class Dashboard(QObject):
         out = []
         for t in db.tag_counts():
             name = t["name"]
-            kind = "genre" if name.startswith("genre:") else "auto" if name.startswith("auto:") else "user"
+            kind = "genre" if name.startswith("genre:") else "auto" if name.startswith("auto:") \
+                else "studio" if name.startswith("studio:") else "user"
             out.append({"name": name, "label": name.split(":", 1)[1] if kind != "user" else name, "kind": kind, "count": t["n"]})
         return out
 
@@ -759,7 +770,7 @@ class Dashboard(QObject):
             poster = scraper.cover_path(c)
             out.append({"key": c["key"], "title": title, "subtitle": subtitle, "year": (c.get("release_date") or "")[:4],
                         "kind": c["media_type"], "poster": file_url(poster) if poster.exists() else "",
-                        "tags": [t.split(":", 1)[1] if t.startswith(("auto:", "genre:")) else t for t in tags]})
+                        "tags": [t.split(":", 1)[1] if t.startswith(("auto:", "genre:", "studio:")) else t for t in tags]})
             if len(out) >= 2000:
                 break
         return out
@@ -767,7 +778,7 @@ class Dashboard(QObject):
     @Slot("QVariantList", str, bool)
     def bulkTag(self, keys, tag: str, add: bool):
         tag = tag.strip()
-        if not tag or tag.startswith(("auto:", "rating:")):
+        if not tag or tag.startswith(("auto:", "rating:", "studio:")):
             return
         uids = [u for k in keys for u in db.uuids_for(str(k))]
         if add:
@@ -780,14 +791,14 @@ class Dashboard(QObject):
 
     @Slot(str, str)
     def renameTag(self, old: str, new: str):
-        if old.startswith(("auto:", "rating:")) or new.strip().startswith(("auto:", "rating:")):
+        if old.startswith(("auto:", "rating:", "studio:")) or new.strip().startswith(("auto:", "rating:", "studio:")):
             return
         db.rename_tag(old, new)
         self.libraryChanged.emit()
 
     @Slot(str)
     def deleteTag(self, name: str):
-        if name.startswith("auto:"):
+        if name.startswith(("auto:", "studio:")):     # computed, and studios from AniList, stay
             return        # computed: change the rule or the names instead
         db.delete_tag(name)
         self._refresh_insights()
@@ -947,14 +958,38 @@ class Dashboard(QObject):
     def pickBoxArt(self, key: str, face: str):
         """face = front / back / spine / disc. A file dialog (starting in the title's own folder), then View More's
         crop editor (artPicked) to frame, zoom and turn it; saveCroppedArt writes it."""
-        if face not in CUSTOM_ART:
+        if face not in CUSTOM_ART and face != "wrap":
             return
 
         def run():
-            path = pick_image(self._media_folder(key), f"Choose {face} art")
-            if path:
-                self.artPicked.emit(key, face, file_url(path, bust=False), path)
+            path = pick_image(self._media_folder(key), "Choose a whole cover scan (back, spine and front)" if face == "wrap"
+                              else f"Choose {face} art")
+            if not path:
+                return
+            if face in ("wrap", "front") and self._apply_wrap(key, path, face == "wrap"):
+                return
+            self.artPicked.emit(key, face, file_url(path, bust=False), path)
         QTimer.singleShot(0, run)  # same reason as pickFolder: no modal dialog from inside a QML handler
+
+    def _apply_wrap(self, key: str, path: str, asked: bool) -> bool:
+        """A whole sleeve scan (back | spine | front): cut it into the three faces. A wide image picked as the
+        Front is taken as a whole sleeve too. Returns False when it is not one (then the crop editor opens)."""
+        from utils import boxwrap
+        try:
+            img = Image.open(path)
+            if not boxwrap.is_wrap(img):
+                if asked:
+                    self.toast.emit("That image is not a whole cover (it should be about 1.5 times wider than tall). Opening it as the front.")
+                return False
+            items = self._art_items(key)
+            for face, part in boxwrap.split(img).items():
+                save_box_art(part, items, face)
+            self.toast.emit("Cover split into front, spine and back")
+        except Exception as e:
+            log.exception("cover wrap")
+            self.toast.emit(f"Could not use that image: {e}")
+        self.boxArtChanged.emit(key)
+        return True
 
     @Slot(str, str, str, float, float, float, float, int)
     def saveCroppedArt(self, key: str, face: str, path: str, x: float, y: float, w: float, h: float, turns: int):
@@ -1086,11 +1121,19 @@ class Dashboard(QObject):
             self.reload()
 
     @Slot(result="QVariantList")
+    def tagNames(self):
+        """Tags you have typed before, for suggestions while typing a new one (most used first)."""
+        counts = {t["name"]: t["n"] for t in db.tag_counts()}
+        names = [t for t in db.user_tags() if not t.startswith("auto:")]
+        return sorted(names, key=lambda t: (-counts.get(t, 0), t.casefold()))
+
+    @Slot(result="QVariantList")
     def allTags(self):
         """Your tags and the genres, for choosing what the All tab leaves out."""
         genres = sorted({g for info in db.search_index().values() for g in info["genres"]})
         return [{"name": t, "label": t[5:] if t.startswith("auto:") else t} for t in db.user_tags()] + \
-               [{"name": "genre:" + g, "label": g} for g in genres]
+               [{"name": "genre:" + g, "label": g} for g in genres] + \
+               [{"name": t["name"], "label": "Studio: " + t["name"][7:]} for t in db.tag_counts() if t["name"].startswith("studio:")]
 
     @Slot(int, int)
     def moveTab(self, dir_id: int, to: int):
@@ -1362,6 +1405,11 @@ class Dashboard(QObject):
                 self.toast.emit(f"Could not roll back: {e}")
             self.componentsChecked.emit(components.check(components.inventory(), log.warning))
         threading.Thread(target=work, daemon=True, name="rollback").start()
+
+    @Slot()
+    def windowClosing(self):
+        """The library window is closing: save its size and place, then end Media Vault."""
+        self.app._main_closing()
 
     @Slot()
     def restartApp(self):

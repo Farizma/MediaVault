@@ -10,6 +10,9 @@ Window {
     minimumHeight: 640
     title: "Media Vault"
     color: Theme.black
+    // closing the library window ends Media Vault (the player too). Handled here, not by connecting Python to
+    // `closing`: PySide cannot pass the QQuickCloseEvent, so that slot failed and Media Vault stayed running hidden.
+    onClosing: Backend.windowClosing()
 
     Loader {
         id: screen

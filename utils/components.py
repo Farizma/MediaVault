@@ -217,7 +217,7 @@ def update(component: str, log=print) -> str:
             rollback.remember_pip(component, before)
     if component == "libmpv":
         setup.download_mpv(bin_dir(), log)
-        return "libmpv updated. It is used from the next video."
+        return "libmpv updated. Restart Media Vault to use it."
     if component == "libvlc":
         setup.download_vlc(bin_dir(), log)
         return "libVLC updated. Restart Media Vault to use it."

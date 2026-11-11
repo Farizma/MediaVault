@@ -61,7 +61,6 @@ class App:
         self.main_window = main_window
         self.engine.hud = hud_window
         self._restore_window(main_window)
-        main_window.closing.connect(self._main_closing)
         if not self.dashboard.needsSetup:
             self.start_library()
 
@@ -330,11 +329,13 @@ def main() -> int:
         sys.argv.remove("--restarted")
         import time
         time.sleep(1.5)
-    try:                                   # a rollback asked for last time: swap the files before any engine loads
+    try:                                   # before any engine loads: finish updates that had to wait, delete what
+        import utils                       # they moved aside, and swap in a rollback asked for last time
+        setup.clean_replaced(utils.bin_dir())
         from utils import rollback
         rollback.apply_pending()
     except Exception:
-        logging.exception("rollback at start-up")
+        logging.exception("updates at start-up")
     arg = sys.argv[1] if len(sys.argv) > 1 else ""
     if not setup.run_setup():
         return 1

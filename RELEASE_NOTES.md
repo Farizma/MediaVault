@@ -1,25 +1,36 @@
-## Media Vault 1.0.5
+## Media Vault 1.0.6
 
-**Install or update:** download `MediaVault_v1.0.5_setup.exe` below and run it.
-Already on 1.0.x? Settings › About & Updates › Download & install. Updating *to* 1.0.5 still opens the setup
-wizard once (that is how 1.0.4 and earlier update); from 1.0.5 on, updates happen inside Media Vault.
+**Install or update:** Settings › About & Updates › Download & install (it installs inside Media Vault and reopens),
+or download `MediaVault_v1.0.6_setup.exe` below.
 
 **Windows SmartScreen:** this build is not code-signed yet, so Windows may say it "protected your PC".
 Choose *More info* › *Run anyway*. The SHA-256 of the setup file is listed below.
 
-### Changed
-- **Updates stay inside Media Vault.** Download & install no longer opens the setup wizard: Media Vault downloads
-  the new version, closes, installs it in the same folder with no windows, and opens again. A copy installed for
-  all users still shows Windows' own permission prompt once.
-
 ### New
-- **Update all** in Settings › About & Updates updates the video engines, shader and packages, then Media Vault.
-- **Update badge:** a count on the Settings button and next to About & Updates whenever something has an update
-  (checked a minute after start, then weekly, and whenever you open About & Updates).
-- **Roll back:** Media Vault can go back to the previous release (two clicks, same silent install). libmpv, libVLC
-  and the shader keep the version they replaced; Roll back puts it back when Media Vault restarts, and rolling back
-  again undoes it. Running from source, Python packages roll back with pip.
+- **Tag suggestions:** typing a tag (in View More or the Tag Manager) lists tags you have used before, most used
+  first; Up / Down to pick, Enter or Tab to take one.
+- **Adult OVAs as box sets:** an adult OVA from AniList is no longer a series with seasons. Each episode is its own
+  film ("Title #1", "Title #2", in number order) inside one box set, so every episode keeps its own cover and disc
+  art. Titles already in your library change over with Fix Scraped Data, or Fetch missing on the folder.
+- **Whole cover scans:** "Whole cover…" under the 3D box takes one scan of the whole sleeve (back, spine and front
+  side by side), finds the spine and wraps it round the box. A wide image chosen as the Front is handled the same way.
+- **AniList genres and tags:** AniList gives adult titles a single genre ("Hentai"); what a title is about is in
+  AniList's tags. The most relevant ones (no spoilers, up to 12) now come in as genres, the same blue tags films get
+  from TMDB, so they filter, search and show in Insights like any genre.
+- **Studio tags:** every title from AniList gets its studio(s) as an amber tag. They stay put (re-tagging and rules
+  never remove them), can't be deleted by accident, and work in Tag Manager rules ("if Studio is ..., tag ...").
+- **More Gallery images** for anime: MyAnimeList's pictures (through Jikan, an open-source MAL API) after the AniList banner.
+
+### Changed
+- The 3D box has the proportions of a real DVD case (135 × 190 mm), so covers and sleeve scans fit without cropping.
 
 ### Fixed
-- After "Starting the installer… Media Vault will close", Media Vault stayed open (its close was scheduled from a
-  background thread, where it never ran).
+- **Closing the window left Media Vault running, hidden** (and logged a crash each time): the close handler could not
+  receive Qt's close event. Media Vault now saves its size and place and quits properly. This was also why the old
+  updater's "Media Vault will close" never happened.
+- **Updating libmpv failed** with "Permission denied" while Media Vault had it loaded. The loaded file is now moved
+  aside and replaced; libVLC, which used to be deleted half-way when in use, waits for the next start instead.
+- AniList searches (automatic and Fix Scraped Data) retry with words only when punctuation in a file name
+  ("Title-Name", "Title!") stopped a match, and join a split short name ("Drop Out" finds "Dropout").
+- The hover preview on cards could not jump back to its start for its 15-second loop.
+- Titles already in your library pick up the new genres, studios and OVA box sets with **Fetch missing** on the folder.

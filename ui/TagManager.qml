@@ -41,7 +41,7 @@ Sheet {
     function pickedKeys() { return Object.keys(picked) }
     function tagOptions() {
         return [{ value: "", label: "All titles" }].concat(tags.map(function(t) {
-            return { value: t.name, label: (t.kind === "genre" ? "Genre: " : t.kind === "auto" ? "Auto: " : "") + t.label + "  (" + t.count + ")" } }))
+            return { value: t.name, label: (t.kind === "genre" ? "Genre: " : t.kind === "auto" ? "Auto: " : t.kind === "studio" ? "Studio: " : "") + t.label + "  (" + t.count + ")" } }))
     }
     function fieldKind(id) { var f = rulesInfo.fields.find(function(x) { return x.value === id }); return f ? f.kind : "text" }
     function testsFor(field) { var k = fieldKind(field); return rulesInfo.tests.filter(function(t) { return t.kinds.indexOf(k) >= 0 }) }
@@ -160,10 +160,10 @@ Sheet {
                 spacing: 8
                 Text { text: root.pickedCount === 0 ? "Pick titles (Shift-click picks a run)" : root.pickedCount + " picked"; color: root.pickedCount ? Theme.text : Theme.faint
                     font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 220 }
-                Field { id: newTag; Layout.fillWidth: true; placeholderText: "Tag to add, e.g. Kids or Rewatch"; enabled: root.pickedCount > 0
-                    onAccepted: if (text.trim() !== "") { Backend.bulkTag(root.pickedKeys(), text, true); text = "" } }
+                TagField { id: newTag; Layout.fillWidth: true; placeholderText: "Tag to add, e.g. Kids or Rewatch"; enabled: root.pickedCount > 0
+                    onChosen: (name) => Backend.bulkTag(root.pickedKeys(), name, true) }
                 GlassButton { label: "Add tag"; primary: true; enabled: root.pickedCount > 0 && newTag.text.trim() !== ""; opacity: enabled ? 1 : 0.4
-                    onClicked: { Backend.bulkTag(root.pickedKeys(), newTag.text, true); newTag.text = "" } }
+                    onClicked: newTag.take(newTag.text.trim()) }
                 Dropdown {
                     id: removeDrop
                     Layout.preferredWidth: 200
@@ -214,13 +214,13 @@ Sheet {
                             anchors { fill: parent; leftMargin: 12; rightMargin: 8 }
                             spacing: 10
                             Rectangle { implicitWidth: kindText.implicitWidth + 12; implicitHeight: 20; radius: 6; color: "transparent"
-                                border.color: modelData.kind === "user" ? Theme.green : modelData.kind === "genre" ? Theme.blue : Theme.lineStrong
-                                Text { id: kindText; anchors.centerIn: parent; text: modelData.kind === "user" ? "YOURS" : modelData.kind === "genre" ? "GENRE" : "AUTO"
-                                    color: modelData.kind === "user" ? Theme.green : modelData.kind === "genre" ? Theme.blue : Theme.muted; font.family: Theme.mono; font.pixelSize: 9 } }
+                                border.color: modelData.kind === "user" ? Theme.green : modelData.kind === "genre" ? Theme.blue : modelData.kind === "studio" ? Theme.amber : Theme.lineStrong
+                                Text { id: kindText; anchors.centerIn: parent; text: ({ user: "YOURS", genre: "GENRE", studio: "STUDIO" })[modelData.kind] || "AUTO"
+                                    color: modelData.kind === "user" ? Theme.green : modelData.kind === "genre" ? Theme.blue : modelData.kind === "studio" ? Theme.amber : Theme.muted; font.family: Theme.mono; font.pixelSize: 9 } }
                             Field {
                                 Layout.fillWidth: true
                                 text: modelData.label
-                                readOnly: modelData.kind === "auto"
+                                readOnly: modelData.kind === "auto" || modelData.kind === "studio"
                                 topPadding: 4; bottomPadding: 4
                                 onEditingFinished: if (text.trim() !== "" && text !== modelData.label) {
                                     Backend.renameTag(modelData.name, modelData.kind === "genre" ? "genre:" + text.trim() : text.trim()); root.tags = Backend.tagSummary() }
@@ -229,7 +229,7 @@ Sheet {
                             Pill { Layout.preferredWidth: 128; label: parent.parent.hidden ? "Hidden from All" : "In All"; selected: parent.parent.hidden; accent: Theme.red
                                 onClicked: { Backend.toggleHidden("all_tags", modelData.name); root.hiddenAll = Backend.hiddenFrom("all_tags") } }
                             GlassButton { small: true; label: "Show titles"; onClicked: { tagFilter.value = modelData.name; root.titles = Backend.taggingTitles("", modelData.name); search.text = ""; root.tab = 0 } }
-                            GlassButton { small: true; label: "Delete"; enabled: modelData.kind !== "auto"; opacity: enabled ? 1 : 0; glyphColor: Theme.red
+                            GlassButton { small: true; label: "Delete"; enabled: modelData.kind !== "auto" && modelData.kind !== "studio"; opacity: enabled ? 1 : 0; glyphColor: Theme.red
                                 onClicked: { Backend.deleteTag(modelData.name); root.tags = Backend.tagSummary() } }
                         }
                     }

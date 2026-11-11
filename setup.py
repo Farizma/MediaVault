@@ -217,7 +217,43 @@ def _safe_extract(zf: zipfile.ZipFile, dest: Path) -> None:
     zf.extractall(dest)
 
 
-def download_vlc(bin_dir: Path, log=print) -> None:
+def _aside(path: Path) -> None:
+    """Move a file or folder out of the way, even while Windows has it loaded (a DLL in use can be renamed, not
+    overwritten). The leftover is deleted at the next start (clean_replaced)."""
+    if path.exists():
+        path.rename(path.with_name(f"{path.name}.old-{int(time.time() * 1000)}"))
+
+
+def _place(src: Path, dest: Path) -> None:
+    """Put a new file where an old one may be in use."""
+    try:
+        shutil.copy(src, dest)
+    except PermissionError:
+        _aside(dest)
+        shutil.copy(src, dest)
+
+
+def clean_replaced(bin_dir: Path) -> None:
+    """At start-up: delete what updates moved aside (nothing has them loaded any more), and finish a libVLC update
+    that had to wait (its folder was in use)."""
+    if not bin_dir.is_dir():
+        return
+    staged = bin_dir / "vlc.new"
+    if staged.is_dir():
+        try:
+            _aside(bin_dir / "vlc")
+            staged.rename(bin_dir / "vlc")
+        except OSError:
+            pass
+    for old in list(bin_dir.glob("*.old-*")) + list((bin_dir / "shaders").glob("*.old-*")):
+        try:
+            shutil.rmtree(old) if old.is_dir() else old.unlink()
+        except OSError:
+            pass
+
+
+def download_vlc(bin_dir: Path, log=print) -> bool:
+    """Returns False when the new libVLC waits for the next start (the current one is in use)."""
     name = re.search(r'href="(vlc-[\d.]+-win64\.zip)"', _fetch_text(VLC_INDEX))
     if not name:
         raise RuntimeError("could not find the VLC zip on get.videolan.org")
@@ -231,8 +267,16 @@ def download_vlc(bin_dir: Path, log=print) -> None:
         _download(VLC_INDEX + name[1], archive, log, expected)
         with zipfile.ZipFile(archive) as zf:
             _safe_extract(zf, out)
-        shutil.rmtree(bin_dir / "vlc", ignore_errors=True)
-        shutil.move(str(next(out.iterdir())), str(bin_dir / "vlc"))
+        new = bin_dir / "vlc.new"
+        shutil.rmtree(new, ignore_errors=True)
+        shutil.move(str(next(out.iterdir())), str(new))
+    try:                       # never delete a libVLC that is loaded: half of it would go and the rest stay locked
+        _aside(bin_dir / "vlc")
+    except OSError:
+        log("libVLC is in use: the new version goes in when Media Vault starts again")
+        return False
+    new.rename(bin_dir / "vlc")
+    return True
 
 
 def _latest_mpv() -> dict:
@@ -300,7 +344,7 @@ def download_mpv(bin_dir: Path, log=print) -> None:
         _download(asset["browser_download_url"], archive, log, digest or None)
         dll = _extract_7z(archive, ("libmpv-2.dll", "mpv-2.dll"), Path(tmp) / "out", log)
         for name in ("libmpv-2.dll", "mpv-2.dll"):  # python-mpv looks for either name
-            shutil.copy(dll, bin_dir / name)
+            _place(dll, bin_dir / name)              # the one Media Vault has loaded is moved aside, not overwritten
     (bin_dir / "mpv.version").write_text(asset["name"], encoding="utf-8")
 
 

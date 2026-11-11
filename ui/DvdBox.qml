@@ -23,8 +23,8 @@ Item {
     property bool hint: true               // show "Drag to spin" (its row is always reserved, so the box never jumps)
     readonly property bool dragging: drag.pressed || coast.running
 
-    // a real keep case is 135 x 190 x 14 mm: same proportions, so real spine scans fit without stretching
-    readonly property real boxW: 200
+    // a real keep case is 135 x 190 x 14 mm: same proportions, so real cover and spine scans fit without cropping
+    readonly property real boxW: 213
     readonly property real boxH: 300
     readonly property real boxD: 22
     // camera far enough back that the box fits at any angle; it backs off further while the cover swings open
@@ -110,19 +110,19 @@ Item {
         id: scene
         anchors.fill: parent
         // inside of the case (seen once the cover opens)
-        Face { g: root.geo.tray; visible: root.opened > 0; width: 400; height: 600
+        Face { g: root.geo.tray; visible: root.opened > 0; width: 426; height: 600
             Rectangle { anchors.fill: parent; color: "#141416" }
-            Repeater { model: 3; Rectangle { x: 26; y: 120 + index * 150; width: 348; height: 2; color: "#1F1F22" } }
+            Repeater { model: 3; Rectangle { x: 26; y: 120 + index * 150; width: 374; height: 2; color: "#1F1F22" } }
         }
         // the disc, seated in the tray; it spins up as the cover opens
         Face { g: root.geo.disc; visible: root.opened > 0 && root.geo.disc.show; width: 344; height: 344
             Disc { anchors.fill: parent; source: root.disc; spin: 540 * root.opened }
         }
-        Face { g: root.geo.back; width: 400; height: 600
-            Image { anchors.fill: parent; source: root.back; fillMode: Image.PreserveAspectCrop; asynchronous: true; sourceSize.width: 400 }
+        Face { g: root.geo.back; width: 426; height: 600
+            Image { anchors.fill: parent; source: root.back; fillMode: Image.PreserveAspectCrop; asynchronous: true; sourceSize.width: 426 }
         }
-        Face { g: root.geo.top; width: 400; height: 44; Rectangle { anchors.fill: parent; color: "#2C2C2E" } }
-        Face { g: root.geo.bottom; width: 400; height: 44; Rectangle { anchors.fill: parent; color: "#232325" } }
+        Face { g: root.geo.top; width: 426; height: 44; Rectangle { anchors.fill: parent; color: "#2C2C2E" } }
+        Face { g: root.geo.bottom; width: 426; height: 44; Rectangle { anchors.fill: parent; color: "#232325" } }
         Face { g: root.geo.edge; width: 44; height: 600   // the opening side: the cover's lip over the tray
             Rectangle { anchors.fill: parent; color: "#2C2C2E" }
             Rectangle { x: 20; width: 4; height: parent.height; color: "#1F1F22" }
@@ -147,9 +147,9 @@ Item {
             }
         }
         // the cover: outside (poster) and inside (liner); only the side facing you is drawn
-        Face { g: root.geo.liner; width: 400; height: 600; Rectangle { anchors.fill: parent; color: "#1C1C1E" } }
-        Face { g: root.geo.front; width: 400; height: 600
-            Image { anchors.fill: parent; source: root.front; fillMode: Image.PreserveAspectCrop; asynchronous: true; sourceSize.width: 400 }
+        Face { g: root.geo.liner; width: 426; height: 600; Rectangle { anchors.fill: parent; color: "#1C1C1E" } }
+        Face { g: root.geo.front; width: 426; height: 600
+            Image { anchors.fill: parent; source: root.front; fillMode: Image.PreserveAspectCrop; asynchronous: true; sourceSize.width: 426 }
             Rectangle {                     // the sleeve's gloss slides across as the box turns
                 width: parent.width * 0.7; height: parent.height * 1.4; y: -parent.height * 0.2
                 x: parent.width * (0.15 + 0.9 * Math.sin(root.yaw * Math.PI / 180)) - width / 2

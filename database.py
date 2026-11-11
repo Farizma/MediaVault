@@ -429,8 +429,13 @@ def episodes_in(folder: str) -> list[dict]:
     return sorted(rows, key=lambda r: _natkey(os.path.basename(r["file_path"])))
 
 
+def _natural(text: str) -> list:
+    """"Title #2" before "Title #10"."""
+    return [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", text.lower())]
+
+
 def _by_release(films: list[dict]) -> list[dict]:
-    return sorted(films, key=lambda f: (f["release_date"] or "9999", f["title"].lower()))
+    return sorted(films, key=lambda f: (f["release_date"] or "9999", _natural(f["title"])))
 
 
 def list_library(dir_id: int | None = None, sets: bool | None = None) -> list[dict]:
@@ -656,10 +661,18 @@ def add_tag_many(uids, name: str) -> None:
 
 
 def user_tags() -> list[str]:
-    """Tags a person typed. `genre:` and `rating:` tags are written by the app."""
+    """Tags a person typed. `genre:`, `studio:` and `rating:` tags are written by the app."""
     return [r["t"] for r in conn().execute(
-        "SELECT DISTINCT tag_name t FROM tags WHERE tag_name NOT LIKE 'genre:%' "
+        "SELECT DISTINCT tag_name t FROM tags WHERE tag_name NOT LIKE 'genre:%' AND tag_name NOT LIKE 'studio:%' "
         "AND tag_name NOT LIKE 'rating:%' ORDER BY t COLLATE NOCASE")]
+
+
+def set_tag_group(uids, prefix: str, names) -> None:
+    """Replace one group of app-written tags (prefix "genre:" or "studio:") on these items. Your tags stay."""
+    uids, names = list(uids), list(dict.fromkeys(n for n in names if n))
+    with _tx() as c:
+        c.executemany("DELETE FROM tags WHERE media_uuid=? AND tag_name LIKE ?", [(u, prefix + "%") for u in uids])
+        c.executemany("INSERT INTO tags (media_uuid, tag_name) VALUES (?,?)", [(u, prefix + n) for u in uids for n in names])
 
 
 def set_rating(uid: str, stars: int) -> None:

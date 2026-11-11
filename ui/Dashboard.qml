@@ -19,10 +19,10 @@ Item {
         property real startMs: 0
         onMediaStatusChanged: if (mediaStatus === MediaPlayer.LoadedMedia && duration > 0) {
             startMs = duration * 0.2
-            position = startMs
+            standby.setPosition(startMs)
             play()
         }
-        onPositionChanged: if (position > startMs + 15000) position = startMs     // 15 second loop
+        onPositionChanged: if (standby.position > startMs + 15000) standby.setPosition(startMs)     // 15 second loop
     }
     property var previewOwner: null
     function startPreview(output, url) {

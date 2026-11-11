@@ -274,8 +274,9 @@ Item {
                     anchors.horizontalCenter: parent.horizontalCenter
                     spacing: 6
                     Repeater {
-                        model: [["front", "Front", root.cur.customFront], ["spine", "Spine", root.cur.customSpine], ["back", "Back", root.cur.customBack], ["disc", "Disc", root.cur.customDisc]]
-                        GlassButton { small: true; label: modelData[1] + (modelData[2] ? " \u2713" : "\u2026"); onClicked: Backend.pickBoxArt(root.cur.key || root.itemKey, modelData[0]) }
+                        model: [["wrap", "Whole cover", false], ["front", "Front", root.cur.customFront], ["spine", "Spine", root.cur.customSpine], ["back", "Back", root.cur.customBack], ["disc", "Disc", root.cur.customDisc]]
+                        GlassButton { small: true; label: modelData[1] + (modelData[2] ? " \u2713" : "\u2026"); onClicked: Backend.pickBoxArt(root.cur.key || root.itemKey, modelData[0])
+                            tip: modelData[0] === "wrap" ? "One scan of the whole sleeve (back, spine and front side by side): Media Vault finds the spine and wraps it round the box" : "" }
                     }
                     GlassButton {
                         small: true; label: "Reset"
@@ -588,17 +589,20 @@ Item {
                             model: root.info.tags || []
                             Pill {
                                 // genres (blue, scraped), automatic tags from folders and file names (grey), yours (green)
-                                label: (modelData.genre ? modelData.name.substring(6) : modelData.auto ? modelData.name.substring(5) : modelData.name)
-                                       + (modelData.genre ? "" : "   \u00D7")
-                                accent: modelData.genre ? Theme.blue : modelData.auto ? Theme.muted : Theme.green
-                                onClicked: if (!modelData.genre) { Backend.removeTag(root.infoKey, modelData.name); root.refresh() }
+                                // studios (amber, from AniList, kept) and genres (blue, scraped) cannot be removed here
+                                readonly property bool fixed: modelData.genre || modelData.studio
+                                label: (modelData.genre ? modelData.name.substring(6) : modelData.studio ? modelData.name.substring(7)
+                                        : modelData.auto ? modelData.name.substring(5) : modelData.name) + (fixed ? "" : "   \u00D7")
+                                accent: modelData.genre ? Theme.blue : modelData.studio ? Theme.amber : modelData.auto ? Theme.muted : Theme.green
+                                onClicked: if (!fixed) { Backend.removeTag(root.infoKey, modelData.name); root.refresh() }
                             }
                         }
                     }
-                    Field {
+                    TagField {
                         Layout.fillWidth: true
-                        placeholderText: "Add a tag and press Enter"
-                        onAccepted: { Backend.addTag(root.infoKey, text); text = ""; root.refresh() }
+                        placeholderText: "Add a tag and press Enter (your tags are suggested as you type)"
+                        exclude: (root.info.tags || []).map(function(t) { return t.name })
+                        onChosen: (name) => { Backend.addTag(root.infoKey, name); root.refresh() }
                     }
                 }
             }

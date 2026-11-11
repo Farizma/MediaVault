@@ -16,7 +16,7 @@ Item {
     property real panX: 0
     property real panY: 0
     property real shown: 0
-    readonly property real aspect: face === "spine" ? 60 / 810 : face === "disc" ? 1 : 2 / 3
+    readonly property real aspect: face === "spine" ? 60 / 810 : face === "disc" ? 1 : 135 / 190
     readonly property string faceName: ({ front: "front cover", back: "back cover", spine: "spine", disc: "disc" })[face] || face
     visible: shown > 0.001
     z: 45
