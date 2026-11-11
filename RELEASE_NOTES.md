@@ -10,6 +10,12 @@ Choose *More info* › *Run anyway*. The SHA-256 of the setup file is listed bel
 - **Alternate titles** under the title in View More, grouped **English**, **Romanized**, **Native**, then **Other
   languages** (folded away; click to show). From AniList's synonyms and TMDB's translations and alternative titles;
   every one is searchable. Titles already in your library get them with **Fetch missing**.
+- **Discord status, your way:** write both status lines yourself with {title}, {year}, {episode} and {type}
+  (with a live preview of a film and an episode), choose what the image tooltip says, and whether pausing shows
+  "Paused" or clears the status.
+- **Discord privacy:** adult titles (rated 18+ / R18+ / NC-17 / X, or a Hentai / Erotica genre) show only
+  "Watching a video" (on by default); pick tags whose titles are never named; and set each folder to show its
+  titles, only "Watching a video", or nothing at all (Library › Configure › Discord).
 - **Tag suggestions:** typing a tag (in View More or the Tag Manager) lists tags you have used before, most used
   first; Up / Down to pick, Enter or Tab to take one.
 - **Adult OVAs as box sets:** an adult OVA from AniList is no longer a series with seasons. Each episode is its own
@@ -28,6 +34,9 @@ Choose *More info* › *Run anyway*. The SHA-256 of the setup file is listed bel
 - The 3D box has the proportions of a real DVD case (135 × 190 mm), so covers and sleeve scans fit without cropping.
 
 ### Security
+- **API keys are encrypted** with Windows' own Data Protection (DPAPI), tied to your Windows account on this PC.
+  Keys saved by older versions are encrypted the first time 1.0.6 starts. A backup restored on another PC or
+  account cannot read them: Settings asks for them again.
 - **Watch on other devices (LAN streaming):** a title could carry script into the library page (an inline handler
   it could break out of); the page now has no script at all, under a strict Content-Security-Policy, plus
   nosniff / no-referrer / no-framing headers. The server answers only devices on your own network (private,

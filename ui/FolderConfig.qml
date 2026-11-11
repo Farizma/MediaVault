@@ -13,7 +13,11 @@ Sheet {
     sub: f.path || ""
     signal changed()
 
-    function load() { f = Backend.directories().find(function(d) { return d.id === folderId }) || ({}) }
+    property string discordMode: "show"
+    function load() {
+        f = Backend.directories().find(function(d) { return d.id === folderId }) || ({})
+        discordMode = Backend.discordPrivacy().folders[String(folderId)] || "show"
+    }
     function show(id, source) { folderId = id; load(); open(source) }
     function after() { load(); changed() }
 
@@ -88,6 +92,18 @@ Sheet {
             spacing: 12
             Note { text: "Tags from this folder's sub-folders and file names, its age ratings and your rules (Tag Manager), worked out again for every title here. Tags you added yourself stay." }
             GlassButton { small: true; label: "Re-tag this folder"; onClicked: Backend.retag(root.folderId) }
+        }
+
+        Caption { text: "DISCORD" }
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 6
+            Note { text: "What Discord may show while you watch something from this folder (when Discord status is on in Settings \u203A Integrations & APIs)." }
+            Repeater {
+                model: [["show", "Title"], ["generic", "\u201CWatching a video\u201D"], ["off", "Nothing"]]
+                Pill { label: modelData[1]; accent: Theme.blue; selected: root.discordMode === modelData[0]
+                    onClicked: { Backend.setDiscordFolder(root.folderId, modelData[0]); root.discordMode = modelData[0] } }
+            }
         }
 
         Caption { text: "REMOVE" }

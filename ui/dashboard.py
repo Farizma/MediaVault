@@ -1,4 +1,5 @@
 """Library models and the `Backend` controller that Dashboard.qml talks to."""
+import json
 import logging
 import os
 import random
@@ -21,7 +22,9 @@ BILLBOARD_SIZE = 8  # titles in the recommended carousel
 SETTINGS = {"tmdb_key", "omdb_key", "night_mode", "reduce_motion", "upscale_level", "show_insights", "core", "theme",
             "custom_accent", "custom_highlight", "custom_page", "custom_surface", "custom_card", "custom_text",
             "custom_muted", "custom_amber", "custom_red", "auto_credits", "auto_tags",
-            "fanart_key", "animated_theme", "detail_order", "title_language", "group_collections", "discord", "discord_detail", "discord_app_id"}
+            "fanart_key", "animated_theme", "detail_order", "title_language", "group_collections", "discord", "discord_detail", "discord_app_id",
+            "discord_details", "discord_state", "discord_paused", "discord_hide_adult", "discord_image_text",
+            "discord_folders", "discord_hide_tags"}
 
 
 TITLE_LANGUAGES = [("english", "English"), ("romaji", "Romaji"), ("original", "Original")]
@@ -1080,7 +1083,7 @@ class Dashboard(QObject):
         elif key in ("group_collections", "title_language"):
             self.reload()
         elif key.startswith("discord") and self.app.presence:
-            self.app.presence.configure()
+            self._discord_changed()
         elif key == "theme":
             self.app.set_theme(value)
         elif key.startswith("custom_"):   # picking a colour switches to the Custom theme
@@ -1479,6 +1482,52 @@ class Dashboard(QObject):
             self._devices = found
             self.devicesFound.emit(found)
         threading.Thread(target=work, daemon=True, name="cast-discover").start()
+
+    @Slot(str, str, str, result="QVariantMap")
+    def discordPreview(self, details: str, state: str, paused: str):
+        """What a movie and an episode look like on Discord with these lines (for the preview in Settings)."""
+        from utils.discord_presence import DEFAULTS, fill
+        movie = {"title": "Blade Runner 2049", "year": "2017", "kind": "movie", "episode": ""}
+        show = {"title": "Severance", "year": "", "kind": "show", "episode": "S01E02"}
+        d, st = details or DEFAULTS["discord_details"], state if state is not None else DEFAULTS["discord_state"]
+        return {"movie": fill(d, movie), "movieState": fill(st, movie), "show": fill(d, show), "showState": fill(st, show),
+                "placeholders": "{title}  {year}  {episode}  {type}"}
+
+    @Slot(result="QVariantMap")
+    def discordPrivacy(self):
+        """Per-folder Discord modes and hidden tags, for Settings and each folder's Configure window."""
+        try:
+            modes = json.loads(db.get_setting("discord_folders", "{}") or "{}")
+            tags = json.loads(db.get_setting("discord_hide_tags", "[]") or "[]")
+        except ValueError:
+            modes, tags = {}, []
+        return {"folders": modes, "tags": tags, "hideAdult": db.get_setting("discord_hide_adult", "1") != "0"}
+
+    @Slot(int, str)
+    def setDiscordFolder(self, dir_id: int, mode: str):
+        from utils.discord_presence import FOLDER_MODES
+        if mode not in FOLDER_MODES:
+            return
+        modes = self.discordPrivacy()["folders"]
+        if mode == "show":
+            modes.pop(str(dir_id), None)
+        else:
+            modes[str(dir_id)] = mode
+        db.set_setting("discord_folders", json.dumps(modes))
+        self._discord_changed()
+
+    @Slot(str, bool)
+    def setDiscordHiddenTag(self, tag: str, hidden: bool):
+        tags = [t for t in self.discordPrivacy()["tags"] if t != tag]
+        if hidden and tag:
+            tags.append(tag)
+        db.set_setting("discord_hide_tags", json.dumps(tags))
+        self._discord_changed()
+
+    def _discord_changed(self):
+        if self.app.presence:
+            self.app._presence_privacy_for = None       # work out the playing title's privacy again
+            self.app.presence.configure()
 
     @Slot(result=str)
     def discordStatus(self):

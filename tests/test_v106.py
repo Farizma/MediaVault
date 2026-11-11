@@ -284,3 +284,104 @@ class AltTitleTests(unittest.TestCase):
         card = {"key": "k", "uuid": "u", "title": "Spirited Away", "media_type": "movie", "synopsis": "", "release_date": "2001", "file_path": "/x/s.mkv",
                 "alt_titles": alttitles.dumps({"other": ["El Viaje de Chihiro"]})}
         self.assertEqual(len(library_view([card], {}, query="viaje")), 1)
+
+
+class SecretTests(unittest.TestCase):
+    def test_keys_go_through_dpapi(self):
+        from utils import secret
+        db.init_db()
+        fake_box = {}
+
+        def protect(t):
+            if not t or t.startswith(secret.PREFIX):
+                return t
+            fake_box[t[::-1]] = t
+            return secret.PREFIX + t[::-1]
+
+        def unprotect(t):
+            return fake_box.get(t[len(secret.PREFIX):], "") if t and t.startswith(secret.PREFIX) else (t or "")
+        with mock.patch.object(secret, "protect", side_effect=protect), mock.patch.object(secret, "unprotect", side_effect=unprotect):
+            db.set_setting("tmdb_key", "abc123")
+            stored = db.conn().execute("SELECT value FROM settings WHERE key='tmdb_key'").fetchone()["value"]
+            self.assertEqual(stored, secret.PREFIX + "321cba")              # never written in plain text
+            self.assertEqual(db.get_setting("tmdb_key"), "abc123")
+            db.set_setting("theme", "midnight")                             # other settings are untouched
+            self.assertEqual(db.conn().execute("SELECT value FROM settings WHERE key='theme'").fetchone()["value"], "midnight")
+
+    def test_plain_values_pass_through_off_windows(self):
+        from utils import secret
+        with mock.patch.object(secret, "available", return_value=False):
+            self.assertEqual(secret.protect("k"), "k")
+            self.assertEqual(secret.unprotect("k"), "k")
+            self.assertEqual(secret.unprotect(secret.PREFIX + "AAAA"), "")     # cannot decrypt here: empty, asked again
+
+    def test_old_plain_keys_are_encrypted_on_start(self):
+        from utils import secret
+        db.init_db()
+        with db._tx() as c:
+            c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('omdb_key', 'plain')")
+        with mock.patch.object(secret, "available", return_value=True), \
+                mock.patch.object(secret, "protect", side_effect=lambda t: secret.PREFIX + "x" if t else t):
+            self.assertGreaterEqual(db.protect_secrets(), 1)
+        self.assertTrue(db.conn().execute("SELECT value FROM settings WHERE key='omdb_key'").fetchone()["value"].startswith(secret.PREFIX))
+
+    @unittest.skipUnless(sys.platform == "win32", "DPAPI is Windows only")
+    def test_real_dpapi_round_trip(self):
+        from utils import secret
+        enc = secret.protect("my-key-123")
+        self.assertTrue(enc.startswith(secret.PREFIX))
+        self.assertNotIn("my-key-123", enc)
+        self.assertEqual(secret.unprotect(enc), "my-key-123")
+
+
+class DiscordTests(unittest.TestCase):
+    def test_templates(self):
+        from utils.discord_presence import fill
+        self.assertEqual(fill("{title} ({year})", {"title": "Heat", "year": "1995"}), "Heat (1995)")
+        self.assertEqual(fill("{title} ({year})", {"title": "Severance", "year": ""}), "Severance")
+        self.assertEqual(fill("{type} · {episode}", {"kind": "movie"}), "Movie")
+        self.assertEqual(fill("Now: {title} {nope}", {"title": "X"}), "Now: X")
+
+    def test_privacy_rules(self):
+        from utils.discord_presence import privacy
+        item = {"parent_directory_id": 3, "media_type": "movie", "certification": "PG-13"}
+        self.assertEqual(privacy(item, [], {}, True, []), "show")
+        self.assertEqual(privacy({**item, "certification": "18+"}, [], {}, True, []), "generic")
+        self.assertEqual(privacy({**item, "certification": "18+"}, [], {}, False, []), "show")
+        self.assertEqual(privacy(item, ["genre:Hentai"], {}, True, []), "generic")
+        self.assertEqual(privacy(item, ["Private"], {}, True, ["Private"]), "generic")
+        self.assertEqual(privacy(item, [], {"3": "off"}, True, []), "off")
+        self.assertEqual(privacy(item, [], {"3": "generic"}, True, []), "generic")
+        self.assertEqual(privacy({**item, "media_type": "clip"}, [], {}, True, []), "generic")
+
+    def test_activity(self):
+        from utils.discord_presence import activity
+        info = {"title": "Heat", "year": "1995", "kind": "movie", "paused": False, "position": 60, "duration": 600}
+        self.assertEqual(activity({**info, "privacy": "off"}, "full"), None)
+        self.assertEqual(activity({**info, "privacy": "generic"}, "full")["details"], "Watching a video")
+        self.assertNotIn("Heat", str(activity({**info, "privacy": "generic"}, "full")))
+        self.assertIsNone(activity({**info, "paused": True}, "title", opts={"discord_paused": "clear"}))
+        a = activity(info, "full", now=1000, opts={"discord_details": "Watching {title}", "discord_state": "{type}",
+                                                    "discord_image_text": "My PC"})
+        self.assertEqual((a["details"], a["state"], a["assets"]["large_text"]), ("Watching Heat", "Movie", "My PC"))
+        self.assertIn("timestamps", a)
+
+    def test_settings_slots(self):
+        from PySide6.QtGui import QGuiApplication
+        QGuiApplication.instance() or QGuiApplication([])
+        from ui.dashboard import Dashboard, LibraryModel, TabsModel
+        from ui.dvd_box import FrameProvider
+        db.init_db()
+        presence = mock.Mock()
+        app = types.SimpleNamespace(engine=types.SimpleNamespace(hw=None), presence=presence, play=lambda *a: None)
+        d = Dashboard(app, LibraryModel(), TabsModel(), FrameProvider())
+        d.setDiscordFolder(7, "off")
+        d.setDiscordHiddenTag("Private", True)
+        p = d.discordPrivacy()
+        self.assertEqual((p["folders"], p["tags"]), ({"7": "off"}, ["Private"]))
+        d.setDiscordFolder(7, "show")
+        d.setDiscordHiddenTag("Private", False)
+        self.assertEqual(d.discordPrivacy()["folders"], {})
+        self.assertTrue(presence.configure.called)
+        pv = d.discordPreview("{title} — {type}", "{episode}", "show")
+        self.assertEqual((pv["movie"], pv["showState"]), ("Blade Runner 2049 — Movie", "S01E02"))

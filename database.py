@@ -5,6 +5,7 @@ WAL mode so the UI can read while the watcher writes.
 """
 import hashlib
 import json
+import logging
 import os
 import re
 import sqlite3
@@ -218,6 +219,10 @@ def init_db() -> None:
         if col not in cols:
             c.execute(f"ALTER TABLE media_items ADD COLUMN {col} {kind}")
     c.commit()
+    try:
+        protect_secrets()          # API keys saved in plain text by an older version: encrypt them now
+    except Exception:
+        logging.getLogger(__name__).warning("could not encrypt saved API keys", exc_info=True)
 
 
 def _rows(cursor) -> list[dict]:
@@ -769,15 +774,41 @@ def mark_failed(hashes) -> None:
 
 # ---------------------------------------------------------------- settings
 
+SECRET_SETTINGS = {"tmdb_key", "omdb_key", "fanart_key"}     # API keys: encrypted with Windows DPAPI at rest
+
+
 def get_setting(key: str, default=None):
     r = conn().execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
-    return r["value"] if r else default
+    if not r:
+        return default
+    if key in SECRET_SETTINGS:
+        from utils import secret
+        return secret.unprotect(r["value"])
+    return r["value"]
 
 
 def set_setting(key: str, value) -> None:
+    value = str(value)
+    if key in SECRET_SETTINGS:
+        from utils import secret
+        value = secret.protect(value)
     with _tx() as c:
         c.execute("INSERT INTO settings (key, value) VALUES (?,?) "
-                  "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, str(value)))
+                  "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
+
+
+def protect_secrets() -> int:
+    """Encrypt API keys an older version saved as plain text. Returns how many were changed."""
+    from utils import secret
+    n = 0
+    if not secret.available():
+        return 0
+    for key in SECRET_SETTINGS:
+        r = conn().execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+        if r and r["value"] and not r["value"].startswith(secret.PREFIX):
+            set_setting(key, r["value"])
+            n += 1
+    return n
 
 
 def excluded_tags() -> list[str]:

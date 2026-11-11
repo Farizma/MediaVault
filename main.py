@@ -124,11 +124,23 @@ class App:
         if self._presence_item[0] != s.path:
             self._presence_item = (s.path, self.db.get_media(s.uuid) if s.uuid else None)
         item = self._presence_item[1] or {}
+        if self._presence_item[0] != getattr(self, "_presence_privacy_for", None):   # once per file, not per tick
+            import json as _json
+            from utils.discord_presence import privacy
+            try:
+                modes = _json.loads(self.db.get_setting("discord_folders", "{}") or "{}")
+                hidden = _json.loads(self.db.get_setting("discord_hide_tags", "[]") or "[]")
+            except ValueError:
+                modes, hidden = {}, []
+            self._presence_privacy = privacy(item or None, self.db.tags_for(item["uuid"]) if item else (), modes,
+                                             self.db.get_setting("discord_hide_adult", "1") != "0", hidden)
+            self._presence_privacy_for = self._presence_item[0]
         kind = item.get("media_type", "clip")
         title = self.db.series_title(item["title"]) if kind == "show" else (item.get("title") or s.title)
         p.update({"title": title, "kind": kind, "episode": self.db.episode_suffix(item.get("title", "")).strip(),
                   "year": (item.get("release_date") or "")[:4], "position": st.get("position", 0),
-                  "duration": st.get("duration", 0), "paused": st.get("paused", False), "speed": st.get("speed", 1.0)})
+                  "duration": st.get("duration", 0), "paused": st.get("paused", False), "speed": st.get("speed", 1.0),
+                  "privacy": self._presence_privacy})
 
     def _initial_scan(self):
         from watcher import scan_directory

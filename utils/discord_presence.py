@@ -2,6 +2,8 @@
 app on this PC does the rest. Off by default. Personal clips never show a title.
 
 Levels: minimal ("Watching a movie"), title (title, year, episode, paused), full (+ elapsed / remaining bar).
+Your own wording for both lines ({title} {year} {episode} {type}), and privacy: adult titles, chosen tags and whole
+folders can show only "Watching a video" or nothing at all, and the status can clear while paused.
 Discord needs an application id: create an app named "Media Vault" at discord.com/developers/applications and
 paste its id in Settings > Integrations (or set DEFAULT_APP_ID for your builds).
 """
@@ -9,6 +11,7 @@ import json
 import logging
 import os
 import queue
+import re
 import socket
 import struct
 import sys
@@ -90,27 +93,73 @@ class _Conn:
                 pass
 
 
-def activity(info: dict | None, level: str, now: float | None = None) -> dict | None:
+DEFAULTS = {
+    "discord_details": "{title} ({year})",   # first line; {title} {year} {episode} {type}
+    "discord_state": "{episode}",            # second line
+    "discord_paused": "show",                # show: "Paused" on the second line; clear: no status while paused
+    "discord_hide_adult": "1",               # adult titles show as "Watching a video"
+    "discord_image_text": "Media Vault",     # the tooltip on the image
+}
+PLACEHOLDERS = ("title", "year", "episode", "type")
+ADULT_RATINGS = {"18+", "R18+", "R18", "NC-17", "X", "XXX", "AO", "Adults Only"}
+ADULT_GENRES = {"hentai", "erotica", "adult"}
+FOLDER_MODES = ("show", "generic", "off")    # per folder: title as usual / only "Watching a video" / nothing at all
+
+
+def fill(template: str, info: dict) -> str:
+    """A status line from a template. Unknown {words} are left out; a placeholder with no value takes empty
+    brackets and dangling separators with it ("Title ()" -> "Title")."""
+    kind = info.get("kind", "movie")
+    values = {"title": info.get("title") or "", "year": info.get("year") or "", "episode": info.get("episode") or "",
+              "type": {"movie": "Movie", "show": "Series"}.get(kind, "Video")}
+    out = re.sub(r"\{(\w+)\}", lambda m: values.get(m.group(1).lower(), ""), template or "")
+    out = re.sub(r"[(\[]\s*[)\]]", "", out)                 # "()" and "[]" left by an empty value
+    out = re.sub(r"\s*([\u00B7|\-\u2013\u2014:,])\s*(?=$|[\u00B7|\-\u2013\u2014:,])", "", out)
+    out = re.sub(r"^\s*[\u00B7|\-\u2013\u2014:,]\s*|\s*[\u00B7|\-\u2013\u2014:,]\s*$", "", out)
+    return " ".join(out.split())[:128]
+
+
+def privacy(item: dict | None, tags, folder_modes: dict, hide_adult: bool, hidden_tags) -> str:
+    """How much Discord may see of this title: "show", "generic" ("Watching a video") or "off" (no status)."""
+    if not item:
+        return "generic"
+    mode = folder_modes.get(str(item.get("parent_directory_id")), "show")
+    if mode == "off":
+        return "off"
+    tags = set(tags or ())
+    if mode == "generic" or (item.get("media_type") == "clip"):
+        return "generic"
+    if hide_adult and ((item.get("certification") or "") in ADULT_RATINGS
+                       or any(t.lower().removeprefix("genre:") in ADULT_GENRES for t in tags if t.startswith("genre:"))):
+        return "generic"
+    if tags & set(hidden_tags or ()):
+        return "generic"
+    return "show"
+
+
+def activity(info: dict | None, level: str, now: float | None = None, opts: dict | None = None) -> dict | None:
     """What Discord shows. info: title, kind (movie / show / clip), episode ("S01E02"), year, position,
-    duration, paused, speed. None: nothing is playing (the status is cleared)."""
-    if not info:
+    duration, paused, speed, privacy ("show" / "generic" / "off"). None: the status is cleared."""
+    o = {**DEFAULTS, **(opts or {})}
+    if not info or info.get("privacy") == "off":
+        return None
+    if info.get("paused") and o["discord_paused"] == "clear":
         return None
     kind = info.get("kind", "movie")
     noun = {"movie": "a movie", "show": "a show"}.get(kind, "a video")
-    act = {"type": 3, "assets": {"large_image": "logo", "large_text": "Media Vault"}}
-    if level == "minimal" or kind == "clip":     # personal videos never show their name
-        act["details"] = f"Watching {noun}"
+    act = {"type": 3, "assets": {"large_image": "logo", "large_text": (o["discord_image_text"] or "Media Vault")[:128]}}
+    if level == "minimal" or kind == "clip" or info.get("privacy") == "generic":   # personal or private: no name
+        act["details"] = f"Watching {noun}" if info.get("privacy") != "generic" or level == "minimal" else "Watching a video"
         if info.get("paused"):
             act["state"] = "Paused"
         return act
-    year = f" ({info['year']})" if info.get("year") and kind == "movie" else ""
-    act["details"] = (info.get("title") or "")[:120] + year
-    parts = [info.get("episode") or ""]
+    act["details"] = fill(o["discord_details"], {**info, "year": info.get("year") if kind == "movie" else ""}) \
+        or (info.get("title") or "")[:120]
+    state = fill(o["discord_state"], info)
     if info.get("paused"):
-        parts.append("Paused")
-    state = " \u00B7 ".join(p for p in parts if p)
+        state = " \u00B7 ".join(p for p in (state, "Paused") if p)
     if state:
-        act["state"] = state
+        act["state"] = state[:128]
     if level == "full" and not info.get("paused") and info.get("duration"):
         now = time.time() if now is None else now
         speed = info.get("speed") or 1.0
@@ -130,6 +179,7 @@ class Presence:
         self._sent_key = "unsent"
         self.status = "Off"
         self.enabled, self.level, self.app_id = False, "title", ""
+        self.opts: dict = dict(DEFAULTS)
         self._thread = None
         self.configure()
 
@@ -138,6 +188,7 @@ class Presence:
         level = self._get("discord_detail", "title")
         self.level = level if level in LEVELS else "title"
         self.app_id = (self._get("discord_app_id", "") or DEFAULT_APP_ID).strip()
+        self.opts = {k: self._get(k, v) if self._get(k, None) is not None else v for k, v in DEFAULTS.items()}
         if self.enabled and not self.app_id.isdigit():
             self.status = "Needs a Discord application ID"
         elif not self.enabled:
@@ -167,7 +218,7 @@ class Presence:
                 pass
             while not self._q.empty():          # coalesce: only the newest state matters
                 self._q.get_nowait()
-            want = activity(self._info, self.level) if self.enabled else None
+            want = activity(self._info, self.level, opts=self.opts) if self.enabled else None
             if not self.enabled or not self.app_id.isdigit():
                 if conn:                         # turned off: clear the status, then let go of the pipe
                     try:

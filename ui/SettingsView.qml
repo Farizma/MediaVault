@@ -36,6 +36,9 @@ Item {
     signal openTagManager(var source)
     property string discordDetail: Backend.setting("discord_detail") || "title"
     property string discordState: Backend.discordStatus()
+    property string discordPaused: Backend.setting("discord_paused") || "show"
+    property var discordPreview: Backend.discordPreview(Backend.setting("discord_details"), Backend.setting("discord_state"), discordPaused)
+    property var discordHidden: Backend.discordPrivacy()
     property var report: ({})
     property var comps: []
     property bool checking: false
@@ -734,7 +737,20 @@ Item {
                                     onClicked: { root.discordDetail = modelData[0]; Backend.setSetting("discord_detail", modelData[0]) } }
                             }
                         }
-                        // a small preview of the status card, so the levels are obvious
+                        // your own wording for the two lines, with a live preview of a film and an episode
+                        Caption { text: "STATUS TEXT  \u00B7  {title}  {year}  {episode}  {type}"; visible: root.discordDetail !== "minimal" }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            visible: root.discordDetail !== "minimal"
+                            spacing: 8
+                            Field { id: dLine1; Layout.fillWidth: true; placeholderText: "{title} ({year})"; text: Backend.setting("discord_details")
+                                onTextEdited: root.discordPreview = Backend.discordPreview(text, dLine2.text, root.discordPaused)
+                                onActiveFocusChanged: if (!activeFocus) Backend.setSetting("discord_details", text) }
+                            Field { id: dLine2; Layout.fillWidth: true; placeholderText: "{episode}"; text: Backend.setting("discord_state")
+                                onTextEdited: root.discordPreview = Backend.discordPreview(dLine1.text, text, root.discordPaused)
+                                onActiveFocusChanged: if (!activeFocus) Backend.setSetting("discord_state", text) }
+                        }
+                        // a small preview of the status card: a film, then an episode, as Discord would show them
                         Rectangle {
                             Layout.fillWidth: true
                             implicitHeight: dcol.implicitHeight + 20
@@ -748,13 +764,70 @@ Item {
                                     id: dcol
                                     anchors.verticalCenter: parent.verticalCenter
                                     spacing: 1
+                                    readonly property var pv: root.discordPreview
                                     Text { text: "Watching Media Vault"; color: "#F2F3F5"; font.pixelSize: 12; font.weight: Font.Bold }
-                                    Text { text: root.discordDetail === "minimal" ? "Watching a movie" : "Blade Runner 2049 (2017)"; color: "#DBDEE1"; font.pixelSize: 12 }
-                                    Text { visible: root.discordDetail !== "minimal"; text: root.discordDetail === "full" ? "45:12 elapsed \u00B7 1:58:08 left" : "Paused when you pause"
-                                        color: "#B5BAC1"; font.pixelSize: 11 }
+                                    Text { textFormat: Text.PlainText; color: "#DBDEE1"; font.pixelSize: 12
+                                        text: root.discordDetail === "minimal" ? "Watching a movie" : (dcol.pv.movie || "Blade Runner 2049 (2017)") }
+                                    Text { textFormat: Text.PlainText; visible: text !== ""; color: "#B5BAC1"; font.pixelSize: 11
+                                        text: root.discordDetail === "minimal" ? "" : root.discordDetail === "full" ? [dcol.pv.movieState, "45:12 elapsed"].filter(Boolean).join(" \u00B7 ")
+                                                                                                               : (dcol.pv.movieState || "") }
+                                    Text { textFormat: Text.PlainText; visible: root.discordDetail !== "minimal"; color: "#949BA4"; font.pixelSize: 11
+                                        text: "Episode: " + [dcol.pv.show, dcol.pv.showState].filter(Boolean).join(" \u2014 ") }
                                 }
                             }
                         }
+                        Caption { text: "PRIVACY" }
+                        Toggle {
+                            Layout.fillWidth: true
+                            text: "Hide adult titles"
+                            hint: "Rated 18+, R18+, NC-17 or X, or a Hentai / Erotica genre: Discord only sees \u201CWatching a video\u201D."
+                            checked: Backend.setting("discord_hide_adult") !== "0"
+                            onToggled: Backend.setSetting("discord_hide_adult", checked ? "1" : "0")
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 10
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 1
+                                Text { text: "When paused"; color: Theme.text; font.pixelSize: 13 }
+                                Text { Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 11
+                                    text: "Show \u201CPaused\u201D, or clear the status until you play again." }
+                            }
+                            Repeater {
+                                model: [["show", "Show Paused"], ["clear", "Clear status"]]
+                                Pill { label: modelData[1]; accent: Theme.blue; selected: root.discordPaused === modelData[0]
+                                    onClicked: { root.discordPaused = modelData[0]; Backend.setSetting("discord_paused", modelData[0]) } }
+                            }
+                        }
+                        // tags whose titles only ever show "Watching a video"
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+                            Text { text: "Never name titles tagged"; color: Theme.text; font.pixelSize: 13 }
+                            Flow {
+                                Layout.fillWidth: true
+                                spacing: 6
+                                Repeater {
+                                    model: root.discordHidden.tags || []
+                                    Pill { label: (modelData.indexOf(":") > 0 ? modelData.split(":")[1] : modelData) + "   \u00D7"; selected: true; accent: Theme.red
+                                        onClicked: { Backend.setDiscordHiddenTag(modelData, false); root.discordHidden = Backend.discordPrivacy() } }
+                                }
+                                Dropdown {
+                                    width: 200
+                                    prefix: "+ "
+                                    options: [{ value: "", label: "Add a tag" }].concat(Backend.allTags().filter(function(t) {
+                                        return (root.discordHidden.tags || []).indexOf(t.name) < 0 }).map(function(t) { return { value: t.name, label: t.label } }))
+                                    value: ""
+                                    onChosen: (v) => { if (v !== "") { Backend.setDiscordHiddenTag(v, true); root.discordHidden = Backend.discordPrivacy() } value = "" }
+                                }
+                            }
+                            Text { Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 11
+                                text: "Whole folders can show less, or nothing: Library \u203A Configure \u203A Discord." }
+                        }
+                        Caption { text: "IMAGE TOOLTIP" }
+                        Field { Layout.fillWidth: true; placeholderText: "Media Vault"; text: Backend.setting("discord_image_text")
+                            onActiveFocusChanged: if (!activeFocus) Backend.setSetting("discord_image_text", text) }
                         Caption { text: "DISCORD APPLICATION ID" }
                         Field { Layout.fillWidth: true; placeholderText: "From discord.com/developers \u203A Applications \u203A New (name it Media Vault)"
                             text: Backend.setting("discord_app_id"); validator: RegularExpressionValidator { regularExpression: /[0-9]{0,24}/ }
