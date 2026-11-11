@@ -194,10 +194,10 @@ def lookup(title: str, year: str | None = None) -> dict | None:
         data = _post(_ONE, {"q": title, "y": int(year)})
     if not data.get("Media"):
         data = _post(_ANY, {"q": title})
+    if not data.get("Media") and (short := _TAIL.sub("", title).strip()) and short != title:
+        return lookup(short)                # a trailing episode number or "OVA" first: "Title-Name 1" -> "Title-Name"
     if not data.get("Media") and (plain := " ".join(re.sub(r"[^\w\s]", " ", title).split())) != title:
         return lookup(plain, year)          # words only: "Title-Name" -> "Title Name", "Title: Sub" -> "Title Sub"
-    if not data.get("Media") and (short := _TAIL.sub("", title).strip()) and short != title:
-        return lookup(short)
     if not data.get("Media") and 2 <= len(title.split()) <= 3 and (joined := title.replace(" ", "")) != title:
         data = _post(_ANY, {"q": joined})     # a short name split by the file name: "Drop Out" -> "DropOut"
     return _shape(data["Media"]) if data.get("Media") else None

@@ -83,8 +83,8 @@ class StreamingTests(LibraryFixture):
         super().setUpClass()
         cls.srv = streaming.StreamServer()
         cls.srv.start(port=0)
-        port = cls.srv._srv.server_address[1]
-        cls.base = f"http://127.0.0.1:{port}/{cls.srv.token}/"
+        host, port = cls.srv._srv.server_address[:2]       # it listens on this network's address, not 127.0.0.1
+        cls.base = f"http://{host}:{port}/{cls.srv.token}/"
 
     @classmethod
     def tearDownClass(cls):

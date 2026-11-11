@@ -151,7 +151,7 @@ class TagNameTests(unittest.TestCase):
         d = Dashboard(types.SimpleNamespace(engine=types.SimpleNamespace(hw=None), presence=None, play=lambda *a: None),
                       LibraryModel(), TabsModel(), FrameProvider())
         names = d.tagNames()
-        self.assertEqual(names[:2], ["Rewatch", "Kids"])
+        self.assertLess(names.index("Rewatch"), names.index("Kids"))        # more used first (other tests share the db)
         self.assertNotIn("auto:4K", names)
         self.assertNotIn("genre:Drama", names)
 
