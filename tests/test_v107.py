@@ -77,3 +77,17 @@ class OvaMigrationTests(unittest.TestCase):
         self.assertIn("studio:Studio A", db.tags_for(items[0]["uuid"]))
         tmdb = db.add_directory(tempfile.mkdtemp(), "M", True)
         self.assertEqual(watcher.convert_ova_series(db.get_directory(tmdb)), 0)     # only AniList folders
+
+
+class CarouselTests(unittest.TestCase):
+    def test_turn_moves_boxes_instead_of_swapping_in_place(self):
+        qml = (ROOT / "ui" / "DetailView.qml").read_text(encoding="utf-8")
+        self.assertNotIn("turnOut", qml)                                   # the old spin-edge-on-and-swap
+        self.assertIn("readonly property bool turning: carousel.running", qml)
+        # the box in focus slides out to the side and back, the next one comes forward, a new one fades in behind
+        self.assertIn("- root.turnDir * root.sideX * root.turnP * root.spread", qml)
+        self.assertIn("incoming ? dir * root.sideX * (1 - p) * root.spread", qml)
+        self.assertIn("id: newcomer", qml)
+        # ends where the resting layout starts: landing yaw of the incoming box = the box's yaw after the swap
+        self.assertIn("box.yaw = -20 * turnDir", qml)
+        self.assertIn("(dir * 30 - 20 * dir) * p", qml)

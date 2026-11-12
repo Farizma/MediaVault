@@ -56,16 +56,20 @@ Item {
     function wrap(i) { return (i % count + count) % count }
     // jump: how many slides to move (the arrows move one; a click in the films list may move several)
     function step(jump) {
-        if (count < 2 || jump === 0 || turnOut.running || turnIn.running || closing || launching || f < 1) return
-        var dir = jump > 0 ? 1 : -1
-        turnOut.dir = dir; turnOut.jump = jump
-        // the next edge-on angle (90 + 180k) in the turning direction
-        var y = box.yaw, k = Math.floor((y - 90) / 180)
-        var edge = dir > 0 ? (k + 1) * 180 + 90 : (90 + 180 * k < y ? 90 + 180 * k : 90 + 180 * (k - 1))
-        turnOutYaw.to = edge
-        turnOutSwipe.to = -46 * dir
+        if (count < 2 || jump === 0 || carousel.running || closing || launching || f < 1) return
+        // two films: both arrows lead to the same one, so turn toward the side it is waiting on
+        var dir = count === 2 ? twoSide : (jump > 0 ? 1 : -1)
+        turnDir = dir
+        turnTarget = wrap(slide + (count === 2 ? 1 : jump))
+        // the box in focus spins a full turn as it slides out, and lands turned in toward the middle like the
+        // greyed boxes beside it: yaw 30 on the left, -30 on the right
+        var y = box.yaw, land = 30 * dir
+        var t = land
+        if (dir > 0) { while (t > y - 300) t -= 360 } else { while (t < y + 300) t += 360 }
+        carouselYaw.to = t
         box.spinning = false
-        turnOut.start()
+        turnP = 0
+        carousel.start()
     }
     property real f: 0                       // 0 = box sits on its card, 1 = box settled in the sheet
     property rect from: Qt.rect(0, 0, 0, 0)  // what opened it, in this item's coordinates: a card's poster, or a button
@@ -108,7 +112,7 @@ Item {
         if (!visible || closing || launching) return
         closeMenus()
         closing = true
-        flyIn.stop(); turnOut.stop(); turnIn.stop(); pullOut.stop(); box.swipe = 0; root.neighFade = 1
+        flyIn.stop(); carousel.stop(); turnP = 0; pullOut.stop(); box.swipe = 0; root.neighFade = 1
         box.spinning = false
         if (count > 1 && (spread > 0.01 || slide !== 0)) {
             // quick: the films slide back into the set; a film in focus turns edge-on and becomes the set's box
@@ -129,7 +133,7 @@ Item {
     }
     function dismiss() {                     // instant, used once the player has taken over the screen
         closeMenus()
-        flyIn.stop(); flyOut.stop(); launchBox.stop(); turnOut.stop(); turnIn.stop(); box.swipe = 0; root.neighFade = 1
+        flyIn.stop(); flyOut.stop(); launchBox.stop(); carousel.stop(); turnP = 0; box.swipe = 0; root.neighFade = 1
         pullOut.stop(); packUp.stop(); spread = 0
         visible = false; closing = false; launching = false; f = 0; box.opened = 0
     }
@@ -146,31 +150,31 @@ Item {
     Keys.onLeftPressed: step(-1)
     Keys.onRightPressed: step(1)
 
-    // carousel turn: the box spins edge-on, swaps to the neighbouring film there (unseen), then turns on to face
-    // you, sliding in from the side the arrow points to. The greyed covers behind it cross-fade to the new neighbours.
-    ParallelAnimation {
-        id: turnOut
-        property int dir: 1
-        property int jump: 1
-        NumberAnimation { id: turnOutYaw; target: box; property: "yaw"; duration: 170 * Theme.motion; easing.type: Easing.InCubic }
-        NumberAnimation { id: turnOutSwipe; target: box; property: "swipe"; duration: 170 * Theme.motion; easing.type: Easing.InCubic }
-        NumberAnimation { target: root; property: "neighFade"; to: 0; duration: 140 * Theme.motion }
-        onFinished: {
-            root.slide = root.wrap(root.slide + jump)
-            box.yaw = -90 * dir                   // the new box, edge-on from the other side
-            box.swipe = 46 * dir
-            turnInYaw.to = -20 * dir              // lands facing you, turned a little to show its depth
-            turnIn.start()
+    // carousel rotation, like a turntable seen from the front: the box in focus spins as it slides to the side
+    // and back, the next film slides forward into the middle, the one on the far side drifts back and fades, and a
+    // new one fades in behind on the side the films are coming from. At the end the films are swapped (unseen).
+    property real turnP: 0                   // 0 .. 1 through a turn
+    property int turnDir: 1                  // 1: the films move left (next), -1: they move right (previous)
+    property int turnTarget: 0               // the slide coming into focus
+    property int twoSide: 1                  // two films: the side the other one waits on
+    readonly property real sideX: Math.min(stage.width * 0.34, stage.width / 2 - 72)
+    readonly property real sideScale: 0.5 + 0.12 * spread
+    SequentialAnimation {
+        id: carousel
+        ParallelAnimation {
+            NumberAnimation { target: root; property: "turnP"; from: 0; to: 1; duration: 640 * Theme.motion; easing.type: Easing.InOutCubic }
+            NumberAnimation { id: carouselYaw; target: box; property: "yaw"; duration: 640 * Theme.motion; easing.type: Easing.InOutCubic }
         }
+        ScriptAction { script: root.finishTurn() }
     }
-    ParallelAnimation {
-        id: turnIn
-        NumberAnimation { id: turnInYaw; target: box; property: "yaw"; duration: 320 * Theme.motion; easing.type: Easing.OutCubic }
-        NumberAnimation { target: box; property: "swipe"; to: 0; duration: 320 * Theme.motion; easing.type: Easing.OutCubic }
-        NumberAnimation { target: root; property: "neighFade"; to: 1; duration: 260 * Theme.motion }
-        onFinished: box.spinning = Qt.binding(function() { return root.f === 1 && !root.closing && !root.launching && !root.turning })
+    function finishTurn() {
+        slide = turnTarget
+        if (count === 2) twoSide = -turnDir      // the film that left is now on that side
+        box.yaw = -20 * turnDir                  // where the incoming film landed: facing you, turned a little
+        turnP = 0
+        box.spinning = Qt.binding(function() { return root.f === 1 && !root.closing && !root.launching && !root.turning })
     }
-    readonly property bool turning: turnOut.running || turnIn.running
+    readonly property bool turning: carousel.running
 
     // box sets: the films are pulled out of the set's box into a floating carousel (spread 0 -> 1), bob in a slow
     // wave while idle, and slide back into the box when you leave (spread -> 0) before it flies home
@@ -625,7 +629,7 @@ Item {
                             Pill {
                                 // genres (blue, scraped), automatic tags from folders and file names (grey), yours (green)
                                 // studios (amber, from AniList, kept) and genres (blue, scraped) cannot be removed here
-                                readonly property bool fixed: modelData.genre || modelData.studio
+                                readonly property bool fixed: !!(modelData.genre || modelData.studio)
                                 label: (modelData.genre ? modelData.name.substring(6) : modelData.studio ? modelData.name.substring(7)
                                         : modelData.auto ? modelData.name.substring(5) : modelData.name) + (fixed ? "" : "   \u00D7")
                                 accent: modelData.genre ? Theme.blue : modelData.studio ? Theme.amber : modelData.auto ? Theme.muted : Theme.green
@@ -746,28 +750,59 @@ Item {
     }
 
     // ---- the box. Above the sheet so it can fly in from the grid; lined up face-to-face with the card it came from.
-    // the films either side of the one in focus: real boxes, still (no spin), greyed, bobbing a beat behind
+    // the films either side of the one in focus: real boxes, still (no spin), greyed, bobbing a beat behind.
+    // While the carousel turns: the one on the side the films come from slides forward into the middle, the one on
+    // the other side drifts further back and fades, and a new one (below) fades in behind on the coming side.
     Repeater {
-        model: root.count > 2 ? [-1, 1] : root.count === 2 ? [1] : []
+        model: root.count > 2 ? [-1, 1] : root.count === 2 ? [root.turning ? root.turnDir : root.twoSide] : []
         DvdBox {
             readonly property int dir: modelData
-            readonly property var s: root.slides[root.wrap(root.slide + dir)] || ({})
+            readonly property bool incoming: root.turning && dir === root.turnDir
+            readonly property bool leaving: root.turning && dir === -root.turnDir
+            readonly property real p: root.turnP
+            readonly property var s: root.slides[incoming ? root.turnTarget : root.wrap(root.slide + dir)] || ({})
             width: box.width; height: box.height
             x: box.restX; y: box.restY
+            z: incoming && p > 0.5 ? 3 : 0                                       // passes in front of the box going out
             front: s.cover || ""; back: s.back || ""; spine: s.spine || ""; disc: s.disc || ""
             title: s.title || ""; year: s.year || ""
-            yaw: -dir * 30                       // turned in toward the box in focus
+            yaw: incoming ? -dir * 30 + (dir * 30 - 20 * dir) * p : -dir * 30   // turned in toward the middle, then to you
             spinning: false; hint: false; enabled: false
-            dim: 0.5
+            dim: incoming ? 0.5 * (1 - p) : 0.5
             visible: root.visible && root.spread > 0.01
-            opacity: Math.min(1, root.spread) * root.neighFade * (root.closing ? root.spread : 1)
+            opacity: Math.min(1, root.spread) * root.neighFade * (root.closing ? root.spread : 1) * (leaving ? 1 - p : 1)
+            readonly property real k: incoming ? root.sideScale + (1 - root.sideScale) * p
+                                    : leaving ? root.sideScale * (1 - 0.3 * p) : root.sideScale
+            readonly property real side: incoming ? dir * root.sideX * (1 - p) * root.spread
+                                       : leaving ? dir * root.sideX * (1 + 0.35 * p) * root.spread : dir * root.sideX * root.spread
             transform: [
-                Scale { origin.x: box.width / 2; origin.y: box.faceCY; xScale: 0.5 + 0.12 * root.spread; yScale: xScale },
+                Scale { origin.x: box.width / 2; origin.y: box.faceCY; xScale: k; yScale: k },
                 // out of the set: sideways to its place, lifted a little on the way (an arc), then the wave
-                Translate { x: dir * Math.min(stage.width * 0.34, stage.width / 2 - 72) * root.spread
-                            y: -28 * Math.sin(Math.PI * Math.min(1, root.spread)) + root.spread * 5 * Math.sin(root.wave - dir * 1.1) }
+                Translate { x: side
+                            y: -28 * Math.sin(Math.PI * Math.min(1, root.spread)) + root.spread * 5 * Math.sin(root.wave - dir * 1.1) * (incoming ? 1 - p : 1) }
             ]
         }
+    }
+    // the film that becomes the new neighbour on the coming side: fades in from further back while the carousel turns
+    DvdBox {
+        id: newcomer
+        readonly property real p: root.turnP
+        readonly property int dir: root.turnDir
+        readonly property var s: root.slides[root.wrap(root.turnTarget + dir)] || ({})
+        visible: root.visible && root.turning && root.count > 2
+        width: box.width; height: box.height
+        x: box.restX; y: box.restY
+        front: s.cover || ""; back: s.back || ""; spine: s.spine || ""; disc: s.disc || ""
+        title: s.title || ""; year: s.year || ""
+        yaw: -dir * 30
+        spinning: false; hint: false; enabled: false
+        dim: 0.5
+        opacity: p
+        readonly property real k: root.sideScale * (0.7 + 0.3 * p)
+        transform: [
+            Scale { origin.x: box.width / 2; origin.y: box.faceCY; xScale: newcomer.k; yScale: newcomer.k },
+            Translate { x: root.turnDir * root.sideX * (1.35 - 0.35 * root.turnP); y: -28 * Math.sin(Math.PI * Math.min(1, root.spread)) }
+        ]
     }
 
     DvdBox {
@@ -798,9 +833,14 @@ Item {
         x: restX
         y: restY
         opacity: root.fromCard ? 1 : root.f
+        // a carousel turn: it slides out to the side the films move toward and shrinks back to a neighbour's size
+        readonly property real turnK: 1 - (1 - root.sideScale) * root.turnP
+        z: root.turnP > 0.5 ? 1 : 2
+        dim: 0.5 * root.turnP
         transform: [
-            Scale { origin.x: box.width / 2; origin.y: box.faceCY; xScale: box.k + (1 - box.k) * root.f; yScale: xScale },
-            Translate { x: (box.startCx - box.restCx) * (1 - root.f) + box.swipe; y: (box.startCy - box.restCy) * (1 - root.f) + box.bob }
+            Scale { origin.x: box.width / 2; origin.y: box.faceCY; xScale: (box.k + (1 - box.k) * root.f) * box.turnK; yScale: xScale },
+            Translate { x: (box.startCx - box.restCx) * (1 - root.f) + box.swipe - root.turnDir * root.sideX * root.turnP * root.spread
+                        y: (box.startCy - box.restCy) * (1 - root.f) + box.bob - 28 * Math.sin(Math.PI * Math.min(1, root.spread)) * root.turnP }
         ]
     }
 
