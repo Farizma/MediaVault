@@ -23,7 +23,8 @@ Item {
     readonly property string infoKey: info.key || itemKey
     // right-pane sections, in the user's order; which ones apply depends on what is shown
     property var order: Backend.detailSections().map(function(x) { return x.id })
-    property bool renaming: false            // box sets: the title is a dropdown until "Rename" is chosen
+    property bool renaming: false            // the title is plain text (a dropdown in a box set) until the pencil is clicked
+    readonly property bool focusHome: true   // a click away from a text box gives focus back here (see ui/clickaway.py)
     property var titleEditor: null
     function showSection(id) {
         switch (id) {
@@ -437,15 +438,16 @@ Item {
                     TextMetrics { id: tm; font: titleField.font; text: titleField.text }
                     Field {
                         id: titleField
-                        readonly property bool picker: root.d.isSet === true && !root.renaming
-                        Layout.preferredWidth: picker ? Math.min(tm.advanceWidth + 6, titleCol.width - 84)
-                                             : root.d.isSet === true ? titleCol.width - 84 : titleCol.width - 40
-                        Layout.rightMargin: picker || root.d.isSet === true ? 0 : 40
+                        // every title: shown as text until the pencil (or a click on it) starts editing; in a box set a
+                        // click opens the list of its films instead
+                        readonly property bool picker: !root.renaming
+                        Layout.preferredWidth: root.renaming ? titleCol.width - 84
+                                             : Math.min(tm.advanceWidth + 6, titleCol.width - (root.d.isSet === true ? 84 : 48))
                         text: root.info.title || ""
                         font.pixelSize: 28; font.weight: Font.ExtraBold; font.letterSpacing: -0.6
                         leftPadding: 0; rightPadding: 0
                         readOnly: picker
-                        // not editing: a marquee shows the title (and scrolls it on hover); click to edit
+                        // not editing: a marquee shows the title (and scrolls it on hover)
                         color: activeFocus && !picker ? Theme.text : "transparent"
                         HoverHandler { id: titleHover }
                         Marquee {
@@ -456,7 +458,8 @@ Item {
                         }
                         background: Rectangle { color: "transparent"; Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1
                             color: titleField.activeFocus && !titleField.picker ? Theme.blue : "transparent" } }
-                        MouseArea { anchors.fill: parent; visible: titleField.picker; cursorShape: Qt.PointingHandCursor; onClicked: titleMenu.begin(chev) }
+                        MouseArea { anchors.fill: parent; visible: titleField.picker; cursorShape: Qt.PointingHandCursor
+                            onClicked: root.d.isSet === true ? titleMenu.begin(chev) : root.startRename() }
                         onActiveFocusChanged: if (!activeFocus && !picker) root.commitTitle()
                         onAccepted: if (!picker) root.commitTitle()
                         Keys.onEscapePressed: (e) => { if (root.renaming) { root.restoreTitle(); root.renaming = false; root.forceActiveFocus() } else e.accepted = false }
@@ -478,11 +481,10 @@ Item {
                         }
                         MouseArea { id: chevArea; anchors.fill: parent; anchors.margins: -4; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: titleMenu.begin(chev) }
                     }
-                    // box sets: a pencil to rename what is shown (the set, or the film in focus); while editing it
+                    // a pencil to rename what is shown (a title, a box set, or the film in focus); while editing it
                     // turns into a check mark that saves the new name (Enter saves too, Esc puts the old one back)
                     Rectangle {
                         id: pencil
-                        visible: root.d.isSet === true
                         width: 28; height: 28; radius: 14
                         color: root.renaming ? (penArea.containsMouse ? Qt.lighter(Theme.blue, 1.15) : Theme.blue)
                                              : penArea.containsMouse ? Qt.rgba(1, 1, 1, 0.14) : Qt.rgba(1, 1, 1, 0.06)

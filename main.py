@@ -456,6 +456,9 @@ def main() -> int:
         QMessageBox.critical(None, "Media Vault", "The interface failed to load. Details are in media_vault.log.")
         return 1
     qapp.setQuitOnLastWindowClosed(False)     # Media Vault ends when its library window closes (see App._main_closing)
+    from ui.clickaway import ClickAway
+    app.click_away = ClickAway(qapp)                    # a click outside a text box saves it and ends the edit
+    engine.rootObjects()[0].installEventFilter(app.click_away)
     app.attach(engine.rootObjects()[0], engine.rootObjects()[1])
     if restored:
         app.dashboard.toast.emit("Portable backup restored")
