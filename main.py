@@ -387,6 +387,7 @@ def main() -> int:
     from PySide6.QtQuickControls2 import QQuickStyle
     from PySide6.QtWidgets import QApplication, QMessageBox
 
+    os.environ.setdefault("QSG_INFO", "1")    # the log names the GPU and graphics API the interface draws with
     qapp = QApplication(sys.argv[:1])
     from PySide6.QtGui import QIcon
     qapp.setWindowIcon(QIcon(str(Path(__file__).resolve().parent / "ui" / "brand" / "icon-256.png")))  # taskbar, title bars
@@ -424,6 +425,12 @@ def main() -> int:
         db.init_db()
         reduced = reduced or db.get_setting("reduce_motion") == "1"  # ... or our own setting
     ui.THEME["motion"] = 0 if reduced else 1
+    try:                                   # the interface on the fast GPU of a two-GPU laptop (from the next start)
+        from utils import gpu_pref
+        logging.info("high-performance GPU: %s",
+                     gpu_pref.apply(not db.db_exists() or db.get_setting("gpu_high_performance") != "0"))
+    except Exception:
+        logging.warning("could not set the GPU preference", exc_info=True)
     if db.db_exists():
         ui.apply_theme(db.get_setting("theme") or "", custom=ui.custom_from(db.get_setting))
     else:

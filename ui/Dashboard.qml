@@ -622,7 +622,7 @@ Item {
 
                 // box set: two more cases peek out behind the cover, and fan out a little on hover
                 Repeater {
-                    model: key.indexOf("set:") === 0 && !dash.shelf && cell.opening === 0 ? 2 : 0
+                    model: (key || "").indexOf("set:") === 0 && !dash.shelf && cell.opening === 0 ? 2 : 0
                     Rectangle {
                         readonly property real fan: cell.pointerIn ? 1 : 0
                         x: box.x + (index + 1) * (7 + 4 * fan); y: box.y - (index + 1) * (5 + 3 * fan)

@@ -2,8 +2,10 @@
 import os
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -123,3 +125,50 @@ class ImageResolutionTests(unittest.TestCase):
         self.assertIn("def fetch_missing(directory: dict, redo_images: bool = False)", w)
         d = (ROOT / "ui" / "dashboard.py").read_text(encoding="utf-8")
         self.assertIn('save_box_art(img.crop((left, 0, left + tw, h)), [item], "front")', d)   # a picked frame is yours
+
+
+class SmoothnessTests(unittest.TestCase):
+    def test_card_faces_are_drawn_once_per_text(self):
+        os.environ.setdefault("LOCALAPPDATA", tempfile.mkdtemp())
+        from PySide6.QtGui import QGuiApplication
+        QGuiApplication.instance() or QGuiApplication([])
+        import database as db
+        db.init_db()
+        from ui import dvd_box
+        item = {"uuid": "card-test", "title": "T", "synopsis": "One", "media_type": "movie",
+                "file_path": str(Path(tempfile.mkdtemp()) / "T.mkv")}
+        a = dvd_box.box_textures(item)["back"]
+        folder = db.data_dir() / "cache" / "box"
+        first = sorted(folder.glob("card-test-back*"))
+        stamp = first[0].stat().st_mtime_ns
+        self.assertEqual(dvd_box.box_textures(item)["back"], a)              # same text: not drawn again
+        self.assertEqual(first[0].stat().st_mtime_ns, stamp)
+        dvd_box.box_textures({**item, "synopsis": "Two"})
+        now = sorted(folder.glob("card-test-back*"))
+        self.assertEqual(len(now), 1)                                         # the old card went
+        self.assertNotEqual(now, first)
+
+    def test_gpu_preference_never_overrides_yours(self):
+        from utils import gpu_pref
+        store = {}
+
+        class K:
+            def __init__(self, name): self.name = name
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        fake = types.SimpleNamespace(
+            HKEY_CURRENT_USER="HKCU", REG_SZ=1,
+            CreateKey=lambda hive, sub: K(sub),
+            QueryValueEx=lambda k, n: (store[(k.name, n)], 1) if (k.name, n) in store else (_ for _ in ()).throw(OSError()),
+            SetValueEx=lambda k, n, r, t, v: store.__setitem__((k.name, n), v),
+            DeleteValue=lambda k, n: store.pop((k.name, n)) if (k.name, n) in store else (_ for _ in ()).throw(OSError()))
+        exe = r"D:\Program Files\Media Vault\MediaVault.exe"
+        with mock.patch.dict(sys.modules, {"winreg": fake}), mock.patch.object(gpu_pref, "_exe", return_value=exe):
+            self.assertEqual(gpu_pref.apply(True), "set")
+            self.assertEqual(store[(gpu_pref.KEY, exe)], "GpuPreference=2;")
+            self.assertEqual(gpu_pref.apply(False), "cleared")
+            self.assertNotIn((gpu_pref.KEY, exe), store)
+            store[(gpu_pref.KEY, exe)] = "GpuPreference=1;"                   # you chose power saving in Windows
+            self.assertEqual(gpu_pref.apply(True), "yours")
+            self.assertEqual(store[(gpu_pref.KEY, exe)], "GpuPreference=1;")
+        self.assertEqual(gpu_pref.apply(True), "n/a")                         # not the installed app: nothing

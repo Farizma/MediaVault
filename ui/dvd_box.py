@@ -63,18 +63,31 @@ def _text_card(title: str, body: str) -> QImage:
     return img
 
 
+def _card(folder, uid: str, face: str, title: str, body: str):
+    """A titled card face, drawn once per text (View More used to redraw and re-save it on every open and every
+    carousel turn, on the interface's own thread; and a face rewritten while it was loading failed to decode)."""
+    import hashlib
+    tag = hashlib.sha1(f"{title}\0{body}".encode("utf-8")).hexdigest()[:10]
+    path = folder / f"{uid}-{face}-{tag}.png"
+    if not path.exists():
+        for old in folder.glob(f"{uid}-{face}*.png"):      # the card for the old text
+            old.unlink(missing_ok=True)
+        tmp = path.with_suffix(".tmp.png")
+        _text_card(title, body).save(str(tmp))
+        tmp.replace(path)                                  # whole or not at all
+    return path
+
+
 def box_textures(item: dict) -> dict:
     """File URLs for the front and back faces. The front is the poster, or a titled card if there is none."""
     folder = db.data_dir() / "cache" / "box"
     folder.mkdir(parents=True, exist_ok=True)
     front = scraper.cover_path(item)
     if not front.exists():
-        front = folder / f"{item['uuid']}-front.png"
-        _text_card(item["title"], "").save(str(front))
+        front = _card(folder, item["uuid"], "front", item["title"], "")
     back = scraper.custom_back_path(item)
     if not back.exists():
-        back = folder / f"{item['uuid']}-back.png"
-        _text_card(item["title"], item.get("synopsis") or "No description yet.").save(str(back))
+        back = _card(folder, item["uuid"], "back", item["title"], item.get("synopsis") or "No description yet.")
     spine = scraper.spine_path(item)
     return {"front": file_url(front), "back": file_url(back), "spine": file_url(spine) if spine else "",
             "customFront": scraper.custom_front_path(item).exists(), "customBack": scraper.custom_back_path(item).exists(),

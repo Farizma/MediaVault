@@ -452,6 +452,14 @@ Item {
                         text: core === "vlc" && level > 1 ? "Upscaling levels need the MPV engine; VLC plays at Standard."
                             : level === 3 && !root.hw.rtx ? "AI Ultra needs an NVIDIA RTX GPU; this PC will play at High Quality." : ""
                     }
+                    Caption { text: "GRAPHICS" }
+                    Toggle {
+                        Layout.fillWidth: true
+                        text: "Use the high-performance GPU"
+                        hint: "On a laptop with two GPUs, draws Media Vault on the fast one (NVIDIA / AMD) instead of the built-in one, so scrolling and animations stay smooth. The interface always draws on the GPU (Direct3D 11); videos already use the fast GPU. Applies next launch; also shown in Windows Settings \u203A Display \u203A Graphics."
+                        checked: Backend.setting("gpu_high_performance") !== "0"
+                        onToggled: Backend.setSetting("gpu_high_performance", checked ? "1" : "0")
+                    }
                     Caption { text: "SOUND AND MOTION" }
                     Toggle {
                         Layout.fillWidth: true

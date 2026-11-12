@@ -25,7 +25,7 @@ SETTINGS = {"tmdb_key", "omdb_key", "night_mode", "reduce_motion", "upscale_leve
             "custom_muted", "custom_amber", "custom_red", "auto_credits", "auto_tags",
             "fanart_key", "animated_theme", "hover_preview", "detail_order", "title_language", "group_collections", "discord", "discord_detail", "discord_app_id",
             "discord_details", "discord_state", "discord_paused", "discord_hide_adult", "discord_image_text",
-            "discord_folders", "discord_hide_tags", "image_quality"}
+            "discord_folders", "discord_hide_tags", "image_quality", "gpu_high_performance"}
 
 
 TITLE_LANGUAGES = [("english", "English"), ("romaji", "Romaji"), ("original", "Original")]
@@ -1294,6 +1294,13 @@ class Dashboard(QObject):
             engine.core_pref = value
         elif key == "auto_credits":
             engine.auto_credits = value != "0"
+        elif key == "gpu_high_performance":
+            from utils import gpu_pref
+            try:
+                if gpu_pref.apply(value != "0") == "yours":
+                    self.toast.emit("You chose a GPU for Media Vault in Windows' Graphics settings: change it there")
+            except OSError:
+                log.warning("GPU preference", exc_info=True)
         elif key in ("group_collections", "title_language"):
             self.reload()
         elif key.startswith("discord") and self.app.presence:
