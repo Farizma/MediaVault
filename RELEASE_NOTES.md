@@ -7,6 +7,12 @@ or download `MediaVault_v1.0.8_setup.exe` below.
 Choose *More info* › *Run anyway*. The SHA-256 of the setup file is listed below.
 
 ### New
+- **Banners.** Every title, box set and OVA box set gets a banner: the highest-rated TMDB backdrop without text
+  (TMDB's "no language" backdrops, best rating first). AniList box sets are looked up on TMDB by their English,
+  romanized or original name; if TMDB has nothing, AniList's own banner is used. The banner is now the picture on
+  the dashboard's recommended carousel, and it runs across the top of View More, fading into the panel. The title
+  sits lower on its fading edge, with soft bubbles behind the text that sits on the picture. Box sets already in your
+  library get their banners on the first start of 1.0.8.
 - **Paste a link into Fix Scraped Data.** A TMDB page (film or series; an episode or season page counts as its
   series), an AniList page, a MyAnimeList page (found on AniList) or an IMDb page (through OMDb) brings up exactly
   that title as the only result. Pick it to re-scrape from it. A TMDB link decides film or series by itself.

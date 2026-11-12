@@ -256,6 +256,8 @@ def tmdb_details(kind: str, tmdb_id: int, key: str) -> dict:
             "score": _score(r),
             "collection_id": coll.get("id"), "collection_name": coll.get("name"),
             "collection_poster_url": f"{IMG}w500{coll['poster_path']}" if coll.get("poster_path") else None,
+            "banner_url": _best_backdrop(r.get("images") or {}),
+            "collection_banner_url": f"{IMG}original{coll['backdrop_path']}" if coll.get("backdrop_path") else None,
             "cast": _cast((r.get(credits) or {}).get("cast") or []),
             "gallery_urls": _backdrops(r.get("images") or {}) + (episode_stills(r, key) if kind == "show" else []),
             "certification": certification(r, kind), "original_title": _original(r), "romaji_title": None,
@@ -283,6 +285,17 @@ def episode_stills(r: dict, key: str) -> list[str]:
         if len(out) >= GALLERY_MAX_SERIES:
             break
     return out[:GALLERY_MAX_SERIES]
+
+
+def _best_backdrop(images: dict) -> str | None:
+    """The banner: the highest-rated backdrop with no text on it (TMDB's "no language", like
+    /images/backdrops?image_language=xx&image_sort=rating.desc), else the highest-rated of any language."""
+    shots = [b for b in images.get("backdrops") or [] if b.get("file_path")]
+    if not shots:
+        return None
+    best = sorted(shots, key=lambda b: (b.get("iso_639_1") not in (None, "", "xx"), -(b.get("vote_average") or 0),
+                                        -(b.get("vote_count") or 0)))[0]
+    return f"{IMG}original{best['file_path']}"
 
 
 def _backdrops(images: dict) -> list[str]:
@@ -414,7 +427,8 @@ def _lookup(kind: str, p: Parsed, keys: dict, source: str = "tmdb") -> dict | No
             try:   # one more request: the search result has no cast, and does not say which collection a film is in
                 d = tmdb_details(kind, hit["tmdb_id"], keys["tmdb"])
                 hit.update({k: d[k] for k in ("collection_id", "collection_name", "collection_poster_url", "cast", "gallery_urls",
-                                              "certification", "original_title", "alt_titles")})
+                                              "certification", "original_title", "alt_titles", "banner_url",
+                                              "collection_banner_url")})
                 if kind == "show":
                     hit["collection_id"] = hit["collection_name"] = None
             except ScrapeError:
@@ -539,6 +553,54 @@ def disc_art(item: dict) -> Path | None:
     for p in (custom_disc_path(item), disc_path(item), cover_path(item)):
         if p.exists():
             return p
+    return None
+
+
+BANNER_BOX = (1920, 1080)
+
+
+def banner_path(item: dict) -> Path:
+    """A title's (or, through collection_item, a box set's) banner: one wide image for View More and the
+    recommended carousel. A series has one for all its episodes."""
+    if item["media_type"] == "show":
+        return Path(item["file_path"]).parent / ASSET_DIR / "_series.banner.webp"
+    return _assets(item) / f"{_stem(item)}.banner.webp"
+
+
+def save_banner(item: dict, url: str | None, force: bool = False) -> bool:
+    if not safe_url(url):
+        return False
+    dest = banner_path(item)
+    if dest.exists() and not force:
+        return True
+    try:
+        save_webp(fetch_image(url), dest, box=BANNER_BOX)
+        return True
+    except Exception:
+        log.warning("banner failed: %s", url, exc_info=True)
+        return False
+
+
+def tmdb_banner_for(titles: list[str], year: str | None, key: str) -> str | None:
+    """The best TMDB backdrop for a title known by other names (an AniList series or OVA): searched as a series,
+    then as a film, by each name in turn; the year narrows it when given."""
+    for title in [t for t in dict.fromkeys(titles) if t]:
+        for kind in ("show", "movie"):
+            path, year_key = ("search/tv", "first_air_date_year") if kind == "show" else ("search/movie", "year")
+            try:
+                data = _tmdb_json(path, key, query=title, include_adult="true", **({year_key: year} if year else {}))
+                hits = data.get("results") or []
+                if not hits and year:
+                    hits = _tmdb_json(path, key, query=title, include_adult="true").get("results") or []
+                if not hits:
+                    continue
+                images = _tmdb_json(f"{'tv' if kind == 'show' else 'movie'}/{int(hits[0]['id'])}/images", key,
+                                    include_image_language="null,xx,en,ja")
+            except ScrapeError:
+                continue
+            url = _best_backdrop(images)
+            if url:
+                return url
     return None
 
 

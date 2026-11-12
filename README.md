@@ -82,7 +82,7 @@ _Nothing decided yet. Ideas move here once we choose to build them._
 | Updates inside Media Vault (no wizard), Update all, update badge, rollbacks | 1.0.5 |
 | Alternate titles (English / Romanized / Native / Other), Discord status text and privacy, encrypted API keys, tag suggestions, adult OVAs as box sets, AniList tags as genres, studio tags, whole-cover scans, DVD-shaped box, close and libmpv update fixes | 1.0.6 |
 | Hover preview fix and switch, dashboard keeps its place, automatic OVA box sets, carousel rotation | 1.0.7 |
-| Front art always opens the crop editor, links in Fix Scraped Data, TMDB episode stills in series Galleries | 1.0.8 |
+| Banners from the best TMDB backdrop (dashboard and View More), links in Fix Scraped Data, TMDB episode stills, Front art opens the crop editor | 1.0.8 |
 
 ### Proposed
 

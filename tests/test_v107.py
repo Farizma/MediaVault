@@ -198,3 +198,76 @@ class LinkTests(unittest.TestCase):
             urls = scraper.episode_stills(r, "k")
         self.assertEqual(urls, [scraper.IMG + "original/a.jpg", scraper.IMG + "original/b.jpg", scraper.IMG + "original/c.jpg"])
         self.assertEqual(scraper.GALLERY_MAX_SERIES, 18)
+
+
+class BannerTests(unittest.TestCase):
+    def setUp(self):
+        import os
+        import sys
+        import tempfile
+        sys.path.insert(0, str(ROOT))
+        os.environ.setdefault("LOCALAPPDATA", tempfile.mkdtemp())
+
+    def test_best_backdrop_is_textless_and_highest_rated(self):
+        from utils import scraper
+        images = {"backdrops": [{"file_path": "/en.jpg", "iso_639_1": "en", "vote_average": 9.9},
+                                {"file_path": "/a.jpg", "iso_639_1": None, "vote_average": 5.2, "vote_count": 3},
+                                {"file_path": "/b.jpg", "iso_639_1": None, "vote_average": 5.6, "vote_count": 1},
+                                {"file_path": "/xx.jpg", "iso_639_1": "xx", "vote_average": 5.4}]}
+        self.assertEqual(scraper._best_backdrop(images), scraper.IMG + "original/b.jpg")
+        self.assertEqual(scraper._best_backdrop({"backdrops": [{"file_path": "/en.jpg", "iso_639_1": "en"}]}),
+                         scraper.IMG + "original/en.jpg")             # only text versions: still better than none
+        self.assertIsNone(scraper._best_backdrop({}))
+
+    def test_anilist_set_finds_its_tmdb_backdrop_by_name(self):
+        from unittest import mock
+        from utils import scraper
+        calls = []
+
+        def tmdb(path, key, **q):
+            calls.append((path, q.get("query")))
+            if path == "search/tv":
+                return {"results": [{"id": 90395}]} if q.get("query") == "Master Piece THE ANIMATION" else {"results": []}
+            if path == "tv/90395/images":
+                return {"backdrops": [{"file_path": "/best.jpg", "iso_639_1": None, "vote_average": 6}]}
+            return {"results": []}
+        with mock.patch.object(scraper, "_tmdb_json", side_effect=tmdb):
+            url = scraper.tmdb_banner_for(["Master Piece", "Master Piece THE ANIMATION"], None, "k")
+        self.assertEqual(url, scraper.IMG + "original/best.jpg")
+
+    def test_banner_for_sets_and_series(self):
+        import os
+        import tempfile
+        import database as db
+        from utils import scraper
+        from ui.dashboard import banner_for
+        db.init_db()
+        root = tempfile.mkdtemp()
+        did = db.add_directory(root, "B", True)
+        paths = []
+        for n in (1, 2):
+            p = os.path.join(root, f"Film {n}.mkv")
+            open(p, "w").close()
+            paths.append(p)
+        db.add_items([{"uuid": db.file_id(p), "file_path": db.norm(p), "parent_directory_id": did, "title": f"Film {i}",
+                       "media_type": "movie", "collection_id": 7, "collection_name": "Set"} for i, p in enumerate(paths)])
+        film = db.get_media(db.file_id(paths[0]))
+        self.assertIsNone(banner_for({**film, "key": film["uuid"]}))
+        g = scraper.gallery_dir(film)
+        g.mkdir(parents=True, exist_ok=True)
+        (g / "c-1.webp").write_bytes(b"x")
+        (g / "s-01.webp").write_bytes(b"x")
+        self.assertEqual(banner_for({**film, "key": film["uuid"]}).name, "s-01.webp")    # best scraped still before yours
+        self.assertEqual(banner_for({"key": "set:7"}).name, "s-01.webp")                 # a set borrows a film's
+        own = scraper.banner_path(scraper.collection_item(7))
+        own.parent.mkdir(parents=True, exist_ok=True)
+        own.write_bytes(b"x")
+        self.assertEqual(banner_for({"key": "set:7"}), own)                              # its own banner wins
+        show = {"media_type": "show", "file_path": os.path.join(root, "Show", "e1.mkv"), "uuid": "u"}
+        self.assertEqual(scraper.banner_path(show).name, "_series.banner.webp")          # one per series
+
+    def test_view_more_header(self):
+        qml = (ROOT / "ui" / "DetailView.qml").read_text(encoding="utf-8")
+        self.assertIn("readonly property bool hasBanner: (info.banner || ", qml)
+        self.assertIn("Qt.rgba(bannerFade.c.r, bannerFade.c.g, bannerFade.c.b, 1.0)", qml)      # ends opaque: no edge
+        self.assertIn("Item { visible: root.hasBanner; Layout.preferredHeight: pane.bannerH * 0.42", qml)

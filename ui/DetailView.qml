@@ -71,6 +71,7 @@ Item {
         turnP = 0
         carousel.start()
     }
+    readonly property bool hasBanner: (info.banner || "") !== ""
     property real f: 0                       // 0 = box sits on its card, 1 = box settled in the sheet
     property rect from: Qt.rect(0, 0, 0, 0)  // what opened it, in this item's coordinates: a card's poster, or a button
     property bool fromCard: false            // a poster: the box IS the poster (fully visible from the start)
@@ -297,6 +298,39 @@ Item {
             anchors { left: stage.right; right: parent.right; top: parent.top; bottom: parent.bottom }
             transform: Translate { x: 24 * (1 - root.sheetIn) }
 
+            // the banner: the title's (or box set's) best-rated backdrop across the top of this pane, fading into the
+            // panel. It scrolls away at half speed; the text over it sits on soft bubbles so it stays readable.
+            readonly property real bannerH: Math.min(300, Math.max(200, pane.width * 0.42))
+            Item {
+                id: bannerBox
+                visible: root.hasBanner
+                anchors { left: parent.left; right: parent.right; top: parent.top }
+                height: pane.bannerH
+                y: -flick.contentY * 0.5
+                clip: true
+                Image {
+                    anchors.fill: parent
+                    source: root.info.banner || ""
+                    fillMode: Image.PreserveAspectCrop
+                    asynchronous: true
+                    sourceSize.width: 1600
+                    opacity: status === Image.Ready ? 1 : 0
+                    Behavior on opacity { NumberAnimation { duration: 300 * Theme.motion } }
+                }
+                Rectangle {          // fades into the panel's own colour
+                    id: bannerFade
+                    anchors.fill: parent
+                    // the panel colour is slightly see-through: end on it fully opaque so no edge of the picture shows
+                    readonly property color c: Qt.color(Theme.panel)
+                    gradient: Gradient {
+                        GradientStop { position: 0.0; color: Qt.rgba(bannerFade.c.r, bannerFade.c.g, bannerFade.c.b, 0.10) }
+                        GradientStop { position: 0.45; color: Qt.rgba(bannerFade.c.r, bannerFade.c.g, bannerFade.c.b, 0.40) }
+                        GradientStop { position: 0.80; color: Qt.rgba(bannerFade.c.r, bannerFade.c.g, bannerFade.c.b, 0.85) }
+                        GradientStop { position: 1.0; color: Qt.rgba(bannerFade.c.r, bannerFade.c.g, bannerFade.c.b, 1.0) }
+                    }
+                }
+            }
+
             Flickable {
                 id: flick
                 SmoothWheel { view: flick; step: 160 }
@@ -309,6 +343,8 @@ Item {
                     id: col
                     width: flick.width - 14
                     spacing: 14
+                    // with a banner the title sits lower, on the banner's fading edge, leaving the picture its space
+                    Item { visible: root.hasBanner; Layout.preferredHeight: pane.bannerH * 0.42; Layout.fillWidth: true }
 
                     // fixed header: what this is, and the tools for it
                     RowLayout {
@@ -316,6 +352,7 @@ Item {
                         Layout.rightMargin: 48                 // clear of the close button
                         spacing: 10
                         Text {
+                            Bubble { z: -1 }
                             text: root.setSlide ? "BOX SET · " + (root.d.episodes || []).length + " FILMS"
                                   : root.d.isSet ? (root.cur.label + " · " + (root.d.title || "")).toUpperCase()
                                   : ((root.d.isShow ? "SERIES" : "MOVIE") + (root.d.year ? " · " + root.d.year : ""))
@@ -337,12 +374,25 @@ Item {
                             visible: active
                             sourceComponent: ({ title: secTitle, rating: secRating, meta: secMeta, synopsis: secSynopsis, cast: secCast, gallery: secGallery,
                                                 tags: secTags, boxset: secBoxSet, notes: secNotes, list: secList })[modelData] || null
+                            // the title and score blocks sit on the banner: a soft bubble behind each keeps them readable
+                            Bubble { z: -1; visible: root.hasBanner && (modelData === "title" || modelData === "rating") && parent.active
+                                     width: parent.width - 32; x: -10; y: -6; height: parent.height + 12; radius: 12 }
                         }
                     }
                 }
             }
 
             component Caption: Text { color: Theme.faint; font.family: Theme.mono; font.pixelSize: 11 }
+            // a soft panel-coloured pill behind text that sits on the banner (only while there is a banner)
+            component Bubble: Rectangle {
+                visible: root.hasBanner
+                x: -8; y: -4
+                width: parent.contentWidth !== undefined ? parent.contentWidth + 16 : parent.width + 16
+                height: parent.height + 8
+                radius: 8
+                color: Qt.rgba(Qt.color(Theme.panel).r, Qt.color(Theme.panel).g, Qt.color(Theme.panel).b, 0.62)
+                border.color: Theme.line
+            }
 
             // ---- title. In a box set it is also a dropdown of the set's films (the arrow says so)
             Component {

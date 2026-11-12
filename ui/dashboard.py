@@ -61,6 +61,26 @@ def display_titles(card: dict, pref: str | None = None) -> tuple[str, str]:
     return main, ("" if _same(sub, main) else sub)
 
 
+def banner_for(card: dict):
+    """The wide picture for a title or box set: its banner (the best-rated TMDB backdrop), else the best scraped
+    Gallery still, else any Gallery image. A box set without its own banner borrows its first film's. None if none."""
+    key = card.get("key", "")
+    if key.startswith("set:"):
+        own = scraper.banner_path(scraper.collection_item(key[4:]))
+        if own.exists():
+            return own
+        films = db.films_in_set(key[4:])
+        return next((b for b in (banner_for(f) for f in films) if b), None)
+    try:
+        own = scraper.banner_path(card)
+    except (KeyError, TypeError):
+        return None
+    if own.exists():
+        return own
+    gallery = scraper.gallery_images(card)
+    return next((p for p in gallery if p.name.startswith("s-")), None) or (gallery[0] if gallery else None)
+
+
 def art_item(card: dict) -> dict:
     """What a card's box art belongs to: a box set has its own (keyed by collection), everything else its file."""
     key = card.get("key", "")
@@ -123,8 +143,7 @@ def billboard_deck(cards: list[dict], keep: list[str], size: int = BILLBOARD_SIZ
         deck += random.sample(done, min(len(done), size - len(deck)))
     items = []
     for c in deck:
-        gallery = scraper.gallery_images(c)          # a random still from the title's Gallery, else the fanart / cover
-        art = random.choice(gallery) if gallery else next((p for p in (scraper.fanart_path(c), scraper.cover_path(c)) if p.exists()), None)
+        art = banner_for(c) or next((p for p in (scraper.fanart_path(c), scraper.cover_path(c)) if p.exists()), None)
         length = f"{c['episodes']} episodes" if c["episodes"] else duration_label(c["duration"])
         meta = " · ".join(x for x in ((c["release_date"] or "")[:4], c["resolution"], c["codec"],
                                       c["audio_layout"], length) if x)
@@ -546,6 +565,7 @@ class Dashboard(QObject):
             "subtitle": display_titles({**item, "key": key})[1] if not films else "", "synopsis": item["synopsis"] or "",
             # every other title, grouped English / Romanized / Native / Other languages (not the ones shown above)
             "altTitles": [] if films else alttitles.for_display(item.get("alt_titles"), display_titles({**item, "key": key})),
+            "banner": file_url(b) if (b := banner_for({**item, "key": key})) else "",
             "year": (item["release_date"] or "")[:4], "facts": facts, "cover": tex["front"], "back": tex["back"],
             "customFront": tex["customFront"], "customBack": tex["customBack"],
             "spine": tex["spine"], "customSpine": tex["customSpine"],

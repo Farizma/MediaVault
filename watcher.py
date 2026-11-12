@@ -122,6 +122,10 @@ def _scrape_into(rows, tags, opts=None, source: str = "tmdb") -> None:
                 row["synopsis"] = hit["synopsis"]
             row["tmdb_id"] = hit.get("tmdb_id")
             row["anilist_id"] = hit.get("anilist_id")
+            if "gallery" in opts and hit.get("banner_url"):
+                scraper.save_banner(row, hit["banner_url"])
+            if "gallery" in opts and hit.get("collection_id") and hit.get("collection_banner_url"):
+                scraper.save_banner(scraper.collection_item(hit["collection_id"]), hit["collection_banner_url"])
             if "gallery" in opts and (hit.get("gallery_urls") or hit.get("mal_id")):
                 owner = db.cast_owner(row)
                 if owner not in gallery_done:            # a series' episodes share one Gallery
@@ -188,7 +192,30 @@ def _ova_to_set(items: list[dict], hit: dict, owner: str) -> bool:
             scraper.save_collection_poster(cid, hit["poster_url"])
         except Exception:
             log.warning("box set cover failed for %s", name, exc_info=True)
+    set_banner(cid, hit)
     return True
+
+
+def set_banner(cid: int, hit: dict, force: bool = False) -> bool:
+    """A box set's banner: the best-rated TMDB backdrop of the series (found by its English, romaji or original
+    name when it was scraped from AniList), else AniList's own banner."""
+    item = scraper.collection_item(cid)
+    if scraper.banner_path(item).exists() and not force:
+        return True
+    key = scraper.api_keys().get("tmdb")
+    url = hit.get("collection_banner_url") or hit.get("banner_url")
+    if not url and key and hit.get("anilist_id"):
+        titles = [hit.get("title")]
+        try:
+            from utils import alttitles
+            alts = alttitles.loads(hit.get("alt_titles"))
+            titles += alts["english"] + alts["romanized"] + alts["native"]
+        except Exception:
+            pass
+        url = scraper.tmdb_banner_for(titles + [hit.get("romaji_title"), hit.get("original_title")],
+                                      (hit.get("release_date") or "")[:4] or None, key)
+    url = url or next(iter(hit.get("gallery_urls") or []), None)       # AniList's banner
+    return scraper.save_banner(item, url, force)
 
 
 def convert_ova_series(directory: dict) -> int:
@@ -211,6 +238,32 @@ def convert_ova_series(directory: dict) -> int:
         if _ova_to_set(items, hit, owner):
             db.set_tag_group([i["uuid"] for i in items], "studio:", hit.get("studios") or [])
             done += 1
+    return done
+
+
+def fetch_set_banners(directory: dict) -> int:
+    """Banners for this folder's box sets that have none (one TMDB lookup each; AniList sets are looked up by name).
+    Returns how many were added."""
+    from utils import anilist
+    done, seen = 0, set()
+    for it in db.list_media(directory["id"]):
+        cid = it.get("collection_id")
+        if cid is None or cid < 0 or cid in seen:        # your own sets keep what you give them
+            continue
+        seen.add(cid)
+        if scraper.banner_path(scraper.collection_item(cid)).exists():
+            continue
+        try:
+            if cid >= anilist.OVA_SET_OFFSET and it.get("anilist_id"):
+                hit = anilist.details(it["anilist_id"])
+            elif it.get("tmdb_id") and scraper.api_keys().get("tmdb"):
+                hit = scraper.tmdb_details("movie", it["tmdb_id"], scraper.api_keys()["tmdb"])
+            else:
+                continue
+        except Exception as e:
+            log.warning("box set banner skipped for %s: %s", it.get("collection_name"), e)
+            continue
+        done += bool(set_banner(cid, hit))
     return done
 
 
@@ -308,6 +361,10 @@ def fetch_missing(directory: dict) -> int:
                         scraper.save_webp(img, scraper.poster_path(i))
             except Exception:
                 log.warning("poster failed for %s", first["title"], exc_info=True)
+        if "gallery" in opts and hit.get("banner_url") and not scraper.banner_path(first).exists():
+            scraper.save_banner(first, hit["banner_url"])
+        if "gallery" in opts and first.get("collection_id") is not None and first["collection_id"] > 0:
+            set_banner(first["collection_id"], hit)
         if need["gallery"] and (hit.get("gallery_urls") or hit.get("mal_id")):
             from utils import anilist
             scraper.save_gallery(first, anilist.gallery_urls(hit) if hit.get("anilist_id") else hit["gallery_urls"])

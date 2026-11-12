@@ -168,6 +168,15 @@ class App:
                     self.dashboard.toast.emit(f"{n} OVA series {'is' if n == 1 else 'are'} now box sets")
             except Exception:
                 logging.warning("OVA box sets: will try again at the next start", exc_info=True)
+        # once: banners for the box sets already in the library (new ones get theirs when scanned)
+        if self.db.get_setting("set_banners_done") != "1":
+            from watcher import fetch_set_banners
+            try:
+                if sum(fetch_set_banners(d) for d in self.db.list_directories() if d["should_scrape"]):
+                    changed = True
+                self.db.set_setting("set_banners_done", "1")
+            except Exception:
+                logging.warning("box set banners: will try again at the next start", exc_info=True)
         if changed:
             self.dashboard.libraryChanged.emit()
 
