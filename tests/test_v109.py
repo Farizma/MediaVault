@@ -120,6 +120,21 @@ class DataTests(unittest.TestCase):
         self.assertEqual(done, [self.a])
 
 
+    def test_gallery_image_becomes_the_banner(self):
+        from PIL import Image
+        item = db.get_media(self.b)
+        gdir = scraper.gallery_dir(item)
+        gdir.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (64, 36), "blue").save(gdir / "c-1-00.webp")
+        self.d.setBannerFromGallery(self.b, "c-1-00.webp", False)
+        self.assertTrue(scraper.banner_path(item).exists())
+        self.d.setBannerFromGallery(self.b, "c-1-00.webp", True)
+        self.assertTrue(scraper.banner_path(scraper.collection_item(9109)).exists())
+        self.assertTrue(self.d.detail("set:9109")["banner"])
+        before = sorted(p.name for p in scraper.banner_path(item).parent.iterdir())
+        self.d.setBannerFromGallery(self.b, "../../evil.webp", False)          # only a Gallery file name
+        self.assertEqual(sorted(p.name for p in scraper.banner_path(item).parent.iterdir()), before)
+
 class GridSettleTests(unittest.TestCase):
     def test_second_change_while_animating_rebuilds(self):
         from PySide6.QtGui import QGuiApplication

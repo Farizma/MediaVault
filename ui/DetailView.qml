@@ -1067,6 +1067,18 @@ Item {
             fillMode: Image.PreserveAspectFit; asynchronous: true; smooth: true
             scale: 0.96 + 0.04 * lightbox.shown
         }
+        // make the image shown the banner: of this title, or of the box set it is in
+        Row {
+            anchors { top: parent.top; horizontalCenter: parent.horizontalCenter; topMargin: 16 }
+            spacing: 8
+            readonly property var shot: lightbox.shots.length ? lightbox.shots[Math.min(lightbox.index, lightbox.shots.length - 1)] : null
+            GlassButton { small: true; label: "Set as banner"; visible: !!parent.shot
+                tip: "Use this image across the top of View More and on the dashboard"
+                onClicked: Backend.setBannerFromGallery(root.infoKey, parent.shot.name, false) }
+            GlassButton { small: true; label: "Set as box set banner"; visible: !!parent.shot && root.info.inSet === true
+                tip: "Use this image for " + ((root.info.boxSet && root.info.boxSet.name) || "the box set")
+                onClicked: Backend.setBannerFromGallery(root.infoKey, parent.shot.name, true) }
+        }
         Text { anchors { bottom: parent.bottom; horizontalCenter: parent.horizontalCenter; bottomMargin: 24 }
             text: (lightbox.index + 1) + " / " + lightbox.shots.length + "   \u00B7   \u2190 \u2192 to page, Esc to close"
             color: Theme.faint; font.family: Theme.mono; font.pixelSize: 11 }

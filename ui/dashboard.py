@@ -4,6 +4,7 @@ import logging
 import os
 import random
 import re
+import shutil
 import sys
 import threading
 import time
@@ -1227,6 +1228,35 @@ class Dashboard(QObject):
             self.toast.emit(f"Imported {n} image{'s' if n != 1 else ''} into the Gallery" if n else "None of those images could be downloaded")
             self.boxArtChanged.emit(key)
         threading.Thread(target=work, daemon=True).start()
+
+    @Slot(str, str, bool)
+    def setBannerFromGallery(self, key: str, name: str, for_set: bool):
+        """View More > Gallery > an image > "Set as banner": that image becomes the title's banner (for_set: the banner
+        of the box set the film is in). It replaces the scraped one; a later scrape does not overwrite it."""
+        item = self._target(key)
+        if not item or not re.fullmatch(r"[cs]-[\w.-]+\.webp", name):
+            return
+        src = scraper.gallery_dir(item) / name
+        if not src.is_file():
+            return
+        if for_set:
+            if item.get("collection_id") is None:
+                return
+            owner, changed = scraper.collection_item(item["collection_id"], item.get("collection_name") or ""), f"set:{item['collection_id']}"
+        else:
+            owner, changed = item, key
+        dest = scraper.banner_path(owner)
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, dest)
+        except OSError as e:
+            self.toast.emit(f"Could not set the banner: {e}")
+            return
+        self.toast.emit("Box set banner changed" if for_set else "Banner changed")
+        self.boxArtChanged.emit(key)
+        if changed != key:
+            self.boxArtChanged.emit(changed)
+        self.billboardChanged.emit()
 
     @Slot(str, str)
     def removeGalleryImage(self, key: str, name: str):
