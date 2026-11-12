@@ -277,13 +277,38 @@ def _writable(folder: Path) -> bool:
         return False
 
 
+APP_ID = "{6F1C2D4E-8A3B-4C7D-9E21-5B0F7A9C3D18}"     # installer.iss AppId
+
+
+def installed_for_all_users(folder: Path) -> bool | None:
+    """How this copy was installed, from setup's own uninstall entry: True for all users (HKLM), False for you only
+    (HKCU), None when there is no entry for this folder (a portable copy). An update must run in the same mode, or
+    setup installs a second copy of its registration, with a second desktop shortcut."""
+    if sys.platform != "win32":
+        return None
+    import ntpath
+    import winreg
+    sub = rf"Software\Microsoft\Windows\CurrentVersion\Uninstall\{APP_ID}_is1"
+    want = ntpath.normcase(ntpath.normpath(str(folder)))
+    for hive, view, mode in ((winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_64KEY, True),
+                             (winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_32KEY, True),
+                             (winreg.HKEY_CURRENT_USER, 0, False)):
+        try:
+            with winreg.OpenKey(hive, sub, 0, winreg.KEY_READ | view) as k:
+                where = winreg.QueryValueEx(k, "InstallLocation")[0]
+        except OSError:
+            continue
+        if ntpath.normcase(ntpath.normpath(where)) == want:
+            return mode
+    return None
+
+
 def setup_arguments(folder: Path, all_users: bool) -> str:
     """No wizard: install over this copy, in its own folder, then start Media Vault again. Setup closes Media
     Vault if it is still running. For a copy installed for all users, Windows asks for permission once (UAC)."""
     args = ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", "/RELAUNCH",
             f'/DIR="{folder}"', f'/LOG="{Path(tempfile.gettempdir()) / "MediaVault_update.log"}"']
-    if all_users:
-        args.append("/ALLUSERS")
+    args.append("/ALLUSERS" if all_users else "/CURRENTUSER")      # never left to setup's guess
     return " ".join(args)
 
 
@@ -323,4 +348,5 @@ def run_setup(path: Path) -> None:
     folder = install_dir()
     # ShellExecute, not subprocess: setup asks Windows to elevate itself for an all-users copy, and only
     # ShellExecute can show that prompt
-    os.startfile(str(path), "open", setup_arguments(folder, all_users=not _writable(folder)))   # noqa: S606
+    mode = installed_for_all_users(folder)
+    os.startfile(str(path), "open", setup_arguments(folder, all_users=not _writable(folder) if mode is None else mode))   # noqa: S606

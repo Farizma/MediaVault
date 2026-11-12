@@ -166,5 +166,40 @@ class DetailViewTests(unittest.TestCase):
         self.assertIn("tests.test_v109", wf)
 
 
+class DesktopShortcutTests(unittest.TestCase):
+    def test_update_runs_in_the_mode_it_was_installed_in(self):
+        from utils import components
+        self.assertIn("/CURRENTUSER", components.setup_arguments(Path("C:/MV"), all_users=False))
+        self.assertNotIn("/CURRENTUSER", components.setup_arguments(Path("C:/MV"), all_users=True))
+        entries = {}
+
+        class Key:
+            def __init__(self, loc): self.loc = loc
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        def open_key(hive, sub, res, access):
+            if (hive, bool(access & 0x0100)) not in entries:
+                raise OSError("no key")
+            return Key(entries[(hive, bool(access & 0x0100))])
+        fake = types.SimpleNamespace(HKEY_LOCAL_MACHINE="HKLM", HKEY_CURRENT_USER="HKCU", KEY_READ=0x20019,
+                                     KEY_WOW64_64KEY=0x0100, KEY_WOW64_32KEY=0x0200, OpenKey=open_key,
+                                     QueryValueEx=lambda k, name: (k.loc, 1))
+        with mock.patch.dict(sys.modules, {"winreg": fake}), mock.patch.object(components.sys, "platform", "win32"):
+            folder = Path("D:/Apps/Media Vault")
+            self.assertIsNone(components.installed_for_all_users(folder))
+            entries[("HKCU", False)] = "D:\\Apps\\Media Vault\\"
+            self.assertIs(components.installed_for_all_users(folder), False)
+            entries[("HKLM", True)] = "D:\\Apps\\Media Vault\\"
+            self.assertTrue(components.installed_for_all_users(folder))      # all users wins: that is the real copy
+            entries[("HKLM", True)] = "C:\\Program Files\\Media Vault\\"
+            self.assertIs(components.installed_for_all_users(folder), False)     # another folder's entry does not count
+
+    def test_installer_never_makes_a_second_shortcut(self):
+        iss = (ROOT / "installer.iss").read_text(encoding="utf-8")
+        self.assertIn("Tasks: desktopicon; Check: DesktopIconNeeded", iss)
+        self.assertIn("DeleteFile(ExpandConstant('{userdesktop}\\Media Vault.lnk'))", iss)
+
+
 if __name__ == "__main__":
     unittest.main()

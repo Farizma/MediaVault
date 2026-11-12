@@ -59,7 +59,7 @@ Source: "LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 [Icons]
 Name: "{group}\Media Vault"; Filename: "{app}\MediaVault.exe"
 Name: "{group}\Uninstall Media Vault"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\Media Vault"; Filename: "{app}\MediaVault.exe"; Tasks: desktopicon
+Name: "{autodesktop}\Media Vault"; Filename: "{app}\MediaVault.exe"; Tasks: desktopicon; Check: DesktopIconNeeded
 
 [Run]
 Filename: "{app}\MediaVault.exe"; Description: "Start Media Vault"; Flags: nowait postinstall skipifsilent
@@ -87,6 +87,20 @@ var
 function RelaunchAfterUpdate: Boolean;
 begin
   Result := WizardSilent and (Pos('/RELAUNCH', Uppercase(GetCmdTail)) > 0);
+end;
+
+// One desktop shortcut, never two. An all-users copy puts it on the shared (Public) desktop, a per-user copy on
+// your own. A per-user install or update leaves it out when the shared desktop already has one.
+function DesktopIconNeeded: Boolean;
+begin
+  Result := IsAdminInstallMode or not FileExists(ExpandConstant('{commondesktop}\Media Vault.lnk'));
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  // tidy a second shortcut an earlier update left on your own desktop (it ran in the other install mode)
+  if (CurStep = ssPostInstall) and FileExists(ExpandConstant('{commondesktop}\Media Vault.lnk')) then
+    DeleteFile(ExpandConstant('{userdesktop}\Media Vault.lnk'));
 end;
 
 // The nearest folder of Path that exists (setup creates the rest).
