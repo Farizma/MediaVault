@@ -76,3 +76,50 @@ class PencilTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ImageResolutionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        os.environ.setdefault("LOCALAPPDATA", tempfile.mkdtemp())
+        import database as db
+        db.init_db()
+        cls.db = db
+
+    def tearDown(self):
+        self.db.set_setting("image_quality", "medium")
+
+    def test_each_resolution_keeps_its_size_and_never_enlarges(self):
+        from PIL import Image
+        from utils import scraper
+        big = Image.new("RGB", (3000, 4500), "red")
+        out = Path(tempfile.mkdtemp())
+        for name, poster in (("low", (360, 540)), ("medium", (720, 1080)), ("high", (1200, 1800))):
+            self.db.set_setting("image_quality", name)
+            scraper.save_webp(big, out / f"{name}.webp")
+            self.assertEqual(Image.open(out / f"{name}.webp").size, poster)
+            scraper.save_webp(Image.new("RGB", (4000, 2250)), out / f"{name}-g.webp", box=scraper.GALLERY_BOX)
+            self.assertEqual(Image.open(out / f"{name}-g.webp").size[0], scraper.IMAGE_QUALITY[name]["gallery"][0])
+        scraper.save_webp(Image.new("RGB", (200, 300)), out / "small.webp")          # High, but never blown up
+        self.assertEqual(Image.open(out / "small.webp").size, (200, 300))
+        self.db.set_setting("image_quality", "nonsense")
+        self.assertEqual(scraper.image_quality(), scraper.IMAGE_QUALITY["medium"])
+
+    def test_tmdb_sizes_follow_the_setting(self):
+        from utils import scraper
+        self.db.set_setting("image_quality", "high")
+        self.assertIn("/original/x.jpg", scraper._backdrops({"backdrops": [{"file_path": "/x.jpg"}]})[0])
+        self.db.set_setting("image_quality", "low")
+        self.assertIn("/w780/x.jpg", scraper._backdrops({"backdrops": [{"file_path": "/x.jpg"}]})[0])
+        self.assertEqual(scraper._sized((576, 810)), (432, 608))                     # box art faces scale too
+
+    def test_ui_and_redownload(self):
+        dv = (ROOT / "ui" / "DvdBox.qml").read_text(encoding="utf-8")
+        self.assertNotIn("sourceSize.width: 426", dv)
+        sv = (ROOT / "ui" / "SettingsView.qml").read_text(encoding="utf-8")
+        self.assertIn('Backend.setSetting("image_quality", modelData[0])', sv)
+        self.assertIn("Backend.redownloadImages()", sv)
+        w = (ROOT / "watcher.py").read_text(encoding="utf-8")
+        self.assertIn("def fetch_missing(directory: dict, redo_images: bool = False)", w)
+        d = (ROOT / "ui" / "dashboard.py").read_text(encoding="utf-8")
+        self.assertIn('save_box_art(img.crop((left, 0, left + tw, h)), [item], "front")', d)   # a picked frame is yours

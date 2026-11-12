@@ -559,6 +559,46 @@ Item {
                                 : "English titles, with the original in small underneath when it is different. Every version is searchable." }
                     }
 
+                    Caption { text: "IMAGE RESOLUTION"; Layout.topMargin: 10 }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 14
+                        Rectangle {      // Low | Medium | High
+                            id: qualSeg
+                            property string value: Backend.setting("image_quality") || "medium"
+                            implicitWidth: 300; implicitHeight: 34; radius: 10; color: "#99000000"; border.color: Theme.line
+                            Rectangle { width: (parent.width - 6) / 3; height: parent.height - 6; y: 3; radius: 8; color: Theme.text
+                                x: 3 + width * Math.max(0, ["low", "medium", "high"].indexOf(qualSeg.value))
+                                Behavior on x { NumberAnimation { duration: 240 * Theme.motion; easing.type: Easing.OutCubic } } }
+                            Row {
+                                anchors { fill: parent; margins: 3 }
+                                Repeater {
+                                    model: [["low", "Low"], ["medium", "Medium"], ["high", "High"]]
+                                    Item {
+                                        width: parent.width / 3; height: parent.height
+                                        Text { anchors.centerIn: parent; text: modelData[1]; font.pixelSize: 12; font.weight: Font.Bold
+                                            color: qualSeg.value === modelData[0] ? Theme.black : Theme.muted }
+                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                            onClicked: { qualSeg.value = modelData[0]; Backend.setSetting("image_quality", modelData[0]) } }
+                                    }
+                                }
+                            }
+                        }
+                        Text { Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 11
+                            text: (qualSeg.value === "high" ? "Covers up to 1200 \u00D7 1800, Gallery 1920 \u00D7 1080, banners 2560 \u00D7 1440: sharpest on a large or high-DPI screen, about 4\u00D7 the disk space of Low."
+                                : qualSeg.value === "low" ? "Covers up to 360 \u00D7 540, Gallery 960 \u00D7 540, banners 1280 \u00D7 720: smallest on disk, soft on the 3D box."
+                                : "Covers up to 720 \u00D7 1080, Gallery 1280 \u00D7 720, banners 1920 \u00D7 1080: sharp on most screens.")
+                                  + " Always compressed (WebP). Applies to new downloads and to box art you add." }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 10
+                        GlassButton { small: true; label: "Download images again"; onClicked: Backend.redownloadImages()
+                            tip: "Every scraped cover and Gallery image, again at this resolution" }
+                        Text { Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 11
+                            text: "For titles already in your library. Your own box art and Gallery images, and banners, are kept. It takes a while for a large library." }
+                    }
+
                     Caption { text: "BOX SETS"; Layout.topMargin: 10 }
                     Toggle {
                         Layout.fillWidth: true

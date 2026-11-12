@@ -267,7 +267,7 @@ def fetch_set_banners(directory: dict) -> int:
     return done
 
 
-def fetch_missing(directory: dict) -> int:
+def fetch_missing(directory: dict, redo_images: bool = False) -> int:
     """Fill gaps for titles already in a folder, by what the folder scrapes: cast and photos, cover, disc art,
     box set, genres, synopsis. Titles, and anything you set yourself, are never touched. Returns titles updated."""
     opts = db.scrape_opts(directory)
@@ -303,6 +303,11 @@ def fetch_missing(directory: dict) -> int:
         }
         if "photos" in opts and need["cast"]:
             need["photos"] = True
+        if redo_images:          # a new image resolution: scraped covers and Gallery again (yours are kept)
+            matched = bool(first.get("tmdb_id") or first.get("anilist_id"))
+            need = {k: False for k in need}
+            need["poster"] = "poster" in opts and matched and not all(scraper.custom_front_path(i).exists() for i in items)
+            need["gallery"] = "gallery" in opts and matched and not any(p.name.startswith("c-") for p in scraper.gallery_images(first))
         if not any(need.values()):
             continue
         title = db.series_title(first["title"]) if kind == "show" else first["title"]
@@ -357,17 +362,20 @@ def fetch_missing(directory: dict) -> int:
             try:
                 img = scraper.fetch_image(hit["poster_url"])
                 for i in items:
-                    if not scraper.cover_path(i).exists():
+                    if redo_images and not scraper.custom_front_path(i).exists() or not scraper.cover_path(i).exists():
                         scraper.save_webp(img, scraper.poster_path(i))
             except Exception:
                 log.warning("poster failed for %s", first["title"], exc_info=True)
+        if redo_images and first.get("collection_id") is not None and hit.get("collection_poster_url") \
+                and not scraper.custom_front_path(scraper.collection_item(first["collection_id"])).exists():
+            scraper.save_collection_poster(first["collection_id"], hit["collection_poster_url"], force=True)
         if "gallery" in opts and hit.get("banner_url") and not scraper.banner_path(first).exists():
             scraper.save_banner(first, hit["banner_url"])
         if "gallery" in opts and first.get("collection_id") is not None and first["collection_id"] > 0:
             set_banner(first["collection_id"], hit)
         if need["gallery"] and (hit.get("gallery_urls") or hit.get("mal_id")):
             from utils import anilist
-            scraper.save_gallery(first, anilist.gallery_urls(hit) if hit.get("anilist_id") else hit["gallery_urls"])
+            scraper.save_gallery(first, anilist.gallery_urls(hit) if hit.get("anilist_id") else hit["gallery_urls"], replace=redo_images)
         if need["disc"] and tid:
             url = scraper.disc_url(tid, keys.get("fanart", ""))
             if url:

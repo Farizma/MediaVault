@@ -121,7 +121,7 @@ Item {
             Disc { anchors.fill: parent; source: root.disc; spin: 540 * root.opened }
         }
         Face { g: root.geo.back; width: 426; height: 600
-            Image { anchors.fill: parent; source: root.back; fillMode: Image.PreserveAspectCrop; asynchronous: true; sourceSize.width: 426 }
+            Image { anchors.fill: parent; source: root.back; fillMode: Image.PreserveAspectCrop; asynchronous: true }   // kept at the chosen image resolution: shown at full size
         }
         Face { g: root.geo.top; width: 426; height: 44; Rectangle { anchors.fill: parent; color: "#2C2C2E" } }
         Face { g: root.geo.bottom; width: 426; height: 44; Rectangle { anchors.fill: parent; color: "#232325" } }
@@ -151,7 +151,7 @@ Item {
         // the cover: outside (poster) and inside (liner); only the side facing you is drawn
         Face { g: root.geo.liner; width: 426; height: 600; Rectangle { anchors.fill: parent; color: "#1C1C1E" } }
         Face { g: root.geo.front; width: 426; height: 600
-            Image { anchors.fill: parent; source: root.front; fillMode: Image.PreserveAspectCrop; asynchronous: true; sourceSize.width: 426 }
+            Image { anchors.fill: parent; source: root.front; fillMode: Image.PreserveAspectCrop; asynchronous: true }   // kept at the chosen image resolution: shown at full size
             Rectangle {                     // the sleeve's gloss slides across as the box turns
                 width: parent.width * 0.7; height: parent.height * 1.4; y: -parent.height * 0.2
                 x: parent.width * (0.15 + 0.9 * Math.sin(root.yaw * Math.PI / 180)) - width / 2

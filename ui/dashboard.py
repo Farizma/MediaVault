@@ -25,7 +25,7 @@ SETTINGS = {"tmdb_key", "omdb_key", "night_mode", "reduce_motion", "upscale_leve
             "custom_muted", "custom_amber", "custom_red", "auto_credits", "auto_tags",
             "fanart_key", "animated_theme", "hover_preview", "detail_order", "title_language", "group_collections", "discord", "discord_detail", "discord_app_id",
             "discord_details", "discord_state", "discord_paused", "discord_hide_adult", "discord_image_text",
-            "discord_folders", "discord_hide_tags"}
+            "discord_folders", "discord_hide_tags", "image_quality"}
 
 
 TITLE_LANGUAGES = [("english", "English"), ("romaji", "Romaji"), ("original", "Original")]
@@ -170,7 +170,7 @@ CUSTOM_ART = {"front": scraper.custom_front_path, "back": scraper.custom_back_pa
 
 def save_box_art(img, items: list[dict], face: str) -> None:
     """Centre-crop to the face's shape (135:190 cover, or a 14:190 spine) and save as the custom art of each item."""
-    size = dvd_box.SPINE_W_H if face == "spine" else (500, 500) if face == "disc" else dvd_box.FRONT_W_H
+    size = scraper._sized(dvd_box.SPINE_W_H if face == "spine" else (500, 500) if face == "disc" else dvd_box.FRONT_W_H)
     img = ImageOps.exif_transpose(img).convert("RGB")
     if face == "spine" and img.width > img.height:  # spines are often scanned lying down
         img = img.rotate(-90, expand=True)
@@ -673,7 +673,7 @@ class Dashboard(QObject):
             "boxSet": ({"key": f"set:{item['collection_id']}", "name": item.get("collection_name") or ""}
                        if not films and not eps and item.get("collection_id") is not None else {}),
             "canSet": not films and item["media_type"] == "movie",
-            "episodes": [{"uuid": e["uuid"], "title": e["title"] + (f' ({e["release_date"][:4]})' if films and e["release_date"] else "")
+            "episodes": [{"uuid": e["uuid"], "title": e["title"] + (f' \u2014 ({e["release_date"][:4]})' if films and e["release_date"] else "")
                           + (f' \u2014 {e["episode_title"]}' if films and e.get("episode_title") else ""),
                           "done": bool(e["is_completed"]),
                           "progress": min(1.0, e["last_position"] / e["duration"]) if e["duration"] and not e["is_completed"] else 0}
@@ -1090,8 +1090,8 @@ class Dashboard(QObject):
                 w, h = img.size
                 tw = int(h * 2 / 3)
                 left = (w - tw) // 2
-                scraper.save_webp(img.crop((left, 0, left + tw, h)), scraper.poster_path(item))
-                scraper.custom_front_path(item).unlink(missing_ok=True)  # the newest choice is the one shown
+                # kept as your own front cover, so re-downloading scraped covers never replaces it
+                save_box_art(img.crop((left, 0, left + tw, h)), [item], "front")
                 self.toast.emit("Box art updated")
         except Exception:
             log.exception("saving thumbnail failed")
@@ -1385,6 +1385,25 @@ class Dashboard(QObject):
     @Slot(int, str)
     def setScrapeParts(self, dir_id: int, parts: str):
         db.set_scrape_opts(dir_id, [p for p in parts.split(",") if p])
+
+    @Slot()
+    def redownloadImages(self):
+        """Settings > Library > Image resolution: download every folder's scraped covers and Gallery again at the
+        chosen resolution. Your own box art, Gallery images and banners are kept."""
+        def work():
+            from watcher import fetch_missing
+            n = 0
+            for d in db.list_directories():
+                if not d["should_scrape"]:
+                    continue
+                try:
+                    n += fetch_missing(d, redo_images=True)
+                except Exception:
+                    log.exception("re-download images %s", d["tab_name"])
+            self.toast.emit(f"Downloaded images again for {n} title{'s' if n != 1 else ''}")
+            self.libraryChanged.emit()
+        self.toast.emit("Downloading covers and Gallery images again\u2026")
+        threading.Thread(target=work, daemon=True, name="redownload-images").start()
 
     @Slot(int)
     def fetchMissing(self, dir_id: int):

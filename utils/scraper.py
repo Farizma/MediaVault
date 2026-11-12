@@ -24,8 +24,36 @@ log = logging.getLogger(__name__)
 
 CONCURRENCY = 3
 ASSET_DIR = ".vault-assets"
-POSTER_BOX = (360, 540)  # largest image that ever reaches the UI cache
+POSTER_BOX = (360, 540)  # a cover (the size at Low; see IMAGE_QUALITY)
 FANART_BOX = (960, 540)  # only for frames the user captures for the billboard
+
+# Settings > Library > Image resolution: how large scraped (and your own) pictures are kept, and how hard they are
+# compressed. Always WebP. Low is what Media Vault saved before 1.1.2; Medium is the default.
+IMAGE_QUALITY = {
+    "low": {"poster": (360, 540), "gallery": (960, 540), "banner": (1280, 720), "art": 0.75, "webp": 72,
+            "tmdb_poster": "w342", "tmdb_still": "w780"},
+    "medium": {"poster": (720, 1080), "gallery": (1280, 720), "banner": (1920, 1080), "art": 1.0, "webp": 82,
+               "tmdb_poster": "w780", "tmdb_still": "w1280"},
+    "high": {"poster": (1200, 1800), "gallery": (1920, 1080), "banner": (2560, 1440), "art": 1.5, "webp": 90,
+             "tmdb_poster": "original", "tmdb_still": "original"},
+}
+
+
+def image_quality() -> dict:
+    try:
+        name = db.get_setting("image_quality", "medium") or "medium"
+    except Exception:          # no database yet (tests, first start)
+        name = "medium"
+    return IMAGE_QUALITY.get(name, IMAGE_QUALITY["medium"])
+
+
+def _sized(box) -> tuple:
+    """The box a picture is kept at, for the chosen resolution: covers, Gallery and banners by name, anything else
+    (box art faces, discs) scaled by the profile's factor."""
+    q = image_quality()
+    named = {POSTER_BOX: q["poster"], GALLERY_BOX: q["gallery"], BANNER_BOX: q["banner"], FANART_BOX: FANART_BOX}
+    box = tuple(box)
+    return named.get(box) or (round(box[0] * q["art"]), round(box[1] * q["art"]))
 
 GENRES = {28: "Action", 12: "Adventure", 16: "Animation", 35: "Comedy", 80: "Crime", 99: "Documentary",
           18: "Drama", 10751: "Family", 14: "Fantasy", 36: "History", 27: "Horror", 10402: "Music",
@@ -154,7 +182,7 @@ def _tmdb(kind: str, p: Parsed, key: str) -> dict | None:
     return {"tmdb_id": r.get("id"), "title": r.get("title") or r.get("name"),
             "release_date": r.get("release_date") or r.get("first_air_date"),
             "synopsis": r.get("overview"),
-            "poster_url": f"https://image.tmdb.org/t/p/w500{poster}" if poster else None,
+            "poster_url": f"https://image.tmdb.org/t/p/{image_quality()['tmdb_poster']}{poster}" if poster else None,
             "genres": [GENRES[i] for i in r.get("genre_ids", []) if i in GENRES],
             "score": _score(r), "original_title": _original(r)}
 
@@ -294,11 +322,11 @@ def tmdb_details(kind: str, tmdb_id: int, key: str) -> dict:
     return {"tmdb_id": r.get("id"), "title": r.get("title") or r.get("name"),
             "release_date": r.get("release_date") or r.get("first_air_date"),
             "synopsis": r.get("overview"),
-            "poster_url": f"{IMG}w500{poster}" if poster else None,
+            "poster_url": f"{IMG}{image_quality()['tmdb_poster']}{poster}" if poster else None,
             "genres": [g["name"] for g in r.get("genres") or [] if g.get("name")],
             "score": _score(r),
             "collection_id": coll.get("id"), "collection_name": coll.get("name"),
-            "collection_poster_url": f"{IMG}w500{coll['poster_path']}" if coll.get("poster_path") else None,
+            "collection_poster_url": f"{IMG}{image_quality()['tmdb_poster']}{coll['poster_path']}" if coll.get("poster_path") else None,
             "banner_url": _best_backdrop(r.get("images") or {}),
             "collection_banner_url": f"{IMG}original{coll['backdrop_path']}" if coll.get("backdrop_path") else None,
             "cast": _cast((r.get(credits) or {}).get("cast") or []),
@@ -344,7 +372,7 @@ def _best_backdrop(images: dict) -> str | None:
 def _backdrops(images: dict) -> list[str]:
     """The best-voted wide stills (no text on them first), for the Gallery and the recommended carousel."""
     shots = sorted(images.get("backdrops") or [], key=lambda b: (b.get("iso_639_1") is not None, -(b.get("vote_average") or 0)))
-    return [f"{IMG}w1280{b['file_path']}" for b in shots[:GALLERY_MAX] if b.get("file_path")]
+    return [f"{IMG}{image_quality()['tmdb_still']}{b['file_path']}" for b in shots[:GALLERY_MAX] if b.get("file_path")]
 
 
 CAST_MAX = 15
@@ -520,14 +548,16 @@ def fetch_image(url: str):
 
 
 def save_webp(img, dest: Path, box=POSTER_BOX) -> None:
-    """Shrink to `box`, WebP quality 70. Pillow runs on the CPU; this is not GPU downscaling."""
+    """Shrink to `box` (scaled to the chosen image resolution) and save as WebP at that resolution's quality.
+    Never enlarges. Pillow runs on the CPU; this is not GPU downscaling."""
+    from PIL import Image
     img = img.convert("RGB")
-    img.thumbnail(box)
+    img.thumbnail(_sized(box), Image.Resampling.LANCZOS)
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.parent.name == ASSET_DIR and sys.platform == "win32":
         import ctypes
         ctypes.windll.kernel32.SetFileAttributesW(str(dest.parent), 0x2)  # hidden
-    img.save(dest, "WEBP", quality=70)
+    img.save(dest, "WEBP", quality=image_quality()["webp"], method=5)
 
 
 def _assets(item: dict) -> Path:
