@@ -26,6 +26,11 @@ def _writable(folder: Path) -> bool:
         probe = folder / f".mv-write-{os.getpid()}"
         probe.write_bytes(b"x")
         probe.unlink()
+        # a folder too: a drive's own permissions can let you add files where only an administrator makes folders
+        # (bin/shaders, bin/.previous were refused while a file was not)
+        sub = folder / f".mv-dir-{os.getpid()}"
+        sub.mkdir()
+        sub.rmdir()
         return True
     except OSError:
         return False
@@ -43,12 +48,16 @@ def bin_dir() -> Path:
     return user
 
 
-def writable_bin() -> Path:
+def writable_bin(force: bool = False) -> Path:
     """bin/ for an update or a rollback. An all-users copy (Program Files) cannot be written without administrator
-    rights: copy what it has into your own bin/ once, and keep everything there from now on (bin_dir follows)."""
+    rights: copy what it has into your own bin/ once, and keep everything there from now on (bin_dir follows).
+    force: the app's bin/ took a new file but then refused to change one setup put there (a folder on another drive
+    lets you add files, not touch the administrator's): move to your own bin/ anyway."""
     import shutil
     b = bin_dir()
-    if _writable(b):
+    if not force and _writable(b):
+        return b
+    if b == _user_bin():
         return b
     user = _user_bin()
     user.mkdir(parents=True, exist_ok=True)

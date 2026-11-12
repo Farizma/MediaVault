@@ -379,7 +379,11 @@ def _install_runtime(name: str, log) -> None:
         raise RuntimeError("automatic download is Windows-only: install libmpv / VLC with your package manager")
     import utils
     target = utils.writable_bin()
-    (download_mpv if name == "mpv" else download_vlc)(target, log)
+    try:
+        (download_mpv if name == "mpv" else download_vlc)(target, log)
+    except PermissionError:          # took a new file, refused to replace setup's: your own bin/ instead
+        target = utils.writable_bin(force=True)
+        (download_mpv if name == "mpv" else download_vlc)(target, log)
     utils.use_bin_dir()
 
 

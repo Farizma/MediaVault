@@ -215,7 +215,20 @@ def _installed(component: str) -> str:
 
 
 def update(component: str, log=print) -> str:
-    """Install or update one component. Returns a sentence for the toast. What was there is kept for a rollback."""
+    """Install or update one component. Returns a sentence for the toast. What was there is kept for a rollback.
+    Windows refusing a file in the app's own bin/ (an all-users install): once more in your own bin/."""
+    from utils import writable_bin
+    try:
+        return _update(component, log)
+    except PermissionError as e:
+        if component not in ("libmpv", "libvlc", "shader"):
+            raise
+        log(f"{e}: using your own bin folder instead")
+        writable_bin(force=True)
+        return _update(component, log)
+
+
+def _update(component: str, log=print) -> str:
     import setup
     from utils import rollback, writable_bin
     before = _installed(component)
@@ -250,7 +263,11 @@ def rollback_component(component: str, log=print) -> str:
     if not want:
         raise ValueError("there is no earlier version kept for this")
     if component in rollback.PARTS:
-        rollback.request(component, _installed(component))
+        try:
+            rollback.request(component, _installed(component))
+        except PermissionError:
+            raise ValueError("the earlier version is in Media Vault's own folder, which Windows will not let it change. "
+                             "Run Media Vault as administrator once to roll back") from None
         return f"Restart Media Vault to finish going back to {want}."
     pkg = next((p for p in PACKAGES if p[0] == component), None)
     if not pkg or (frozen() and not pkg[4]):

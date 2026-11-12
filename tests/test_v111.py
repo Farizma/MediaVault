@@ -197,3 +197,36 @@ class ProgramFilesBinTests(unittest.TestCase):
             self.assertTrue((data / "bin" / ".previous" / "libmpv" / "files" / "libmpv-2.dll").exists())
             self.assertEqual(utils.writable_bin(), data / "bin")
         self.assertFalse((app / "bin" / ".previous").exists())                # nothing written to Program Files
+
+
+class ComponentPermissionTests(unittest.TestCase):
+    def test_refused_in_app_bin_retries_in_your_own(self):
+        from utils import components
+        calls = []
+
+        def fake_update(component, log):
+            calls.append(component)
+            if len(calls) == 1:
+                raise PermissionError(5, "Access is denied", r"D:\Program Files\Media Vault\bin\.previous")
+            return "ok"
+        with mock.patch.object(components, "_update", side_effect=fake_update), \
+                mock.patch("utils.writable_bin") as wb:
+            self.assertEqual(components.update("shader", log=lambda *a: None), "ok")
+            wb.assert_called_once_with(force=True)
+        with mock.patch.object(components, "_update", side_effect=PermissionError("x")):
+            with self.assertRaises(PermissionError):           # pip packages: not a bin/ problem
+                components.update("pillow", log=lambda *a: None)
+
+    def test_force_moves_to_your_own_bin(self):
+        import utils
+        app = Path(tempfile.mkdtemp())
+        (app / "bin" / "shaders").mkdir(parents=True)
+        (app / "bin" / "mpv-2.dll").write_bytes(b"dll")
+        user = Path(tempfile.mkdtemp()) / "bin"
+        with mock.patch.object(utils, "app_dir", return_value=app), mock.patch.object(utils, "_user_bin", return_value=user), \
+                mock.patch.object(utils, "use_bin_dir"):
+            self.assertEqual(utils.writable_bin(), app / "bin")           # writable: stays
+            self.assertEqual(utils.writable_bin(force=True), user)        # refused later: your own copy
+            self.assertTrue((user / "mpv-2.dll").exists())
+            self.assertEqual(utils.bin_dir(), user)
+            self.assertEqual(utils.writable_bin(force=True), user)        # already there: no second copy
