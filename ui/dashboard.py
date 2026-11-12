@@ -61,6 +61,16 @@ def display_titles(card: dict, pref: str | None = None) -> tuple[str, str]:
     return main, ("" if _same(sub, main) else sub)
 
 
+def set_synopsis(cid, films: list[dict]) -> str:
+    """A box set's synopsis: the one written for it, else the one all its films share (an OVA's episodes carry the
+    series synopsis), else none."""
+    own = db.collection_synopsis(cid)
+    if own:
+        return own
+    shared = {(f.get("synopsis") or "").strip() for f in films} - {""}
+    return shared.pop() if len(shared) == 1 else ""
+
+
 def banner_for(card: dict):
     """The wide picture for a title or box set: its banner (the best-rated TMDB backdrop), else the best scraped
     Gallery still, else any Gallery image. A box set without its own banner borrows its first film's. None if none."""
@@ -609,7 +619,7 @@ class Dashboard(QObject):
         art = item
         if films:
             name = films[0]["collection_name"] or item["title"]
-            own = db.collection_synopsis(key[4:])
+            own = set_synopsis(key[4:], films)
             item = {**item, "title": name, "release_date": films[0]["release_date"],
                     "synopsis": own or " \u00B7 ".join(f'{f["title"]} ({(f["release_date"] or "")[:4]})' if f["release_date"] else f["title"]
                                              for f in films)}
@@ -624,14 +634,19 @@ class Dashboard(QObject):
             facts = [{"label": "Films", "value": str(len(films))},
                      {"label": "Length", "value": duration_label(sum(f["duration"] or 0 for f in films))}]
         resume = item["last_position"] > 10 and not item["is_completed"]
+        # a film in a box set shows (and edits) the set's synopsis
+        in_set = set_synopsis(item["collection_id"], db.films_in_set(item["collection_id"])) \
+            if not films and not eps and item.get("collection_id") is not None else None
         return {
             "key": key, "isShow": bool(eps), "isSet": bool(films), "kind": "show" if eps or item["media_type"] == "show" else "movie",
             "canMatch": not films and item["media_type"] != "clip", "title": display_titles({**item, "key": key})[0] if not films else item["title"],
             "subtitle": display_titles({**item, "key": key})[1] if not films else "",
-            "synopsis": (own if films else item["synopsis"]) or "",
+            "synopsis": (own if films else in_set if in_set is not None else item["synopsis"]) or "",
             # a film in a box set: its own episode name and synopsis (an OVA's "#2" is an episode of a series)
             "inSet": not films and not eps and item.get("collection_id") is not None,
-            "episodeTitle": item.get("episode_title") or "", "episodeSynopsis": item.get("episode_synopsis") or "",
+            "episodeTitle": item.get("episode_title") or "",
+            # until you write one: the film's own synopsis, when it is not the set's (a film of a TMDB collection)
+            "episodeSynopsis": item.get("episode_synopsis") or ((item["synopsis"] or "") if in_set is not None and item["synopsis"] != in_set else ""),
             # every other title, grouped English / Romanized / Native / Other languages (not the ones shown above)
             "altTitles": [] if films else alttitles.for_display(item.get("alt_titles"), display_titles({**item, "key": key})),
             "banner": file_url(b) if (b := banner_for({**item, "key": key})) else "",

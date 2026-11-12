@@ -114,10 +114,12 @@ Item {
         renaming = true
         if (titleEditor) { titleEditor.forceActiveFocus(); titleEditor.selectAll() }
     }
+    // put the shown title back, still following whichever film is in focus
+    function restoreTitle() { if (titleEditor) titleEditor.text = Qt.binding(function() { return root.info.title || "" }) }
     function commitTitle() {
         var ed = titleEditor
         if (ed && ed.text.trim() !== "" && ed.text !== info.title) { Backend.setTitle(infoKey, ed.text); info.title = ed.text }
-        else if (ed) ed.text = info.title || ""
+        else if (ed && ed.text !== (info.title || "")) restoreTitle()
         if (renaming) { renaming = false; forceActiveFocus() }
     }
     function closeMenus() { titleMenu.close(); setMenu.close(); matchMenu.close(); castMenu.close(); galleryMenu.close() }
@@ -351,14 +353,17 @@ Item {
             Flickable {
                 id: flick
                 SmoothWheel { view: flick; step: 160 }
-                anchors { left: parent.left; right: parent.right; top: parent.top; bottom: actions.top; leftMargin: 32; rightMargin: 20; topMargin: 28; bottomMargin: 12 }
+                anchors { left: parent.left; right: parent.right; top: parent.top; bottom: actions.top; leftMargin: 20; rightMargin: 20; topMargin: 28; bottomMargin: 12 }
                 contentHeight: col.implicitHeight
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
                 ScrollBar.vertical: ScrollBar {}
                 ColumnLayout {
                     id: col
-                    width: flick.width - 14
+                    // inset inside the (clipped) scroll area, so the bubbles behind the title and scores, which reach
+                    // a little left of the text, keep their rounded left edge
+                    x: 12
+                    width: flick.width - 26
                     spacing: 14
                     // with a banner the title sits lower, on the banner's fading edge, leaving the picture its space
                     Item { visible: root.hasBanner; Layout.preferredHeight: pane.bannerH * 0.42; Layout.fillWidth: true }
@@ -445,7 +450,7 @@ Item {
                         MouseArea { anchors.fill: parent; visible: titleField.picker; cursorShape: Qt.PointingHandCursor; onClicked: titleMenu.begin(chev) }
                         onActiveFocusChanged: if (!activeFocus && !picker) root.commitTitle()
                         onAccepted: if (!picker) root.commitTitle()
-                        Keys.onEscapePressed: (e) => { if (root.renaming) { text = root.info.title || ""; root.renaming = false; root.forceActiveFocus() } else e.accepted = false }
+                        Keys.onEscapePressed: (e) => { if (root.renaming) { root.restoreTitle(); root.renaming = false; root.forceActiveFocus() } else e.accepted = false }
                         Component.onCompleted: root.titleEditor = titleField
                     }
                     // dropdown arrow, right after the title
@@ -627,12 +632,18 @@ Item {
                 id: secSynopsis
                 ColumnLayout {
                     spacing: 8
-                    Caption { text: root.setSlide ? "BOX SET SYNOPSIS" : "SYNOPSIS" }
+                    // a film in a box set shows the set's synopsis: one text, edited from either page
+                    readonly property bool linked: root.info.inSet === true && !!(root.info.boxSet && root.info.boxSet.key)
+                    Caption { text: root.setSlide || parent.linked ? "BOX SET SYNOPSIS" : "SYNOPSIS" }
                     Area {
                         Layout.fillWidth: true; Layout.preferredHeight: 104
-                        placeholderText: root.setSlide ? "What this box set is: the story across its films" : "Description"
+                        placeholderText: root.setSlide || parent.linked ? "What this box set is: the story across its films" : "Description"
                         text: root.info.synopsis || ""
-                        onActiveFocusChanged: if (!activeFocus && text !== (root.info.synopsis || "")) { Backend.setSynopsis(root.infoKey, text); root.info.synopsis = text }
+                        onEditingChanged: if (!editing && text !== (root.info.synopsis || "")) {
+                            Backend.setSynopsis(parent.linked ? root.info.boxSet.key : root.infoKey, text)
+                            root.info.synopsis = text
+                            if (root.d.isSet) root.d.synopsis = text      // the set's own page, if it is the one open
+                        }
                     }
                     // a film in a box set (an OVA's "#2"): its own episode name and what happens in it
                     Caption { visible: root.info.inSet === true; text: "EPISODE"; Layout.topMargin: 6 }
@@ -649,7 +660,7 @@ Item {
                         Layout.fillWidth: true; Layout.preferredHeight: 84
                         placeholderText: "What happens in this episode"
                         text: root.info.episodeSynopsis || ""
-                        onActiveFocusChanged: if (!activeFocus && text !== (root.info.episodeSynopsis || "")) { Backend.setEpisodeSynopsis(root.infoKey, text); root.info.episodeSynopsis = text }
+                        onEditingChanged: if (!editing && text !== (root.info.episodeSynopsis || "")) { Backend.setEpisodeSynopsis(root.infoKey, text); root.info.episodeSynopsis = text }
                     }
                 }
             }
@@ -789,7 +800,7 @@ Item {
                         Layout.fillWidth: true; Layout.preferredHeight: 72
                         placeholderText: "Only you see these"
                         text: root.info.note || ""
-                        onActiveFocusChanged: if (!activeFocus) Backend.setNote(root.infoKey, text)
+                        onEditingChanged: if (!editing) Backend.setNote(root.infoKey, text)
                     }
                 }
             }

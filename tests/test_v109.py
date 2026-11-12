@@ -80,11 +80,14 @@ class DataTests(unittest.TestCase):
         app = types.SimpleNamespace(engine=types.SimpleNamespace(hw=None), presence=None, play=lambda *a: None)
         cls.d = Dashboard(app, LibraryModel(), TabsModel(), FrameProvider())
 
-    def test_box_set_synopsis_is_its_own(self):
-        self.assertEqual(self.d.detail("set:9109")["synopsis"], "")
+    def test_box_set_synopsis_is_its_own_and_linked(self):
+        self.assertEqual(self.d.detail("set:9109")["synopsis"], "Series synopsis")      # what its films share
         self.d.setSynopsis("set:9109", "Two sisters, two episodes.")
         self.assertEqual(self.d.detail("set:9109")["synopsis"], "Two sisters, two episodes.")
-        self.assertEqual(db.get_media(self.a)["synopsis"], "Series synopsis")      # the films keep theirs
+        self.assertEqual(db.get_media(self.a)["synopsis"], "Series synopsis")      # the films' own rows untouched
+        self.assertEqual(self.d.detail(self.a)["synopsis"], "Two sisters, two episodes.")   # a film shows the set's
+        self.assertEqual(self.d.detail(self.a)["episodeSynopsis"] if not db.get_media(self.a)["episode_synopsis"] else "",
+                         "Series synopsis")   # its own text is not lost: it shows as the episode's until you write one
 
     def test_episode_name_and_synopsis(self):
         r = self.d.detail(self.a)
@@ -154,6 +157,14 @@ class DetailViewTests(unittest.TestCase):
         self.assertIn("root.fitFaceW / faceWPerH + 24", qml)
         self.assertIn("stage.width / 2 - 12 - 0.62 * 0.6 * faceW", qml)
         self.assertNotIn("1.35", qml)
+
+    def test_long_text_scrolls_and_film_edits_the_set(self):
+        area = (ROOT / "ui" / "Area.qml").read_text(encoding="utf-8")
+        self.assertIn("ScrollView {", area)
+        self.assertNotIn("maximumLength", area)
+        qml = (ROOT / "ui" / "DetailView.qml").read_text(encoding="utf-8")
+        self.assertIn("Backend.setSynopsis(parent.linked ? root.info.boxSet.key : root.infoKey, text)", qml)
+        self.assertNotIn("onActiveFocusChanged: if (!activeFocus) Backend.setNote", qml)
 
     def test_pencil_rename_and_gallery_menu(self):
         qml = (ROOT / "ui" / "DetailView.qml").read_text(encoding="utf-8")
