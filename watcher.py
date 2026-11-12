@@ -191,6 +191,29 @@ def _ova_to_set(items: list[dict], hit: dict, owner: str) -> bool:
     return True
 
 
+def convert_ova_series(directory: dict) -> int:
+    """For an AniList folder: every series that AniList says is an adult OVA becomes a box set (one AniList
+    question per series, nothing else is fetched). Runs once after updating to 1.0.7. Returns series converted."""
+    if (directory.get("source") or "tmdb") != "anilist":
+        return 0
+    from utils import anilist
+    groups: dict[str, list[dict]] = {}
+    for it in db.list_media(directory["id"]):
+        if it["media_type"] == "show" and it.get("anilist_id"):
+            groups.setdefault(db.cast_owner(it), []).append(it)
+    done = 0
+    for owner, items in groups.items():
+        try:
+            hit = anilist.details(items[0]["anilist_id"])
+        except Exception as e:        # offline, rate limited: the next start tries again
+            log.warning("OVA check skipped for %s: %s", items[0]["title"], e)
+            raise
+        if _ova_to_set(items, hit, owner):
+            db.set_tag_group([i["uuid"] for i in items], "studio:", hit.get("studios") or [])
+            done += 1
+    return done
+
+
 def fetch_missing(directory: dict) -> int:
     """Fill gaps for titles already in a folder, by what the folder scrapes: cast and photos, cover, disc art,
     box set, genres, synopsis. Titles, and anything you set yourself, are never touched. Returns titles updated."""

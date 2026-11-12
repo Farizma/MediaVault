@@ -22,7 +22,7 @@ BILLBOARD_SIZE = 8  # titles in the recommended carousel
 SETTINGS = {"tmdb_key", "omdb_key", "night_mode", "reduce_motion", "upscale_level", "show_insights", "core", "theme",
             "custom_accent", "custom_highlight", "custom_page", "custom_surface", "custom_card", "custom_text",
             "custom_muted", "custom_amber", "custom_red", "auto_credits", "auto_tags",
-            "fanart_key", "animated_theme", "detail_order", "title_language", "group_collections", "discord", "discord_detail", "discord_app_id",
+            "fanart_key", "animated_theme", "hover_preview", "detail_order", "title_language", "group_collections", "discord", "discord_detail", "discord_app_id",
             "discord_details", "discord_state", "discord_paused", "discord_hide_adult", "discord_image_text",
             "discord_folders", "discord_hide_tags"}
 

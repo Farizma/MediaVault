@@ -154,6 +154,20 @@ class App:
                 changed |= bool(scan_directory(d))
             except Exception:
                 logging.exception("scan failed for %s", d["folder_path"])
+        # once after updating: adult OVAs already in AniList folders become box sets (episodes as films in the
+        # 3D carousel), without waiting for Fetch missing. A failure (offline) leaves it for the next start.
+        if self.db.get_setting("ova_sets_done") != "1":
+            from watcher import convert_ova_series
+            try:
+                n = sum(convert_ova_series(d) for d in self.db.list_directories())
+                self.db.set_setting("ova_sets_done", "1")
+                if n:
+                    from utils import tagrules
+                    tagrules.retag_all()
+                    changed = True
+                    self.dashboard.toast.emit(f"{n} OVA series {'is' if n == 1 else 'are'} now box sets")
+            except Exception:
+                logging.warning("OVA box sets: will try again at the next start", exc_info=True)
         if changed:
             self.dashboard.libraryChanged.emit()
 

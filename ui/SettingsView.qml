@@ -247,6 +247,13 @@ Item {
                         checked: Backend.setting("animated_theme") !== "0"
                         onToggled: Backend.setSetting("animated_theme", checked ? "1" : "0")
                     }
+                    Toggle {
+                        Layout.fillWidth: true
+                        text: "Preview videos on hover"
+                        hint: "Rest the pointer on a card and a short, silent clip plays inside the poster."
+                        checked: Backend.setting("hover_preview") !== "0"
+                        onToggled: Backend.setSetting("hover_preview", checked ? "1" : "0")
+                    }
                     // Custom theme: pick its two colours on a wheel. Picking switches to Custom right away.
                     Caption { text: "CUSTOM COLOURS" }
                     Rectangle {

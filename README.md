@@ -81,6 +81,7 @@ _Nothing decided yet. Ideas move here once we choose to build them._
 | Fix Scraped Data across TMDB, AniList and OMDb, AniList % scores, adult / OVA file names | 1.0.4 |
 | Updates inside Media Vault (no wizard), Update all, update badge, rollbacks | 1.0.5 |
 | Alternate titles (English / Romanized / Native / Other), Discord status text and privacy, encrypted API keys, tag suggestions, adult OVAs as box sets, AniList tags as genres, studio tags, whole-cover scans, DVD-shaped box, close and libmpv update fixes | 1.0.6 |
+| Hover preview fix and switch, dashboard keeps its place, automatic OVA box sets | 1.0.7 |
 
 ### Proposed
 

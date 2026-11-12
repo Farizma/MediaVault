@@ -17,15 +17,30 @@ Item {
         id: standby
         audioOutput: AudioOutput { muted: true }
         property real startMs: 0
-        onMediaStatusChanged: if (mediaStatus === MediaPlayer.LoadedMedia && duration > 0) {
+        property bool jumped: false
+        // play as soon as the file opens; jump 20 % in once its length is known (some files only report it late)
+        onMediaStatusChanged: {
+            if ((mediaStatus === MediaPlayer.LoadedMedia || mediaStatus === MediaPlayer.BufferedMedia) && playbackState !== MediaPlayer.PlayingState && source != "") {
+                jumped = false
+                play()
+            }
+            if (mediaStatus === MediaPlayer.InvalidMedia) console.warn("hover preview: cannot open " + source + ": " + errorString)
+        }
+        onDurationChanged: jumpIn()
+        onSeekableChanged: jumpIn()
+        onPlaybackStateChanged: jumpIn()
+        function jumpIn() {
+            if (jumped || !seekable || duration <= 0 || playbackState !== MediaPlayer.PlayingState) return
+            jumped = true
             startMs = duration * 0.2
             standby.setPosition(startMs)
-            play()
         }
-        onPositionChanged: if (standby.position > startMs + 15000) standby.setPosition(startMs)     // 15 second loop
+        onErrorOccurred: (error, message) => console.warn("hover preview: " + message + " (" + source + ")")
+        onPositionChanged: if (jumped && standby.position > startMs + 15000) standby.setPosition(startMs)     // 15 second loop
     }
     property var previewOwner: null
     function startPreview(output, url) {
+        if (!dash.hoverPreview) return
         standby.stop()
         standby.videoOutput = output
         standby.source = url
@@ -97,7 +112,7 @@ Item {
         var c = url ? Backend.tintOf(url) : ""
         glow = c !== "" ? c : Theme.blue
     }
-    Connections { target: settings; function onVisibleChanged() { if (!settings.visible) { dash.animatedTheme = Backend.setting("animated_theme") !== "0"; if (!dash.animatedTheme) dash.glow = Theme.blue } } }
+    Connections { target: settings; function onVisibleChanged() { if (!settings.visible) { dash.hoverPreview = Backend.setting("hover_preview") !== "0"; dash.animatedTheme = Backend.setting("animated_theme") !== "0"; if (!dash.animatedTheme) dash.glow = Theme.blue } } }
 
     // ---- search, sort, filters, grid / shelf
     property string query: ""
@@ -106,6 +121,7 @@ Item {
     property string quality: ""
     property bool unwatched: false
     property bool boxSets: Backend.setting("group_collections") !== "0"
+    property bool hoverPreview: Backend.setting("hover_preview") !== "0"    // Settings › Appearance
     property int tabDragFrom: -1          // tab being dragged (index), where it would land, and its width
     property int tabDragTo: -1
     property real tabDragW: 0
@@ -603,7 +619,6 @@ Item {
                             transform: Translate { x: -8 * cell.px * Theme.motion; y: -8 * cell.py * Theme.motion }
                         }
                         Text { visible: poster === ""; anchors { fill: parent; margins: 16 } text: title; color: Theme.text; font.pixelSize: 15; font.weight: Font.Bold; wrapMode: Text.Wrap; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight }
-                        VideoOutput { id: vo; anchors.fill: parent; fillMode: VideoOutput.PreserveAspectCrop; visible: cell.previewing }
                         Rectangle {    // bottom gloss so badges and buttons stay legible on any poster
                             anchors.fill: parent
                             opacity: cell.pointerIn ? 1 : 0.55
@@ -634,6 +649,15 @@ Item {
                     }
                     Item { id: mask; width: art.width; height: art.height; visible: false; layer.enabled: true; Rectangle { width: mask.width; height: mask.height; radius: 12; color: "black" } }
                     MultiEffect { source: art; anchors.fill: art; maskEnabled: true; maskSource: mask }
+                    // the hover preview: its own layer above the poster (not inside the hidden, masked poster layer,
+                    // where the video frames never reached the screen), rounded by the same mask
+                    Item {
+                        anchors.fill: art
+                        visible: cell.previewing
+                        layer.enabled: visible
+                        layer.effect: MultiEffect { maskEnabled: true; maskSource: mask }
+                        VideoOutput { id: vo; anchors.fill: parent; fillMode: VideoOutput.PreserveAspectCrop }
+                    }
                     Rectangle { anchors.fill: parent; radius: 12; color: "transparent"
                         border.color: cell.previewing ? "#66FFFFFF" : cell.pointerIn ? "#33FFFFFF" : Theme.line
                         Behavior on border.color { ColorAnimation { duration: 200 * Theme.motion } } }
