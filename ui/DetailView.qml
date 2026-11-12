@@ -981,7 +981,7 @@ Item {
             RowLayout {
                 Layout.fillWidth: true
                 spacing: 6
-                Field { id: q; Layout.fillWidth: true; placeholderText: "Title"; onAccepted: matchMenu.search() }
+                Field { id: q; Layout.fillWidth: true; placeholderText: "Title, or a TMDB / AniList / MAL / IMDb link"; onAccepted: matchMenu.search() }
                 Field { id: yr; Layout.preferredWidth: 72; placeholderText: "Year"; inputMethodHints: Qt.ImhDigitsOnly
                     validator: RegularExpressionValidator { regularExpression: /[0-9]{0,4}/ }
                     onAccepted: matchMenu.search() }

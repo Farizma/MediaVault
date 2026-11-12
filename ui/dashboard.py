@@ -589,6 +589,32 @@ class Dashboard(QObject):
         q, y = query.strip(), year.strip()
         keys = scraper.api_keys()
 
+        link = scraper.parse_link(q)
+
+        def from_link():
+            """A pasted TMDB / AniList / MyAnimeList / IMDb page: that exact title, as the only result."""
+            from utils import anilist
+            try:
+                if link["source"] in ("anilist", "mal"):
+                    aid = int(link["id"]) if link["source"] == "anilist" else anilist.from_mal(int(link["id"]))
+                    h = anilist.details(aid)
+                    row = {"id": str(aid), "source": "anilist"}
+                elif link["source"] == "tmdb":
+                    if not keys.get("tmdb"):
+                        raise scraper.ScrapeError("TMDB links need a TMDB API key (Settings \u203A Integrations & APIs)")
+                    h = scraper.tmdb_details(link["kind"], int(link["id"]), keys["tmdb"])
+                    row = {"id": f"{'tv' if link['kind'] == 'show' else 'movie'}:{link['id']}", "source": "tmdb"}
+                else:
+                    if not keys.get("omdb"):
+                        raise scraper.ScrapeError("IMDb links need an OMDb API key (Settings \u203A Integrations & APIs)")
+                    h = scraper.omdb_details(link["id"], keys["omdb"])
+                    row = {"id": link["id"], "source": "omdb"}
+                row.update(title=h.get("title") or "", year=(h.get("release_date") or "")[:4],
+                           overview=(h.get("synopsis") or "")[:400], thumb=scraper.safe_url(h.get("poster_url")) or "")
+                self.matchResults.emit(key, [row])
+            except Exception as e:
+                self.matchFailed.emit(key, str(e))
+
         def work():
             from concurrent.futures import ThreadPoolExecutor
             from utils import anilist
@@ -612,7 +638,7 @@ class Dashboard(QObject):
             else:
                 self.matchFailed.emit(key, "; ".join(errors))
         if q:
-            threading.Thread(target=work, daemon=True, name="match-search").start()
+            threading.Thread(target=from_link if link else work, daemon=True, name="match-search").start()
 
     @Slot(str, str, str)
     def applyMatch(self, key: str, source: str, ident: str):
@@ -630,8 +656,10 @@ class Dashboard(QObject):
                 hit = anilist.details(int(ident))
             elif source == "omdb":
                 hit = scraper.omdb_details(ident, keys["omdb"])
-            else:
-                hit = scraper.tmdb_details("show" if show else "movie", int(ident), keys["tmdb"])
+            else:                    # "tv:123" / "movie:123" from a pasted link: that kind, whatever this title was
+                kind, _, num = ident.rpartition(":")
+                hit = scraper.tmdb_details({"tv": "show", "movie": "movie"}.get(kind, "show" if show else "movie"), int(num),
+                                           keys["tmdb"])
         except Exception as e:   # ScrapeError, AniListError
             self.matchFailed.emit(key, str(e))
             return

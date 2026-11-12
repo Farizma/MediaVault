@@ -36,6 +36,7 @@ _FIELDS = """
 _ONE = "query ($q: String, $y: Int) { Media(search: $q, type: ANIME, seasonYear: $y, sort: SEARCH_MATCH) {" + _FIELDS + "} }"
 _ANY = "query ($q: String) { Media(search: $q, type: ANIME, sort: SEARCH_MATCH) {" + _FIELDS + "} }"
 _BY_ID = "query ($id: Int) { Media(id: $id, type: ANIME) {" + _FIELDS + "} }"
+_BY_MAL = "query ($id: Int) { Media(idMal: $id, type: ANIME) { id } }"
 _SEARCH = """query ($q: String) { Page(perPage: 12) { media(search: $q, type: ANIME, sort: SEARCH_MATCH) {
   id format seasonYear title { english romaji } description(asHtml: false) coverImage { medium large } } } }"""
 
@@ -201,6 +202,14 @@ def lookup(title: str, year: str | None = None) -> dict | None:
     if not data.get("Media") and 2 <= len(title.split()) <= 3 and (joined := title.replace(" ", "")) != title:
         data = _post(_ANY, {"q": joined})     # a short name split by the file name: "Drop Out" -> "DropOut"
     return _shape(data["Media"]) if data.get("Media") else None
+
+
+def from_mal(mal_id: int) -> int:
+    """The AniList id for a MyAnimeList id (a pasted MAL link)."""
+    data = _post(_BY_MAL, {"id": int(mal_id)})
+    if not (data.get("Media") or {}).get("id"):
+        raise AniListError("AniList has no entry for that MyAnimeList page")
+    return int(data["Media"]["id"])
 
 
 def details(anilist_id: int) -> dict:

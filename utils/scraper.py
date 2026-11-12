@@ -199,6 +199,29 @@ def _tmdb_json(path: str, key: str, **q) -> dict:
     return _get_json(f"https://api.themoviedb.org/3/{path}?{urllib.parse.urlencode({'api_key': key, **q})}")
 
 
+_LINKS = (
+    (re.compile(r"themoviedb\.org/(movie|tv)/(\d+)", re.I), "tmdb"),
+    (re.compile(r"anilist\.co/anime/(\d+)", re.I), "anilist"),
+    (re.compile(r"myanimelist\.net/anime/(\d+)", re.I), "mal"),
+    (re.compile(r"imdb\.com/(?:[a-z]{2}/)?title/(tt\d{5,10})", re.I), "omdb"),
+)
+
+
+def parse_link(text: str) -> dict | None:
+    """A TMDB, AniList, MyAnimeList or IMDb page address pasted into Fix Scraped Data: {"source", "id", "kind"}.
+    TMDB episode and season pages count as their series ("/tv/90395-x/season/1/episode/1" -> series 90395)."""
+    text = (text or "").strip()
+    if not text or " " in text:
+        return None
+    for pattern, source in _LINKS:
+        m = pattern.search(text)
+        if m:
+            if source == "tmdb":
+                return {"source": "tmdb", "id": m.group(2), "kind": "show" if m.group(1).lower() == "tv" else "movie"}
+            return {"source": source, "id": m.group(1), "kind": None}
+    return None
+
+
 @_plain
 def tmdb_search(kind: str, query: str, year: str, key: str) -> list[dict]:
     """Fix Scraped Data: up to 12 TMDB candidates for a title (adult titles included: you are searching by hand)."""
@@ -234,12 +257,32 @@ def tmdb_details(kind: str, tmdb_id: int, key: str) -> dict:
             "collection_id": coll.get("id"), "collection_name": coll.get("name"),
             "collection_poster_url": f"{IMG}w500{coll['poster_path']}" if coll.get("poster_path") else None,
             "cast": _cast((r.get(credits) or {}).get("cast") or []),
-            "gallery_urls": _backdrops(r.get("images") or {}),
+            "gallery_urls": _backdrops(r.get("images") or {}) + (episode_stills(r, key) if kind == "show" else []),
             "certification": certification(r, kind), "original_title": _original(r), "romaji_title": None,
             "alt_titles": alttitles.dumps(alttitles.from_tmdb(r))}
 
 
-GALLERY_MAX = 6
+GALLERY_MAX = 6            # a film: its best backdrops
+GALLERY_MAX_SERIES = 18    # a series: its backdrops, then episode stills
+STILL_SEASONS = 3          # stills from the first seasons only (one request each)
+
+
+def episode_stills(r: dict, key: str) -> list[str]:
+    """A series' episode images (TMDB "stills"), in episode order: one request per season, first seasons first.
+    Best effort: a season that fails is skipped."""
+    seasons = sorted(s["season_number"] for s in r.get("seasons") or [] if (s.get("season_number") or 0) > 0)
+    out = []
+    for n in seasons[:STILL_SEASONS]:
+        try:
+            season = _tmdb_json(f"tv/{int(r['id'])}/season/{n}", key)
+        except ScrapeError:
+            continue
+        for ep in season.get("episodes") or []:
+            if ep.get("still_path"):
+                out.append(f"{IMG}original{ep['still_path']}")
+        if len(out) >= GALLERY_MAX_SERIES:
+            break
+    return out[:GALLERY_MAX_SERIES]
 
 
 def _backdrops(images: dict) -> list[str]:
@@ -548,7 +591,8 @@ def save_gallery(item: dict, urls: list[str], replace: bool = False) -> int:
         for p in d.glob("s-*.webp"):
             p.unlink(missing_ok=True)
     saved = 0
-    for i, url in enumerate(urls[:GALLERY_MAX], 1):
+    limit = GALLERY_MAX_SERIES if item.get("media_type") == "show" else GALLERY_MAX
+    for i, url in enumerate(urls[:limit], 1):
         dest = d / f"s-{i:02d}.webp"
         if dest.exists():
             continue

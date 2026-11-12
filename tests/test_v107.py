@@ -122,3 +122,79 @@ class FrontArtTests(unittest.TestCase):
             d.pickBoxArt("k", "wrap")                    # the Whole cover button still splits it
             wrap.assert_called_once()
             self.assertEqual(picked, ["front"])          # split, so no crop editor this time
+
+
+class LinkTests(unittest.TestCase):
+    def setUp(self):
+        import os
+        import sys
+        import tempfile
+        sys.path.insert(0, str(ROOT))
+        os.environ.setdefault("LOCALAPPDATA", tempfile.mkdtemp())
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+    def test_parse(self):
+        from utils.scraper import parse_link
+        self.assertEqual(parse_link("https://www.themoviedb.org/tv/90395-x/season/1/episode/1"), {"source": "tmdb", "id": "90395", "kind": "show"})
+        self.assertEqual(parse_link("https://www.themoviedb.org/movie/335984-blade-runner-2049?language=en")["kind"], "movie")
+        self.assertEqual(parse_link("https://anilist.co/anime/115138/name/"), {"source": "anilist", "id": "115138", "kind": None})
+        self.assertEqual(parse_link("https://myanimelist.net/anime/41261/x")["source"], "mal")
+        self.assertEqual(parse_link("https://www.imdb.com/title/tt0113277/")["id"], "tt0113277")
+        for text in ("Blade Runner", "", "https://example.com/movie/1", "themoviedb.org/person/123"):
+            self.assertIsNone(parse_link(text))
+
+    def _dash(self):
+        import types
+        from PySide6.QtGui import QGuiApplication
+        QGuiApplication.instance() or QGuiApplication([])
+        import database as db
+        import ui.dashboard as dash
+        from ui.dvd_box import FrameProvider
+        db.init_db()
+        return dash, dash.Dashboard(types.SimpleNamespace(engine=types.SimpleNamespace(hw=None), presence=None, play=lambda *a: None),
+                                    dash.LibraryModel(), dash.TabsModel(), FrameProvider())
+
+    def _wait(self, d):
+        import time
+        from PySide6.QtGui import QGuiApplication
+        got = []
+        d.matchResults.connect(lambda k, r: got.append(r))
+        d.matchFailed.connect(lambda k, e: got.append(e))
+        return got, lambda: [QGuiApplication.processEvents() or time.sleep(0.02) for _ in range(250) if not got]
+
+    def test_a_tmdb_link_is_the_only_result(self):
+        from unittest import mock
+        dash, d = self._dash()
+        got, wait = self._wait(d)
+        hit = {"title": "Show", "release_date": "2019-01-01", "synopsis": "s", "poster_url": "https://image.tmdb.org/p.jpg"}
+        with mock.patch.object(dash.scraper, "api_keys", return_value={"tmdb": "k", "omdb": "", "fanart": ""}), \
+                mock.patch.object(dash.scraper, "tmdb_details", return_value=hit) as det, \
+                mock.patch.object(d, "_is_anime", return_value=True):
+            d.searchMatch("k", "https://www.themoviedb.org/tv/90395-x/season/1/episode/1", "")
+            wait()
+        det.assert_called_once_with("show", 90395, "k")
+        self.assertEqual(got[0], [{"id": "tv:90395", "source": "tmdb", "title": "Show", "year": "2019", "overview": "s",
+                                   "thumb": "https://image.tmdb.org/p.jpg"}])
+
+    def test_a_mal_link_goes_through_anilist(self):
+        from unittest import mock
+        from utils import anilist
+        dash, d = self._dash()
+        got, wait = self._wait(d)
+        with mock.patch.object(anilist, "from_mal", return_value=115138) as mal, \
+                mock.patch.object(anilist, "details", return_value={"title": "A", "release_date": None, "synopsis": None, "poster_url": None}):
+            d.searchMatch("k", "https://myanimelist.net/anime/41261/x", "")
+            wait()
+        mal.assert_called_once_with(41261)
+        self.assertEqual((got[0][0]["id"], got[0][0]["source"]), ("115138", "anilist"))
+
+    def test_episode_stills_follow_backdrops(self):
+        from unittest import mock
+        from utils import scraper
+        r = {"id": 90395, "seasons": [{"season_number": 0}, {"season_number": 1}, {"season_number": 2}]}
+        seasons = {"tv/90395/season/1": {"episodes": [{"still_path": "/a.jpg"}, {"still_path": None}, {"still_path": "/b.jpg"}]},
+                   "tv/90395/season/2": {"episodes": [{"still_path": "/c.jpg"}]}}
+        with mock.patch.object(scraper, "_tmdb_json", side_effect=lambda path, key, **q: seasons[path]):
+            urls = scraper.episode_stills(r, "k")
+        self.assertEqual(urls, [scraper.IMG + "original/a.jpg", scraper.IMG + "original/b.jpg", scraper.IMG + "original/c.jpg"])
+        self.assertEqual(scraper.GALLERY_MAX_SERIES, 18)
