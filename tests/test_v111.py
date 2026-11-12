@@ -172,3 +172,28 @@ class SmoothnessTests(unittest.TestCase):
             self.assertEqual(gpu_pref.apply(True), "yours")
             self.assertEqual(store[(gpu_pref.KEY, exe)], "GpuPreference=1;")
         self.assertEqual(gpu_pref.apply(True), "n/a")                         # not the installed app: nothing
+
+
+class ProgramFilesBinTests(unittest.TestCase):
+    def test_update_moves_to_your_own_bin_when_program_files_refuses(self):
+        import utils
+        app, data = Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp())
+        (app / "bin" / "vlc").mkdir(parents=True)
+        (app / "bin" / "libmpv-2.dll").write_bytes(b"old dll")
+        (app / "bin" / "mpv.version").write_text("2026-01-01")
+        (app / "bin" / "vlc" / "libvlc.dll").write_bytes(b"vlc")
+        locked = str(app / "bin")
+        real = utils._writable
+        with mock.patch.object(utils, "app_dir", return_value=app), \
+                mock.patch.object(utils, "_user_bin", return_value=data / "bin"), \
+                mock.patch.object(utils, "_writable", side_effect=lambda f: not str(f).startswith(locked) and real(f)), \
+                mock.patch.object(utils, "use_bin_dir"):
+            self.assertEqual(utils.bin_dir(), app / "bin")                    # reads from the app's bin/ as before
+            from utils import rollback
+            rollback.snapshot("libmpv", "2026-01-01")                         # was: WinError 5 on bin\\.previous
+            self.assertEqual(utils.bin_dir(), data / "bin")                    # from now on: your own copy
+            self.assertEqual((data / "bin" / "libmpv-2.dll").read_bytes(), b"old dll")
+            self.assertTrue((data / "bin" / "vlc" / "libvlc.dll").exists())
+            self.assertTrue((data / "bin" / ".previous" / "libmpv" / "files" / "libmpv-2.dll").exists())
+            self.assertEqual(utils.writable_bin(), data / "bin")
+        self.assertFalse((app / "bin" / ".previous").exists())                # nothing written to Program Files

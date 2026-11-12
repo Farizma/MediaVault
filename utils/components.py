@@ -217,7 +217,7 @@ def _installed(component: str) -> str:
 def update(component: str, log=print) -> str:
     """Install or update one component. Returns a sentence for the toast. What was there is kept for a rollback."""
     import setup
-    from utils import bin_dir, rollback
+    from utils import rollback, writable_bin
     before = _installed(component)
     if before:
         if component in rollback.PARTS:
@@ -225,13 +225,13 @@ def update(component: str, log=print) -> str:
         elif any(p[0] == component and not (frozen() and not p[4]) for p in PACKAGES):
             rollback.remember_pip(component, before)
     if component == "libmpv":
-        setup.download_mpv(bin_dir(), log)
+        setup.download_mpv(writable_bin(), log)
         return "libmpv updated. Restart Media Vault to use it."
     if component == "libvlc":
-        setup.download_vlc(bin_dir(), log)
+        setup.download_vlc(writable_bin(), log)
         return "libVLC updated. Restart Media Vault to use it."
     if component == "shader":
-        setup.download_shader(bin_dir(), log)
+        setup.download_shader(writable_bin(), log)
         return "Upscaling shader installed."
     pkg = next((p for p in PACKAGES if p[0] == component), None)
     if pkg:

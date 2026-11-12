@@ -22,6 +22,11 @@ def _bin() -> Path:
     return bin_dir()
 
 
+def _write_bin() -> Path:
+    from utils import writable_bin
+    return writable_bin()
+
+
 def _root() -> Path:
     return _bin() / ".previous"
 
@@ -52,6 +57,7 @@ def snapshot(component: str, installed: str) -> None:
     """Keep what is on this PC now, before it is replaced. Only the one previous version is kept."""
     if component not in PARTS:
         return
+    _write_bin()             # Program Files: work in your own copy of bin/ from here on
     present = [p for p in PARTS[component] if (_bin() / p).exists()]
     if not present:
         return
@@ -64,6 +70,7 @@ def snapshot(component: str, installed: str) -> None:
 
 def request(component: str, installed_now: str) -> None:
     """Ask for the swap at the next start (installed_now: the version being rolled back, kept for an undo)."""
+    _write_bin()
     want = _pending_map()
     want[component] = installed_now
     _root().mkdir(parents=True, exist_ok=True)

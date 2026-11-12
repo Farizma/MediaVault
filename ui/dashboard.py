@@ -1549,8 +1549,8 @@ class Dashboard(QObject):
         def work():
             try:
                 import setup
-                from utils import bin_dir
-                setup.download_shader(bin_dir())
+                from utils import writable_bin
+                setup.download_shader(writable_bin())
                 self.toast.emit("Upscaling shader installed. It applies from the next video.")
             except Exception as e:
                 log.exception("shader download")

@@ -378,8 +378,7 @@ def _install_runtime(name: str, log) -> None:
     if sys.platform != "win32":
         raise RuntimeError("automatic download is Windows-only: install libmpv / VLC with your package manager")
     import utils
-    target = utils.bin_dir()
-    target.mkdir(parents=True, exist_ok=True)
+    target = utils.writable_bin()
     (download_mpv if name == "mpv" else download_vlc)(target, log)
     utils.use_bin_dir()
 
