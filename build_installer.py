@@ -47,7 +47,11 @@ def command() -> list[str]:
            "--name", "MediaVault", "--paths", str(ROOT), "--icon", str(ROOT / "icon.ico"),
            "--collect-submodules", "watchdog",
            # Settings > Components reads package versions from their metadata, which PyInstaller leaves out by default
-           *[a for d in ("PySide6", "python-mpv", "python-vlc", "watchdog", "pillow", "py7zr") for a in ("--copy-metadata", d)],
+           *[a for d in ("PySide6", "python-mpv", "python-vlc", "watchdog", "pillow", "py7zr", "pychromecast", "pyatv")
+             for a in ("--copy-metadata", d)],
+           # Chromecast and AirPlay ship inside the app: the installed app has no Python for pip to install them into
+           # (pyatv loads its protocols by name, so every submodule and data file comes along)
+           "--collect-all", "pychromecast", "--collect-all", "pyatv", "--exclude-module", "numpy",
            "--hidden-import", "PySide6.QtMultimedia",
            "--hidden-import", "PySide6.QtQuickControls2", "--hidden-import", "PySide6.QtWidgets",
            "--add-data", f"{ROOT / 'ui'}{os.pathsep}ui",          # QML files

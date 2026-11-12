@@ -52,7 +52,7 @@ jobs:
         if: steps.plan.outputs.build == 'true'
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt pyinstaller
+          python -m pip install -r requirements.txt pychromecast pyatv pyinstaller
 
       - name: Check the tag matches version.py
         if: steps.plan.outputs.build == 'true' && startsWith(github.ref, 'refs/tags/')

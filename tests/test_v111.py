@@ -230,3 +230,20 @@ class ComponentPermissionTests(unittest.TestCase):
             self.assertTrue((user / "mpv-2.dll").exists())
             self.assertEqual(utils.bin_dir(), user)
             self.assertEqual(utils.writable_bin(force=True), user)        # already there: no second copy
+
+
+class CastBuiltInTests(unittest.TestCase):
+    def test_installed_app_never_runs_pip_through_itself(self):
+        import setup
+        from utils import components
+        with mock.patch.object(sys, "frozen", True, create=True), mock.patch("subprocess.Popen") as popen:
+            with self.assertRaises(RuntimeError):
+                setup.pip_install(["pyatv"], log=lambda *a: None)
+            self.assertIn("built into", components.update("pyatv", log=lambda *a: None))
+            popen.assert_not_called()
+
+    def test_build_bundles_them(self):
+        b = (ROOT / "build_installer.py").read_text(encoding="utf-8")
+        self.assertIn('"--collect-all", "pychromecast", "--collect-all", "pyatv"', b)
+        wf = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        self.assertIn("pip install -r requirements.txt pychromecast pyatv pyinstaller", wf)

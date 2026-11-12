@@ -165,6 +165,9 @@ def _run(cmd: list[str], log) -> list[str]:
 
 
 def pip_install(specs: list[str], log=print) -> None:
+    if getattr(sys, "frozen", False):
+        # sys.executable is MediaVault.exe: "-m pip" would start Media Vault again, exit 0 and install nothing
+        raise RuntimeError("the installed Media Vault has its Python packages built in; they update with the app")
     base = [_python_exe(), "-m", "pip"]
     try:
         _run(base + ["--version"], lambda _l: None)

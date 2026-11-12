@@ -27,8 +27,9 @@ PACKAGES = [
     ("watchdog", "watchdog", "Notices new files in your folders", "watchdog", False),
     ("pillow", "Pillow", "Covers, posters and actor photos", "pillow", False),
     ("py7zr", "py7zr", "Unpacks the libmpv download", "py7zr", False),
-    ("pychromecast", "PyChromecast", "Chromecast (optional add-on)", "pychromecast", True),
-    ("pyatv", "pyatv", "AirPlay (optional add-on)", "pyatv", True),
+    # optional for a source install; built into the installed app (1.1.1 and later)
+    ("pychromecast", "PyChromecast", "Chromecast", "pychromecast", True),
+    ("pyatv", "pyatv", "AirPlay", "pyatv", True),
 ]
 
 
@@ -96,7 +97,7 @@ def inventory() -> list[dict]:
         if pid == "pyside6" and qt:
             installed = (installed or "") + (f" · Qt {qt}" if installed else f"Qt {qt}")
         rows.append({"id": pid, "name": name, "role": role, "installed": installed, "pip": dist,
-                     "kind": "bundled" if frozen() and not optional else "python", "optional": optional})
+                     "kind": "bundled" if frozen() else "python", "optional": optional and not frozen()})
     from utils import rollback
     waiting = rollback.pending()
     for r in rows:
@@ -235,7 +236,7 @@ def _update(component: str, log=print) -> str:
     if before:
         if component in rollback.PARTS:
             rollback.snapshot(component, before)
-        elif any(p[0] == component and not (frozen() and not p[4]) for p in PACKAGES):
+        elif not frozen() and any(p[0] == component for p in PACKAGES):
             rollback.remember_pip(component, before)
     if component == "libmpv":
         setup.download_mpv(writable_bin(), log)
@@ -248,7 +249,7 @@ def _update(component: str, log=print) -> str:
         return "Upscaling shader installed."
     pkg = next((p for p in PACKAGES if p[0] == component), None)
     if pkg:
-        if frozen() and not pkg[4]:
+        if frozen():          # MediaVault.exe is not Python: "pip install" through it did nothing
             return f"{pkg[1]} is built into Media Vault and updates with it."
         setup.pip_install(["-U", pkg[3]], log)
         return f"{pkg[1]} updated. Restart Media Vault to use it."
@@ -270,7 +271,7 @@ def rollback_component(component: str, log=print) -> str:
                              "Run Media Vault as administrator once to roll back") from None
         return f"Restart Media Vault to finish going back to {want}."
     pkg = next((p for p in PACKAGES if p[0] == component), None)
-    if not pkg or (frozen() and not pkg[4]):
+    if not pkg or frozen():
         raise ValueError(f"{component} cannot be rolled back on its own")
     if not re.fullmatch(r"[0-9][0-9A-Za-z.+!-]{0,40}", want):        # a version number, nothing pip could read as an option
         raise ValueError("the kept version number is not valid")

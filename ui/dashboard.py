@@ -1709,6 +1709,10 @@ class Dashboard(QObject):
 
     @Slot()
     def installCastSupport(self):
+        if getattr(sys, "frozen", False):     # the installed app: they come built in (1.1.1 and later)
+            self.toast.emit("AirPlay and Chromecast come built into Media Vault 1.1.1 and later: update it in Settings \u203A About & Updates")
+            return
+
         def work():
             import setup
             try:
