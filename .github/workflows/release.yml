@@ -19,7 +19,7 @@ jobs:
       QT_QPA_PLATFORM: offscreen
       PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Is there a release to make?
         id: plan
@@ -43,7 +43,7 @@ jobs:
           "replace=$($replace.ToString().ToLower())" >> $env:GITHUB_OUTPUT
           Write-Host "version $v, release exists: $exists (published $published), replace: $replace, build: $go"
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         if: steps.plan.outputs.build == 'true'
         with:
           python-version: "3.13"
@@ -67,7 +67,7 @@ jobs:
 
       - name: Tests
         if: steps.plan.outputs.build == 'true'
-        run: python -m unittest tests.test_core tests.test_qml_static tests.test_round8 tests.test_round9 tests.test_round10 tests.test_round11 tests.test_release tests.test_detail tests.test_v102 tests.test_v103 tests.test_v105 tests.test_v106 tests.test_security -v
+        run: python -m unittest tests.test_core tests.test_qml_static tests.test_round8 tests.test_round9 tests.test_round10 tests.test_round11 tests.test_release tests.test_detail tests.test_v102 tests.test_v103 tests.test_v105 tests.test_v106 tests.test_v107 tests.test_security -v
 
       - name: Install Inno Setup
         if: steps.plan.outputs.build == 'true'
@@ -93,7 +93,7 @@ jobs:
           Start-Process "$dir\unins000.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES" -Wait
           Get-FileHash $setup -Algorithm SHA256 | Format-List
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: steps.plan.outputs.build == 'true'
         with:
           name: MediaVault-setup

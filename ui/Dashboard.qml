@@ -115,7 +115,7 @@ Item {
     readonly property bool filtered: query !== "" || genre !== "" || quality !== "" || unwatched || sort !== "title"
     function applyView() { Backend.setView(query, sort, genre, quality, unwatched) }
     function clearView() { query = ""; sort = "title"; genre = ""; quality = ""; unwatched = false; applyView() }
-    function setShelf(on) { shelf = on; stagger = true; staggerOff.restart(); Backend.setShelf(on); grid.userScrolled = false; grid.positionViewAtBeginning() }
+    function setShelf(on) { shelf = on; stagger = true; staggerOff.restart(); grid.keptY = -1; Backend.setShelf(on); grid.keptY = -1; grid.userScrolled = false; grid.positionViewAtBeginning() }
     Timer { id: searchDebounce; interval: 160; onTriggered: dash.applyView() }
     Shortcut { sequences: [StandardKey.Find]; onActivated: if (dash.searchField) { grid.contentY = grid.originY; dash.searchField.forceActiveFocus() } }
     Component.onCompleted: opts = Backend.viewOptions()
@@ -177,6 +177,22 @@ Item {
             boundsBehavior: Flickable.StopAtBounds
             ScrollBar.vertical: ScrollBar { parent: content; x: content.width - width; y: grid.y; height: grid.height }
             SmoothWheel { view: grid; onScrolled: grid.userScrolled = true }
+            // a filter, the sort or the Box sets switch rebuilds the list, and a rebuilt GridView starts at its top:
+            // remember where the page was and go back there (as far as the new, maybe shorter, list allows).
+            // Switching tabs and Grid / Shelf still start at the top on purpose (they call positionViewAtBeginning).
+            property real keptY: -1
+            Connections {
+                target: Library
+                function onModelAboutToBeReset() { grid.keptY = grid.contentY - grid.originY }
+                function onModelReset() { if (grid.keptY > 0) Qt.callLater(grid.restoreY) }
+            }
+            function restoreY() {
+                if (keptY <= 0) return
+                forceLayout()
+                userScrolled = true                     // keeps the header's "stay at the top" rule out of the way
+                contentY = originY + Math.min(keptY, Math.max(0, contentHeight - height))
+                keptY = -1
+            }
 
             header: Column {
                 width: grid.width
@@ -857,7 +873,7 @@ Item {
                                         if (tab.on) return
                                         dash.stagger = true; staggerOff.restart()
                                         dash.currentTab = tabId; dash.currentTabName = name
-                                        Backend.selectTab(tabId); grid.userScrolled = false; grid.positionViewAtBeginning()
+                                        Backend.selectTab(tabId); grid.keptY = -1; grid.userScrolled = false; grid.positionViewAtBeginning()
                                     }
                                     onDoubleClicked: rename()
                                 }
