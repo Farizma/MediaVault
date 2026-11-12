@@ -288,6 +288,15 @@ Item {
                 }
             }
 
+            // under the box, fixed in the pane: it does not ride along with the box in focus as the carousel turns
+            Text {
+                anchors.horizontalCenter: parent.horizontalCenter
+                y: box.restY - sheet.y + box.height - height
+                text: "Drag to spin \u00B7 scroll to zoom"; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10
+                opacity: root.f === 1 && !root.launching ? 1 : 0
+                Behavior on opacity { NumberAnimation { duration: 200 * Theme.motion } }
+            }
+
             // box art: your own covers for titles the scraper missed (or art you prefer)
             Column {
                 id: artTools
@@ -946,7 +955,7 @@ Item {
         year: root.cur.year || ""
         property real swipe: 0                 // carousel: sideways slide while turning to the next film
         readonly property real bob: root.spread * 5 * Math.sin(root.wave)   // idle wave, in step with the films beside it
-        hint: root.f === 1 && !root.launching
+        hint: false                            // the pane draws it, so it stays put while the box turns and slides
         spinning: root.f === 1 && !root.closing && !root.launching && !root.turning
         enabled: root.f === 1 && !root.closing && !root.launching && !root.turning
         // resting place: centred in the left pane, above the box-art buttons
