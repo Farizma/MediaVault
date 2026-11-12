@@ -281,9 +281,10 @@ class LibraryModel(QAbstractListModel):
                 return file_url(p)
         return ""
 
-    def reload(self, dir_id) -> list[dict]:
+    def reload(self, dir_id, fresh: bool = False) -> list[dict]:
         """Refresh the cards (searched, filtered, sorted by `view`). Returns ALL of the tab's cards, unfiltered,
-        so the billboard picks from the whole tab without a second query."""
+        so the billboard picks from the whole tab without a second query. fresh: rebuild the list even if the
+        cards are the same (a new tab: every card plays its entrance)."""
         self.title_pref = db.get_setting("title_language", "english") or "english"
         cards = db.list_library(dir_id)
         index = db.search_index()
@@ -292,15 +293,60 @@ class LibraryModel(QAbstractListModel):
         online = {d["id"]: os.path.isdir(d["folder_path"]) for d in db.list_directories()}   # one check per folder
         shown = library_view(cards, index, **self.view) if self.view else cards
         rows = [self._row(c, online.get(c["parent_directory_id"], True)) for c in shown]
-        if [r["key"] for r in rows] == [r["key"] for r in self._rows]:
+        if not fresh and [r["key"] for r in rows] == [r["key"] for r in self._rows]:
             self._rows = rows  # same cards: refresh in place so the grid keeps its scroll position
             if rows:
                 self.dataChanged.emit(self.index(0), self.index(len(rows) - 1))
+            return cards
+        if not fresh and self._step_to(rows):
             return cards
         self.beginResetModel()
         self._rows = rows
         self.endResetModel()
         return cards
+
+    MAX_STEPS = 150      # more cards than this coming or going at once: rebuild the list instead
+
+    def _step_to(self, rows: list[dict]) -> bool:
+        """A filter added or taken away: remove the cards that go and insert the ones that come, so the grid can
+        animate them (fade out and close the gaps; open gaps and fade in). Only when the cards that stay keep their
+        order (a new sort, or a different tab, rebuilds the list). Returns False when it cannot."""
+        old, new = [r["key"] for r in self._rows], [r["key"] for r in rows]
+        old_set, new_set = set(old), set(new)
+        if [k for k in old if k in new_set] != [k for k in new if k in old_set]:
+            return False
+        if len(old_set - new_set) + len(new_set - old_set) > self.MAX_STEPS or not old_set & new_set:
+            return False
+        # the ones that go, from the end so the earlier positions stay valid; neighbours in one range together
+        i = len(old) - 1
+        while i >= 0:
+            if old[i] in new_set:
+                i -= 1
+                continue
+            j = i
+            while j - 1 >= 0 and old[j - 1] not in new_set:
+                j -= 1
+            self.beginRemoveRows(QModelIndex(), j, i)
+            del self._rows[j:i + 1]
+            self.endRemoveRows()
+            i = j - 1
+        # the ones that come, in their places
+        i = 0
+        while i < len(new):
+            if new[i] in old_set:
+                i += 1
+                continue
+            j = i
+            while j + 1 < len(new) and new[j + 1] not in old_set:
+                j += 1
+            self.beginInsertRows(QModelIndex(), i, j)
+            self._rows[i:i] = rows[i:j + 1]
+            self.endInsertRows()
+            i = j + 1
+        self._rows = rows          # the cards that stayed get their fresh data (progress, art)
+        if rows:
+            self.dataChanged.emit(self.index(0), self.index(len(rows) - 1))
+        return True
 
 
 class TabsModel(QAbstractListModel):
@@ -349,6 +395,7 @@ class Dashboard(QObject):
     artPicked = Signal(str, str, str, str)       # key, face, image url, path: View More opens its crop editor
     componentsChecked = Signal("QVariantList")   # Settings > About & Updates, after a check or an update
     updateCountChanged = Signal()                # how many things have an update (badge on Settings)
+    startupReadyChanged = Signal()               # the library is loaded: the opening vault may open
     _quitForUpdate = Signal()                    # from a worker thread: close Media Vault so setup can replace it
     appUpdateProgress = Signal(float)            # 0..1 while the new setup.exe downloads; -1 = failed              # path, suggested tab name
     matchResults = Signal(str, "QVariantList")   # key, candidates
@@ -372,10 +419,20 @@ class Dashboard(QObject):
         self.libraryChanged.connect(self.reload)
         self._thumbnailsDone.connect(self._store_thumbnails)
         self._update_count = 0
+        self._startup_ready = False
         self.componentsChecked.connect(self._count_updates)
         self._quitForUpdate.connect(self._quit_for_update)     # queued: runs on the main thread
 
     # -- properties
+    @Property(bool, notify=startupReadyChanged)
+    def startupReady(self):
+        return self._startup_ready
+
+    def mark_ready(self):
+        if not self._startup_ready:
+            self._startup_ready = True
+            self.startupReadyChanged.emit()
+
     @Property(int, notify=updateCountChanged)
     def updateCount(self):
         return self._update_count
@@ -464,13 +521,14 @@ class Dashboard(QObject):
     def selectTab(self, tab_id: int):
         self._tab = tab_id
         self._bb_keys = []  # new tab, new random picks
-        self._refresh_billboard(self.library.reload(None if tab_id < 0 else tab_id))
+        self._refresh_billboard(self.library.reload(None if tab_id < 0 else tab_id, fresh=True))
 
     def start(self):
         self._insights_visible = db.get_setting("show_insights") == "1"
         self.insightsVisibleChanged.emit()
         self.needsSetup = False  # switches Main.qml from the wizard to the dashboard
         self.reload()
+        self.mark_ready()        # the cards and the carousel are in: the opening vault can open
 
     def _refresh_billboard(self, cards: list[dict]):
         self._billboard = billboard_deck(cards, self._bb_keys)

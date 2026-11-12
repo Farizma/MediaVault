@@ -63,6 +63,8 @@ class App:
         self._restore_window(main_window)
         if not self.dashboard.needsSetup:
             self.start_library()
+        else:
+            self.dashboard.mark_ready()        # first run: the vault opens onto the setup wizard
 
     def finish_setup(self, folders, options):
         db = self.db

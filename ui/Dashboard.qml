@@ -139,7 +139,7 @@ Item {
 
     // ---- tab change: the new cards fade up in a quick cascade (30 ms apart, first 14 only)
     property bool stagger: false
-    Timer { id: staggerOff; interval: 900; onTriggered: dash.stagger = false }
+    Timer { id: staggerOff; interval: 700; onTriggered: dash.stagger = false }
 
     // ---- theme change: snapshot the window, switch colours underneath, fade the snapshot out (like macOS)
     function switchTheme(id) {
@@ -193,6 +193,38 @@ Item {
             boundsBehavior: Flickable.StopAtBounds
             ScrollBar.vertical: ScrollBar { parent: content; x: content.width - width; y: grid.y; height: grid.height }
             SmoothWheel { view: grid; onScrolled: grid.userScrolled = true }
+            // filters: cards that go fade out, then the rest slide together; cards that come back first open their
+            // gaps, then fade in rising, one after another. Fast; nothing at all with reduced motion.
+            remove: Transition {
+                enabled: Theme.motion > 0
+                ParallelAnimation {
+                    NumberAnimation { property: "appear"; to: 0; duration: 150; easing.type: Easing.InCubic }
+                    NumberAnimation { property: "scale"; to: 0.92; duration: 150; easing.type: Easing.InCubic }
+                }
+            }
+            removeDisplaced: Transition {
+                enabled: Theme.motion > 0
+                SequentialAnimation {
+                    PauseAnimation { duration: 110 }
+                    NumberAnimation { properties: "x,y"; duration: 260; easing.type: Easing.OutCubic }
+                }
+            }
+            addDisplaced: Transition {
+                enabled: Theme.motion > 0
+                NumberAnimation { properties: "x,y"; duration: 240; easing.type: Easing.OutCubic }
+            }
+            add: Transition {
+                enabled: Theme.motion > 0
+                id: addIn
+                SequentialAnimation {
+                    PropertyAction { property: "appear"; value: 0 }
+                    PropertyAction { property: "scale"; value: 1 }
+                    // after the gaps have opened, one after another
+                    PauseAnimation { duration: 200 + Math.min(14, Math.max(0, addIn.ViewTransition.index - (addIn.ViewTransition.targetIndexes[0] || 0))) * 24 }
+                    NumberAnimation { property: "appear"; to: 1; duration: 240; easing.type: Easing.OutCubic }
+                }
+            }
+
             // a filter, the sort or the Box sets switch rebuilds the list, and a rebuilt GridView starts at its top:
             // remember where the page was and go back there (as far as the new, maybe shorter, list allows).
             // Switching tabs and Grid / Shelf still start at the top on purpose (they call positionViewAtBeginning).
@@ -550,13 +582,14 @@ Item {
                 Component.onCompleted: enter()
                 property real appear: 1
                 function enter() { if (dash.stagger && Theme.motion > 0) { appear = 0; rise.restart() } }
+                // a new tab: every card fades in rising, quickly, one after another along the rows
                 SequentialAnimation {
                     id: rise
-                    PauseAnimation { duration: Math.max(0, Math.min(index, 14)) * 30 }
-                    NumberAnimation { target: cell; property: "appear"; to: 1; duration: 320; easing.type: Easing.OutCubic }
+                    PauseAnimation { duration: Math.max(0, Math.min(index, 18)) * 22 }
+                    NumberAnimation { target: cell; property: "appear"; to: 1; duration: 260; easing.type: Easing.OutCubic }
                 }
                 opacity: appear
-                transform: Translate { y: 14 * (1 - cell.appear) }
+                transform: Translate { y: 22 * (1 - cell.appear) }
 
                 // the open case behind the cover: tray and disc, seen as the cover swings open on Play
                 Rectangle {

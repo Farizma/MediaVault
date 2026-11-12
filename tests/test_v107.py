@@ -271,3 +271,57 @@ class BannerTests(unittest.TestCase):
         self.assertIn("readonly property bool hasBanner: (info.banner || ", qml)
         self.assertIn("Qt.rgba(bannerFade.c.r, bannerFade.c.g, bannerFade.c.b, 1.0)", qml)      # ends opaque: no edge
         self.assertIn("Item { visible: root.hasBanner; Layout.preferredHeight: pane.bannerH * 0.42", qml)
+
+
+class GridAnimationTests(unittest.TestCase):
+    def _model(self, keys):
+        import os
+        import sys
+        import tempfile
+        sys.path.insert(0, str(ROOT))
+        os.environ.setdefault("LOCALAPPDATA", tempfile.mkdtemp())
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtGui import QGuiApplication
+        QGuiApplication.instance() or QGuiApplication([])
+        from ui.dashboard import LibraryModel
+        m = LibraryModel()
+        m._rows = [{"key": k} for k in keys]
+        log = []
+        m.rowsRemoved.connect(lambda p, a, b: log.append(("remove", a, b)))
+        m.rowsInserted.connect(lambda p, a, b: log.append(("insert", a, b)))
+        m.modelReset.connect(lambda: log.append(("reset",)))
+        return m, log
+
+    def test_adding_a_filter_removes_cards(self):
+        m, log = self._model(list("abcdefg"))
+        self.assertTrue(m._step_to([{"key": k} for k in "acfg"]))
+        self.assertEqual(log, [("remove", 3, 4), ("remove", 1, 1)])           # from the end, neighbours together
+        self.assertEqual([r["key"] for r in m._rows], list("acfg"))
+
+    def test_removing_a_filter_inserts_them_back_in_place(self):
+        m, log = self._model(list("acfg"))
+        self.assertTrue(m._step_to([{"key": k} for k in "abcdefg"]))
+        self.assertEqual(log, [("insert", 1, 1), ("insert", 3, 4)])
+        self.assertEqual([r["key"] for r in m._rows], list("abcdefg"))
+
+    def test_a_new_order_or_tab_rebuilds(self):
+        m, _ = self._model(list("abc"))
+        self.assertFalse(m._step_to([{"key": k} for k in "cba"]))             # a different sort
+        self.assertFalse(m._step_to([{"key": k} for k in "xyz"]))             # nothing in common
+        qml = (ROOT / "ui" / "Dashboard.qml").read_text(encoding="utf-8")
+        for t in ("remove: Transition", "removeDisplaced: Transition", "add: Transition", "addDisplaced: Transition"):
+            self.assertIn(t, qml)
+        src = (ROOT / "ui" / "dashboard.py").read_text(encoding="utf-8")
+        self.assertIn("self.library.reload(None if tab_id < 0 else tab_id, fresh=True)", src)   # tabs always replay
+
+
+class IntroTests(unittest.TestCase):
+    def test_vault_waits_for_the_library(self):
+        qml = (ROOT / "ui" / "VaultIntro.qml").read_text(encoding="utf-8")
+        self.assertIn("if (!ready || minSpin.running || phase !== ", qml)
+        self.assertIn("loops: Animation.Infinite", qml)                       # spins as long as loading takes
+        main = (ROOT / "ui" / "Main.qml").read_text(encoding="utf-8")
+        self.assertIn("ready: Backend.startupReady && screen.status === Loader.Ready", main)
+        self.assertIn("scale: intro.zoom", main)
+        self.assertIn("self.mark_ready()", (ROOT / "ui" / "dashboard.py").read_text(encoding="utf-8"))
+        self.assertIn("self.dashboard.mark_ready()", (ROOT / "main.py").read_text(encoding="utf-8"))   # first run too

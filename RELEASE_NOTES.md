@@ -7,6 +7,13 @@ or download `MediaVault_v1.0.8_setup.exe` below.
 Choose *More info* › *Run anyway*. The SHA-256 of the setup file is listed below.
 
 ### New
+- **Opening animation.** Media Vault starts on its logo: the vault dial spins for as long as the library takes to
+  load, then clicks into place, the door swings open to show the dashboard inside, and the view zooms in through the
+  opening until the dashboard fills the window (under 3 seconds when nothing needs waiting for). With reduced motion
+  it is a short fade.
+- **Cards move with filters.** Adding a filter fades out the cards that no longer match and slides the rest together
+  to close the gaps; taking a filter away first opens gaps where the cards return, then fades them in, rising, one
+  after another. Switching tabs always plays a quick entrance: every card fades in and rises, in sequence.
 - **Banners.** Every title, box set and OVA box set gets a banner: the highest-rated TMDB backdrop without text
   (TMDB's "no language" backdrops, best rating first). AniList box sets are looked up on TMDB by their English,
   romanized or original name; if TMDB has nothing, AniList's own banner is used. The banner is now the picture on
