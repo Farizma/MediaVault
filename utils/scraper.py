@@ -222,6 +222,49 @@ def parse_link(text: str) -> dict | None:
     return None
 
 
+IMPORT_MAX = 30          # images from one pasted link
+_TMDB_IMAGES = re.compile(r"themoviedb\.org/(movie|tv)/(\d+)[^/?#]*(?:/season/(\d+)(?:/episode/(\d+))?)?(?:/images/(\w+))?", re.I)
+_IMAGE_URL = re.compile(r"^https://\S+\.(?:jpe?g|png|webp)(?:\?\S*)?$", re.I)
+
+
+def _by_votes(shots: list[dict]) -> list[str]:
+    shots = sorted((b for b in shots if b.get("file_path")), key=lambda b: (-(b.get("vote_average") or 0), -(b.get("vote_count") or 0)))
+    return [f"{IMG}original{b['file_path']}" for b in shots]
+
+
+def gallery_link(text: str, key: str) -> dict:
+    """Gallery > Import from a link: the images a page points at. {"urls": [...], "episode": {"name", "overview"} | None}.
+    TMDB episode images (".../tv/104602/season/1/episode/1/images/backdrops"): that episode's stills, plus its name and
+    synopsis. A TMDB season: its episodes' stills. A TMDB series or film: its backdrops (or posters, for an
+    /images/posters link). A MyAnimeList title: its pictures. A direct https link to a .jpg / .png / .webp: that image."""
+    text = (text or "").strip()
+    m = _TMDB_IMAGES.search(text)
+    if m:
+        if not key:
+            raise ScrapeError("TMDB links need a TMDB API key (Settings \u203A Integrations & APIs)")
+        kind, tid, season, episode, which = m.group(1).lower(), int(m.group(2)), m.group(3), m.group(4), (m.group(5) or "").lower()
+        if episode is not None and kind == "tv":
+            base = f"tv/{tid}/season/{int(season)}/episode/{int(episode)}"
+            ep = _tmdb_json(base, key)
+            urls = _by_votes((_tmdb_json(f"{base}/images", key).get("stills") or []))
+            if not urls and ep.get("still_path"):
+                urls = [f"{IMG}original{ep['still_path']}"]
+            return {"urls": urls[:IMPORT_MAX], "episode": {"name": untag(ep.get("name") or ""), "overview": untag(ep.get("overview") or "")}}
+        if season is not None and kind == "tv":
+            eps = _tmdb_json(f"tv/{tid}/season/{int(season)}", key).get("episodes") or []
+            return {"urls": [f"{IMG}original{e['still_path']}" for e in eps if e.get("still_path")][:IMPORT_MAX], "episode": None}
+        images = _tmdb_json(f"{kind}/{tid}/images", key)
+        pick = "posters" if which == "posters" else "logos" if which == "logos" else "backdrops"
+        return {"urls": _by_votes(images.get(pick) or [])[:IMPORT_MAX], "episode": None}
+    m = re.search(r"myanimelist\.net/anime/(\d+)", text, re.I)
+    if m:
+        from . import anilist
+        return {"urls": list(anilist.mal_pictures(int(m.group(1)), limit=IMPORT_MAX)), "episode": None}
+    if _IMAGE_URL.match(text):
+        return {"urls": [text], "episode": None}
+    raise ScrapeError("Paste a TMDB or MyAnimeList page, or a link straight to a .jpg, .png or .webp image")
+
+
 @_plain
 def tmdb_search(kind: str, query: str, year: str, key: str) -> list[dict]:
     """Fix Scraped Data: up to 12 TMDB candidates for a title (adult titles included: you are searching by hand)."""

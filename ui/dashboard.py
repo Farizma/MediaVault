@@ -298,7 +298,11 @@ class LibraryModel(QAbstractListModel):
             if rows:
                 self.dataChanged.emit(self.index(0), self.index(len(rows) - 1))
             return cards
-        if not fresh and self._step_to(rows):
+        # another change while the last one is still animating: interrupted view transitions can strand cards
+        # half-faded or out of place, so rebuild the list at once instead
+        busy = time.monotonic() - self._stepped_at < self.SETTLE
+        if not fresh and not busy and self._step_to(rows):
+            self._stepped_at = time.monotonic()
             return cards
         self.beginResetModel()
         self._rows = rows
@@ -306,6 +310,8 @@ class LibraryModel(QAbstractListModel):
         return cards
 
     MAX_STEPS = 150      # more cards than this coming or going at once: rebuild the list instead
+    SETTLE = 0.9         # seconds the grid's filter animation takes, start to finish
+    _stepped_at = -1e9
 
     def _step_to(self, rows: list[dict]) -> bool:
         """A filter added or taken away: remove the cards that go and insert the ones that come, so the grid can
@@ -603,8 +609,9 @@ class Dashboard(QObject):
         art = item
         if films:
             name = films[0]["collection_name"] or item["title"]
+            own = db.collection_synopsis(key[4:])
             item = {**item, "title": name, "release_date": films[0]["release_date"],
-                    "synopsis": " \u00B7 ".join(f'{f["title"]} ({(f["release_date"] or "")[:4]})' if f["release_date"] else f["title"]
+                    "synopsis": own or " \u00B7 ".join(f'{f["title"]} ({(f["release_date"] or "")[:4]})' if f["release_date"] else f["title"]
                                              for f in films)}
             art = {**scraper.collection_item(key[4:], name), "synopsis": item["synopsis"]}
         tex = dvd_box.box_textures(art)
@@ -620,7 +627,11 @@ class Dashboard(QObject):
         return {
             "key": key, "isShow": bool(eps), "isSet": bool(films), "kind": "show" if eps or item["media_type"] == "show" else "movie",
             "canMatch": not films and item["media_type"] != "clip", "title": display_titles({**item, "key": key})[0] if not films else item["title"],
-            "subtitle": display_titles({**item, "key": key})[1] if not films else "", "synopsis": item["synopsis"] or "",
+            "subtitle": display_titles({**item, "key": key})[1] if not films else "",
+            "synopsis": (own if films else item["synopsis"]) or "",
+            # a film in a box set: its own episode name and synopsis (an OVA's "#2" is an episode of a series)
+            "inSet": not films and not eps and item.get("collection_id") is not None,
+            "episodeTitle": item.get("episode_title") or "", "episodeSynopsis": item.get("episode_synopsis") or "",
             # every other title, grouped English / Romanized / Native / Other languages (not the ones shown above)
             "altTitles": [] if films else alttitles.for_display(item.get("alt_titles"), display_titles({**item, "key": key})),
             "banner": file_url(b) if (b := banner_for({**item, "key": key})) else "",
@@ -646,7 +657,8 @@ class Dashboard(QObject):
             "boxSet": ({"key": f"set:{item['collection_id']}", "name": item.get("collection_name") or ""}
                        if not films and not eps and item.get("collection_id") is not None else {}),
             "canSet": not films and item["media_type"] == "movie",
-            "episodes": [{"uuid": e["uuid"], "title": e["title"] + (f' ({e["release_date"][:4]})' if films and e["release_date"] else ""),
+            "episodes": [{"uuid": e["uuid"], "title": e["title"] + (f' ({e["release_date"][:4]})' if films and e["release_date"] else "")
+                          + (f' \u2014 {e["episode_title"]}' if films and e.get("episode_title") else ""),
                           "done": bool(e["is_completed"]),
                           "progress": min(1.0, e["last_position"] / e["duration"]) if e["duration"] and not e["is_completed"] else 0}
                          for e in (eps or films)],
@@ -994,7 +1006,20 @@ class Dashboard(QObject):
 
     @Slot(str, str)
     def setSynopsis(self, key: str, text: str):
+        if key.startswith("set:"):          # the box set's own page: not its films'
+            db.set_collection_synopsis(key[4:], text)
+            return
         db.set_synopsis_many(db.uuids_for(key), text)
+
+    @Slot(str, str)
+    def setEpisodeTitle(self, key: str, text: str):
+        if not key.startswith(("show:", "set:")):
+            db.set_episode(key, title=text.strip())
+
+    @Slot(str, str)
+    def setEpisodeSynopsis(self, key: str, text: str):
+        if not key.startswith(("show:", "set:")):
+            db.set_episode(key, synopsis=text)
 
     @Slot(str, str)
     def addTag(self, key: str, name: str):
@@ -1150,6 +1175,43 @@ class Dashboard(QObject):
             self.toast.emit(f"Added {n} image{'s' if n != 1 else ''} to the Gallery")
             self.boxArtChanged.emit(key)
         QTimer.singleShot(0, run)
+
+    @Slot(str, str, bool)
+    def importGalleryImages(self, key: str, link: str, replace: bool):
+        """Gallery > Import from a link (TMDB episode / season / title images, MyAnimeList, or one image). They are
+        kept as your own, so a later scrape does not swap them out; replace: drop the scraped ones first. A TMDB
+        episode link also fills in the film's episode name and synopsis (when you have not written them)."""
+        item = self._target(key)
+        if not item or key.startswith("set:"):       # a box set's page has no Gallery of its own
+            return
+        tmdb = scraper.api_keys().get("tmdb") or ""
+
+        def work():
+            try:
+                got = scraper.gallery_link(link, tmdb)
+            except Exception as e:      # ScrapeError, offline, a 404
+                self.toast.emit(f"Could not import: {e}")
+                return
+            if not got["urls"]:
+                self.toast.emit("That page has no images to import")
+                return
+            d = scraper.gallery_dir(item)
+            n, stamp = 0, int(time.time() * 1000)
+            for i, url in enumerate(got["urls"]):
+                try:
+                    scraper.save_webp(scraper.fetch_image(url), d / f"c-{stamp}-{i:02d}.webp", box=scraper.GALLERY_BOX)
+                    n += 1
+                except Exception:
+                    log.warning("gallery import %s", url, exc_info=True)
+            if n and replace:
+                for p in d.glob("s-*.webp"):
+                    p.unlink(missing_ok=True)
+            ep = got.get("episode")
+            if ep and item.get("media_type") == "movie":
+                db.set_episode(item["uuid"], title=ep["name"] or None, synopsis=ep["overview"] or None, only_empty=True)
+            self.toast.emit(f"Imported {n} image{'s' if n != 1 else ''} into the Gallery" if n else "None of those images could be downloaded")
+            self.boxArtChanged.emit(key)
+        threading.Thread(target=work, daemon=True).start()
 
     @Slot(str, str)
     def removeGalleryImage(self, key: str, name: str):

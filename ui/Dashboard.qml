@@ -233,6 +233,23 @@ Item {
                 target: Library
                 function onModelAboutToBeReset() { grid.keptY = grid.contentY - grid.originY }
                 function onModelReset() { if (grid.keptY > 0) Qt.callLater(grid.restoreY) }
+                function onRowsInserted() { settle.restart() }
+                function onRowsRemoved() { settle.restart() }
+            }
+            // once a filter's animation is over, every card must be whole and in its cell. A transition cut short
+            // (Qt stops it where it is) can leave one faded, shrunk or stranded: put those right.
+            Timer { id: settle; interval: 1000; onTriggered: grid.settle() }
+            function settle() {
+                var kids = contentItem.children
+                for (var i = 0; i < kids.length; i++) {
+                    var c = kids[i]
+                    if (c.cellIndex === undefined || !c.visible) continue
+                    if (c.cellIndex < 0) { c.appear = 0; continue }          // removed, but never let go
+                    var x = (c.cellIndex % columns) * cellWidth, y = Math.floor(c.cellIndex / columns) * cellHeight
+                    if (Math.abs(c.x - x) > 0.5 || Math.abs(c.y - y) > 0.5) { c.x = x; c.y = y }
+                    if (c.scale !== 1) c.scale = 1
+                    if (c.appear !== 1 && !dash.stagger) c.appear = 1
+                }
             }
             function restoreY() {
                 if (keptY <= 0) return
@@ -577,11 +594,13 @@ Item {
                 }
                 onTxChanged: if (Theme.motion === 0) px = tx
                 onTyChanged: if (Theme.motion === 0) py = ty
-                GridView.onPooled: { pointerIn = false; hovered = false; tx = 0; ty = 0; px = 0; py = 0; linger.stop(); dash.stopPreview(vo) }
+                GridView.onPooled: { pointerIn = false; hovered = false; tx = 0; ty = 0; px = 0; py = 0; linger.stop(); dash.stopPreview(vo); rise.stop() }
                 GridView.onReused: { pointerIn = false; hovered = false; enter() }
                 Component.onCompleted: enter()
+                readonly property int cellIndex: index
                 property real appear: 1
-                function enter() { if (dash.stagger && Theme.motion > 0) { appear = 0; rise.restart() } }
+                // a recycled card may come back half-way through a filter animation (faded, shrunk): start it clean
+                function enter() { scale = 1; appear = 1; if (dash.stagger && Theme.motion > 0) { appear = 0; rise.restart() } }
                 // a new tab: every card fades in rising, quickly, one after another along the rows
                 SequentialAnimation {
                     id: rise

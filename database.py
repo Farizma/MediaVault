@@ -111,6 +111,10 @@ CREATE TABLE IF NOT EXISTS cast_members (
     role TEXT,
     PRIMARY KEY (owner, ord)
 );
+CREATE TABLE IF NOT EXISTS collection_info (
+    collection_id INTEGER PRIMARY KEY,  -- a box set's own page: what you wrote about the set as a whole
+    synopsis TEXT
+);
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT
@@ -215,7 +219,7 @@ def init_db() -> None:
         c.execute("UPDATE scanned_directories SET sort_order = id")   # keep the order they were added in
     for col, kind in (("tmdb_id", "INTEGER"), ("collection_id", "INTEGER"), ("collection_name", "TEXT"), ("score", "REAL"), ("anilist_id", "INTEGER"),
                       ("certification", "TEXT"), ("original_title", "TEXT"), ("romaji_title", "TEXT"),
-                      ("alt_titles", "TEXT")):
+                      ("alt_titles", "TEXT"), ("episode_title", "TEXT"), ("episode_synopsis", "TEXT")):
         if col not in cols:
             c.execute(f"ALTER TABLE media_items ADD COLUMN {col} {kind}")
     c.commit()
@@ -586,6 +590,28 @@ def rename_series(folder: str, name: str) -> None:
     with _tx() as c:
         for e in episodes_in(folder):
             c.execute("UPDATE media_items SET title=? WHERE uuid=?", (name + episode_suffix(e["title"]), e["uuid"]))
+
+
+def collection_synopsis(cid) -> str:
+    row = conn().execute("SELECT synopsis FROM collection_info WHERE collection_id=?", (int(cid),)).fetchone()
+    return (row[0] or "") if row else ""
+
+
+def set_collection_synopsis(cid, text: str) -> None:
+    with _tx() as c:
+        c.execute("INSERT INTO collection_info(collection_id, synopsis) VALUES(?, ?) "
+                  "ON CONFLICT(collection_id) DO UPDATE SET synopsis=excluded.synopsis", (int(cid), text))
+
+
+def set_episode(uid: str, title: str | None = None, synopsis: str | None = None, only_empty: bool = False) -> None:
+    """A film's own episode name and episode synopsis (box sets of OVAs: '#1' is an episode of a series).
+    only_empty: fill them in without replacing what you wrote."""
+    with _tx() as c:
+        for col, v in (("episode_title", title), ("episode_synopsis", synopsis)):
+            if v is None:
+                continue
+            extra = f" AND ({col} IS NULL OR {col}='')" if only_empty else ""
+            c.execute(f"UPDATE media_items SET {col}=? WHERE uuid=?{extra}", (v, uid))
 
 
 def set_synopsis_many(uids, text: str) -> None:

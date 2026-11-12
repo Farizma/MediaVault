@@ -37,6 +37,8 @@ Item {
     // on-screen height of the front face when it faces the camera: DetailView lines the box up with a card
     readonly property real faceH: boxH * focal / (camZ - boxD / 2)
     readonly property real faceCY: viewH / 2
+    // the front face's on-screen width per pixel of view height (zoom 1): lets a layout size the box to fit a width
+    readonly property real faceWPerH: boxW / (camZ - boxD / 2) / (2 * Math.tan(fov * Math.PI / 360))
     implicitWidth: 360
     implicitHeight: 470
 

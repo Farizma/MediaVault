@@ -30,7 +30,8 @@ Item {
         case "title": return true
         case "rating": return !setSlide
         case "meta": return (info.facts || []).length > 0
-        case "synopsis": case "tags": case "notes": return !setSlide
+        case "synopsis": return true                  // a box set's page has its own synopsis
+        case "tags": case "notes": return !setSlide
         case "cast": return !setSlide && (info.cast || []).length > 0
         case "gallery": return !setSlide
         case "boxset": return info.canSet === true
@@ -108,7 +109,18 @@ Item {
         flyOut.stop()
         flyIn.restart()
     }
-    function closeMenus() { titleMenu.close(); setMenu.close(); matchMenu.close(); castMenu.close() }
+    function startRename() {
+        titleMenu.close()
+        renaming = true
+        if (titleEditor) { titleEditor.forceActiveFocus(); titleEditor.selectAll() }
+    }
+    function commitTitle() {
+        var ed = titleEditor
+        if (ed && ed.text.trim() !== "" && ed.text !== info.title) { Backend.setTitle(infoKey, ed.text); info.title = ed.text }
+        else if (ed) ed.text = info.title || ""
+        if (renaming) { renaming = false; forceActiveFocus() }
+    }
+    function closeMenus() { titleMenu.close(); setMenu.close(); matchMenu.close(); castMenu.close(); galleryMenu.close() }
     function close() {
         if (!visible || closing || launching) return
         closeMenus()
@@ -158,8 +170,13 @@ Item {
     property int turnDir: 1                  // 1: the films move left (next), -1: they move right (previous)
     property int turnTarget: 0               // the slide coming into focus
     property int twoSide: 1                  // two films: the side the other one waits on
-    readonly property real sideX: Math.min(stage.width * 0.34, stage.width / 2 - 72)
     readonly property real sideScale: 0.5 + 0.12 * spread
+    // the films beside the one in focus: as far out as the left pane allows, never over the text on the right
+    readonly property real faceW: Math.max(0, box.height - 24) * box.faceWPerH
+    readonly property real sideX: Math.max(0, stage.width / 2 - 12 - 0.62 * 0.6 * faceW)
+    // the box's size: the front face (turned and spinning, so with room to spare) fits the left pane's width, and in
+    // a box set with half a neighbour showing either side of it
+    readonly property real fitFaceW: count > 1 ? (stage.width - 24) / 1.85 : (stage.width - 48) / 1.25
     SequentialAnimation {
         id: carousel
         ParallelAnimation {
@@ -407,8 +424,9 @@ Item {
                     Field {
                         id: titleField
                         readonly property bool picker: root.d.isSet === true && !root.renaming
-                        Layout.preferredWidth: picker ? Math.min(tm.advanceWidth + 6, titleCol.width - 48) : titleCol.width - 40
-                        Layout.rightMargin: picker ? 0 : 40
+                        Layout.preferredWidth: picker ? Math.min(tm.advanceWidth + 6, titleCol.width - 84)
+                                             : root.d.isSet === true ? titleCol.width - 84 : titleCol.width - 40
+                        Layout.rightMargin: picker || root.d.isSet === true ? 0 : 40
                         text: root.info.title || ""
                         font.pixelSize: 28; font.weight: Font.ExtraBold; font.letterSpacing: -0.6
                         leftPadding: 0; rightPadding: 0
@@ -425,16 +443,15 @@ Item {
                         background: Rectangle { color: "transparent"; Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1
                             color: titleField.activeFocus && !titleField.picker ? Theme.blue : "transparent" } }
                         MouseArea { anchors.fill: parent; visible: titleField.picker; cursorShape: Qt.PointingHandCursor; onClicked: titleMenu.begin(chev) }
-                        onActiveFocusChanged: if (!activeFocus && !picker) {
-                            if (text !== root.info.title) { Backend.setTitle(root.infoKey, text); root.info.title = text }
-                            root.renaming = false
-                        }
+                        onActiveFocusChanged: if (!activeFocus && !picker) root.commitTitle()
+                        onAccepted: if (!picker) root.commitTitle()
+                        Keys.onEscapePressed: (e) => { if (root.renaming) { text = root.info.title || ""; root.renaming = false; root.forceActiveFocus() } else e.accepted = false }
                         Component.onCompleted: root.titleEditor = titleField
                     }
                     // dropdown arrow, right after the title
                     Rectangle {
                         id: chev
-                        visible: root.d.isSet === true
+                        visible: root.d.isSet === true && !root.renaming
                         width: 28; height: 28; radius: 14
                         color: chevArea.containsMouse || titleMenu.opened ? Qt.rgba(1, 1, 1, 0.14) : Qt.rgba(1, 1, 1, 0.06)
                         Behavior on color { ColorAnimation { duration: 120 * Theme.motion } }
@@ -446,6 +463,39 @@ Item {
                                 c.beginPath(); c.moveTo(1.5, 1.5); c.lineTo(6, 6); c.lineTo(10.5, 1.5); c.stroke() }
                         }
                         MouseArea { id: chevArea; anchors.fill: parent; anchors.margins: -4; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: titleMenu.begin(chev) }
+                    }
+                    // box sets: a pencil to rename what is shown (the set, or the film in focus); while editing it
+                    // turns into a check mark that saves the new name (Enter saves too, Esc puts the old one back)
+                    Rectangle {
+                        id: pencil
+                        visible: root.d.isSet === true
+                        width: 28; height: 28; radius: 14
+                        color: root.renaming ? (penArea.containsMouse ? Qt.lighter(Theme.blue, 1.15) : Theme.blue)
+                                             : penArea.containsMouse ? Qt.rgba(1, 1, 1, 0.14) : Qt.rgba(1, 1, 1, 0.06)
+                        Behavior on color { ColorAnimation { duration: 140 * Theme.motion } }
+                        scale: penArea.pressed ? 0.9 : 1
+                        Behavior on scale { NumberAnimation { duration: 120 * Theme.motion; easing.type: Easing.OutCubic } }
+                        Canvas {
+                            id: penIcon
+                            anchors.centerIn: parent; width: 14; height: 14
+                            readonly property bool check: root.renaming
+                            onCheckChanged: requestPaint()
+                            onPaint: {
+                                var c = getContext("2d"); c.reset(); c.strokeStyle = "#FFFFFF"; c.lineWidth = 1.7; c.lineCap = "round"; c.lineJoin = "round"
+                                c.beginPath()
+                                if (check) { c.moveTo(2, 7.5); c.lineTo(5.5, 11); c.lineTo(12, 3) }
+                                else {   // a pencil, tip at the bottom left
+                                    c.moveTo(2, 12); c.lineTo(2.6, 9.2); c.lineTo(9.8, 2); c.lineTo(12, 4.2); c.lineTo(4.8, 11.4); c.closePath()
+                                    c.moveTo(8.2, 3.6); c.lineTo(10.4, 5.8)
+                                }
+                                c.stroke()
+                            }
+                        }
+                        MouseArea {      // takes no focus: the title keeps it until this click decides
+                            id: penArea; anchors.fill: parent; anchors.margins: -4; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                            onClicked: root.renaming ? root.commitTitle() : root.startRename()
+                        }
+                        Tip { visible: penArea.containsMouse; delay: 400; text: root.renaming ? "Save the name" : "Rename" }
                     }
                     Item { Layout.fillWidth: true }
                 }
@@ -577,12 +627,29 @@ Item {
                 id: secSynopsis
                 ColumnLayout {
                     spacing: 8
-                    Caption { text: "SYNOPSIS" }
+                    Caption { text: root.setSlide ? "BOX SET SYNOPSIS" : "SYNOPSIS" }
                     Area {
                         Layout.fillWidth: true; Layout.preferredHeight: 104
-                        placeholderText: "Description"
+                        placeholderText: root.setSlide ? "What this box set is: the story across its films" : "Description"
                         text: root.info.synopsis || ""
-                        onActiveFocusChanged: if (!activeFocus && text !== root.info.synopsis) { Backend.setSynopsis(root.infoKey, text); root.info.synopsis = text }
+                        onActiveFocusChanged: if (!activeFocus && text !== (root.info.synopsis || "")) { Backend.setSynopsis(root.infoKey, text); root.info.synopsis = text }
+                    }
+                    // a film in a box set (an OVA's "#2"): its own episode name and what happens in it
+                    Caption { visible: root.info.inSet === true; text: "EPISODE"; Layout.topMargin: 6 }
+                    Field {
+                        visible: root.info.inSet === true
+                        Layout.fillWidth: true
+                        placeholderText: "Episode name"
+                        text: root.info.episodeTitle || ""
+                        onAccepted: focus = false
+                        onActiveFocusChanged: if (!activeFocus && text !== (root.info.episodeTitle || "")) { Backend.setEpisodeTitle(root.infoKey, text); root.info.episodeTitle = text }
+                    }
+                    Area {
+                        visible: root.info.inSet === true
+                        Layout.fillWidth: true; Layout.preferredHeight: 84
+                        placeholderText: "What happens in this episode"
+                        text: root.info.episodeSynopsis || ""
+                        onActiveFocusChanged: if (!activeFocus && text !== (root.info.episodeSynopsis || "")) { Backend.setEpisodeSynopsis(root.infoKey, text); root.info.episodeSynopsis = text }
                     }
                 }
             }
@@ -631,7 +698,7 @@ Item {
                     RowLayout {
                         Layout.fillWidth: true
                         Caption { text: "GALLERY"; Layout.fillWidth: true }
-                        GlassButton { small: true; label: "Add images\u2026"; glyph: "+"; onClicked: Backend.addGalleryImages(root.infoKey) }
+                        GlassButton { id: galleryBtn; small: true; label: "Add or Import images\u2026"; glyph: "+"; onClicked: galleryMenu.begin(galleryBtn) }
                     }
                     ListView {
                         id: galleryList
@@ -663,7 +730,7 @@ Item {
                         }
                     }
                     Text { visible: (root.info.gallery || []).length === 0; Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 12
-                        text: "No images yet. Stills from TMDB or AniList arrive with scraping (Gallery images in the folder's scrape options, or Fetch missing), or add your own." }
+                        text: "No images yet. Stills from TMDB or AniList arrive with scraping (Gallery images in the folder's scrape options, or Fetch missing), or add or import your own." }
                 }
             }
 
@@ -824,7 +891,7 @@ Item {
             readonly property real k: incoming ? root.sideScale + (1 - root.sideScale) * p
                                     : leaving ? root.sideScale * (1 - 0.3 * p) : root.sideScale
             readonly property real side: incoming ? dir * root.sideX * (1 - p) * root.spread
-                                       : leaving ? dir * root.sideX * (1 + 0.35 * p) * root.spread : dir * root.sideX * root.spread
+                                       : leaving ? dir * root.sideX * (1 + 0.12 * p) * root.spread : dir * root.sideX * root.spread
             transform: [
                 Scale { origin.x: box.width / 2; origin.y: box.faceCY; xScale: k; yScale: k },
                 // out of the set: sideways to its place, lifted a little on the way (an arc), then the wave
@@ -851,14 +918,14 @@ Item {
         readonly property real k: root.sideScale * (0.7 + 0.3 * p)
         transform: [
             Scale { origin.x: box.width / 2; origin.y: box.faceCY; xScale: newcomer.k; yScale: newcomer.k },
-            Translate { x: root.turnDir * root.sideX * (1.35 - 0.35 * root.turnP); y: -28 * Math.sin(Math.PI * Math.min(1, root.spread)) }
+            Translate { x: root.turnDir * root.sideX * (1.12 - 0.12 * root.turnP); y: -28 * Math.sin(Math.PI * Math.min(1, root.spread)) }
         ]
     }
 
     DvdBox {
         id: box
         // as big as the stage allows: from under the film label down to just above the box-art buttons
-        height: Math.max(300, sheet.height - 150)
+        height: Math.max(240, Math.min(sheet.height - 150, root.fitFaceW / faceWPerH + 24))
         width: Math.min(stage.width - 24, height * 0.92)
         front: root.cur.cover || ""
         back: root.cur.back || ""
@@ -873,7 +940,8 @@ Item {
         enabled: root.f === 1 && !root.closing && !root.launching && !root.turning
         // resting place: centred in the left pane, above the box-art buttons
         readonly property real restX: sheet.x + (stage.width - width) / 2
-        readonly property real restY: sheet.y + sheet.height - 80 - height     // its hint line sits just above the art buttons
+        // between the film label at the top and the box-art buttons at the bottom, centred when it is smaller
+        readonly property real restY: sheet.y + Math.max(56, sheet.height - 80 - height - Math.max(0, (sheet.height - 136 - height) / 2))
         readonly property real restCx: restX + width / 2
         readonly property real restCy: restY + faceCY
         // start: the card's poster (or, without a card, a smaller box in the same place)
@@ -1136,7 +1204,56 @@ Item {
                 Text { x: 12; anchors.verticalCenter: parent.verticalCenter; text: "Rename \u201C" + (root.info.title || "") + "\u201D\u2026"
                     width: 280; elide: Text.ElideRight; color: "#CCFFFFFF"; font.pixelSize: 12 }
                 MouseArea { id: rArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                    onClicked: { titleMenu.close(); root.renaming = true; if (root.titleEditor) { root.titleEditor.forceActiveFocus(); root.titleEditor.selectAll() } } }
+                    onClicked: root.startRename() }
+            }
+        }
+    }
+
+    // Gallery: import images from a link (a TMDB episode, season or title's images, MyAnimeList, or one image),
+    // or add files from this PC
+    Popup {
+        id: galleryMenu
+        function begin(btn) { parent = btn; link.text = ""; open(); link.forceActiveFocus() }
+        function importNow() {
+            if (link.text.trim() === "") return
+            Backend.importGalleryImages(root.infoKey, link.text.trim(), replaceScraped.checked)
+            close()
+        }
+        x: parent ? parent.width - width : 0
+        y: parent ? parent.height + 8 : 0
+        width: 440
+        padding: 12
+        focus: true
+        transformOrigin: Item.TopRight
+        enter: Transition { ParallelAnimation {
+            NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 160 * Theme.motion }
+            NumberAnimation { property: "scale"; from: 0.6; to: 1; duration: 240 * Theme.motion; easing.type: Easing.OutBack; easing.overshoot: 1.1 } } }
+        exit: Transition { ParallelAnimation {
+            NumberAnimation { property: "opacity"; to: 0; duration: 140 * Theme.motion }
+            NumberAnimation { property: "scale"; to: 0.6; duration: 160 * Theme.motion; easing.type: Easing.InCubic } } }
+        background: Rectangle { radius: 14; color: Theme.graphite; border.color: "#33FFFFFF" }
+        contentItem: ColumnLayout {
+            spacing: 10
+            Text { text: "IMPORT FROM A LINK"; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10 }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 6
+                Field { id: link; Layout.fillWidth: true; placeholderText: "TMDB or MyAnimeList page, or an image link"; onAccepted: galleryMenu.importNow() }
+                GlassButton { small: true; primary: true; label: "Import"; enabled: link.text.trim() !== ""; onClicked: galleryMenu.importNow() }
+            }
+            Text {
+                Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.muted; font.pixelSize: 11
+                text: "A TMDB episode's images (themoviedb.org/tv/\u2026/season/1/episode/1/images/backdrops) bring that episode's stills, and fill in its name and synopsis if empty. A season brings its episodes' stills; a series or film, its backdrops."
+            }
+            Toggle { id: replaceScraped; checked: true; text: "Replace the scraped images"; font.pixelSize: 12 }
+            Rectangle { Layout.fillWidth: true; height: 1; color: Theme.line }
+            Rectangle {
+                Layout.fillWidth: true; height: 36; radius: 8
+                color: fileArea.containsMouse ? Qt.rgba(1, 1, 1, 0.12) : "transparent"
+                Behavior on color { ColorAnimation { duration: 120 * Theme.motion } }
+                Text { x: 10; anchors.verticalCenter: parent.verticalCenter; text: "+  Add image files from this PC\u2026"; color: "#E6FFFFFF"; font.pixelSize: 13 }
+                MouseArea { id: fileArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                    onClicked: { galleryMenu.close(); Backend.addGalleryImages(root.infoKey) } }
             }
         }
     }
