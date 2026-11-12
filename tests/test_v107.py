@@ -91,3 +91,34 @@ class CarouselTests(unittest.TestCase):
         # ends where the resting layout starts: landing yaw of the incoming box = the box's yaw after the swap
         self.assertIn("box.yaw = -20 * turnDir", qml)
         self.assertIn("(dir * 30 - 20 * dir) * p", qml)
+
+
+class FrontArtTests(unittest.TestCase):
+    def test_front_always_opens_the_crop_editor(self):
+        import os
+        import sys
+        import tempfile
+        import types
+        from unittest import mock
+        sys.path.insert(0, str(ROOT))
+        os.environ.setdefault("LOCALAPPDATA", tempfile.mkdtemp())
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PIL import Image
+        from PySide6.QtGui import QGuiApplication
+        QGuiApplication.instance() or QGuiApplication([])
+        import ui.dashboard as dash
+        from ui.dvd_box import FrameProvider
+        wide = os.path.join(tempfile.mkdtemp(), "sleeve.png")
+        Image.new("RGB", (800, 540), "red").save(wide)
+        d = dash.Dashboard(types.SimpleNamespace(engine=types.SimpleNamespace(hw=None), presence=None, play=lambda *a: None),
+                           dash.LibraryModel(), dash.TabsModel(), FrameProvider())
+        picked = []
+        d.artPicked.connect(lambda k, face, url, path: picked.append(face))
+        with mock.patch.object(dash, "pick_image", return_value=wide), mock.patch.object(dash.QTimer, "singleShot", side_effect=lambda ms, fn: fn()), \
+                mock.patch.object(d, "_apply_wrap", wraps=d._apply_wrap) as wrap, mock.patch.object(d, "_art_items", return_value=[]):
+            d.pickBoxArt("k", "front")                   # a wide picture picked as the Front: cropped, never split
+            self.assertEqual(picked, ["front"])
+            wrap.assert_not_called()
+            d.pickBoxArt("k", "wrap")                    # the Whole cover button still splits it
+            wrap.assert_called_once()
+            self.assertEqual(picked, ["front"])          # split, so no crop editor this time

@@ -976,14 +976,15 @@ class Dashboard(QObject):
                               else f"Choose {face} art")
             if not path:
                 return
-            if face in ("wrap", "front") and self._apply_wrap(key, path, face == "wrap"):
+            if face == "wrap" and self._apply_wrap(key, path, True):   # Front always opens the crop editor
                 return
-            self.artPicked.emit(key, face, file_url(path, bust=False), path)
+            # not a whole sleeve: the crop editor opens on it as the front
+            self.artPicked.emit(key, "front" if face == "wrap" else face, file_url(path, bust=False), path)
         QTimer.singleShot(0, run)  # same reason as pickFolder: no modal dialog from inside a QML handler
 
     def _apply_wrap(self, key: str, path: str, asked: bool) -> bool:
-        """A whole sleeve scan (back | spine | front): cut it into the three faces. A wide image picked as the
-        Front is taken as a whole sleeve too. Returns False when it is not one (then the crop editor opens)."""
+        """A whole sleeve scan (back | spine | front): cut it into the three faces. Returns False when it is not
+        one (then the crop editor opens on it, as the front)."""
         from utils import boxwrap
         try:
             img = Image.open(path)
