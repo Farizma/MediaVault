@@ -59,6 +59,11 @@ class App:
     # -- startup
     def attach(self, main_window, hud_window=None):
         self.main_window = main_window
+        try:
+            self.dashboard.hwnd = int(main_window.winId())     # Windows' sign-in prompt opens over the library
+        except Exception:
+            pass
+        self.dashboard.lockedChanged.connect(self._after_unlock)
         self.engine.hud = hud_window
         self._restore_window(main_window)
         if not self.dashboard.needsSetup:
@@ -120,7 +125,8 @@ class App:
         self.updates = setup.UpdateDaemon(self._updates_found)
         self.updates.start()
         if self.initial:
-            self.handle_arg(self.initial)
+            pending, self.initial = self.initial, None
+            self.handle_arg(pending)            # kept back again (in self.initial) while Media Vault is locked
 
     def _presence_tick(self):
         """Feed the player state to the Discord status (it sends only real changes, rate limited)."""
@@ -328,7 +334,7 @@ class App:
         try:
             arg = (arg or "").strip().strip('"')
             if arg and arg != SHOW and os.path.isfile(arg) and is_video(arg):  # only ever play real video files
-                if self.ready:
+                if self.ready and not self.dashboard.locked:
                     self.dashboard.raiseWindow.emit()
                     self.play(arg)
                 else:
@@ -338,6 +344,12 @@ class App:
         except Exception:
             logging.exception("open with")
             self.dashboard.toast.emit("Could not open that file. Details are in media_vault.log.")
+
+    def _after_unlock(self):
+        """A file opened with "Open with" while Media Vault was locked plays once it is unlocked."""
+        if not self.dashboard.locked and self.initial and self.ready:
+            pending, self.initial = self.initial, None
+            self.handle_arg(pending)
 
     def shutdown(self):
         try:
@@ -419,6 +431,15 @@ def main() -> int:
     from utils import backup_manager
     restored = backup_manager.apply_pending_restore()   # a portable backup staged last time: swap it in first
 
+    if arg == "--reset-lock":              # forgot every sign-in: MediaVault.exe --reset-lock (see utils/applock.py)
+        arg = ""
+        if db.db_exists():
+            db.init_db()
+            from utils import applock
+            if applock.enabled() and QMessageBox.question(
+                    None, "Media Vault", "Turn off the Media Vault lock (password, Windows Hello, security keys and "
+                    "passkeys)? Your library is not changed.") == QMessageBox.StandardButton.Yes:
+                applock.reset()
     app = App(qapp, arg)
     reduced = ui.detect_reduced_motion()  # the Windows "show animations" switch ...
     if db.db_exists():

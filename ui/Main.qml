@@ -21,12 +21,15 @@ Window {
         onLoaded: if (!Backend.needsSetup) Backend.reload()
         scale: intro.zoom                      // the opening zooms the view in through the vault
         transformOrigin: Item.Center
+        visible: !Backend.locked               // nothing of the library shows (or takes keys) while locked
     }
+    // Privacy lock: sign in first; the vault opens once you have
+    LockScreen { anchors.fill: parent; z: 2000 }        // above the vault opening too
     // the opening: the vault spins until the library is loaded, then opens onto the dashboard and zooms in
     VaultIntro {
         id: intro
         anchors.fill: parent
-        ready: Backend.startupReady && screen.status === Loader.Ready
+        ready: Backend.startupReady && screen.status === Loader.Ready && !Backend.locked
     }
     // the size it goes back to from maximised (saved between sessions by the app)
     property rect normalGeo: Qt.rect(x, y, width, height)

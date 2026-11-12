@@ -53,6 +53,10 @@ Rectangle {
                 c.beginPath(); c.moveTo(1.5, 7); c.lineTo(7, 9.8); c.lineTo(12.5, 7); c.stroke()
                 c.beginPath(); c.moveTo(1.5, 9.7); c.lineTo(7, 12.5); c.lineTo(12.5, 9.7); c.stroke()
                 break
+            case "privacy":          // a padlock
+                c.beginPath(); c.arc(7, 5.4, 3, Math.PI, 0); c.stroke()
+                c.beginPath(); c.moveTo(2.4, 6); c.lineTo(11.6, 6); c.lineTo(11.6, 12.6); c.lineTo(2.4, 12.6); c.closePath(); c.fill()
+                break
             case "backups":          // circular arrow (restore / update)
                 c.beginPath(); c.arc(7, 7, 5, -Math.PI * 0.15, Math.PI * 1.45); c.stroke()
                 c.beginPath(); c.moveTo(12.6, 1.2); c.lineTo(12.4, 5.4); c.lineTo(8.4, 4.6); c.stroke()

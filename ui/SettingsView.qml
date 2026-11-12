@@ -29,7 +29,7 @@ Item {
     // name, icon tint, icon: fixed system colours (like macOS) so they read the same in every theme
     readonly property var sections: [["Library", "#0A84FF", "folders"], ["Appearance", "#AF52DE", "appearance"], ["Playback", "#FF3B30", "playback"],
                                      ["Library Status", "#FF9F0A", "health"], ["Integrations & APIs", "#8E8E93", "integrations"],
-                                     ["Streaming", "#5AC8FA", "streaming"], ["About & Updates", "#FF9500", "components"], ["Backups", "#34C759", "backups"],
+                                     ["Streaming", "#5AC8FA", "streaming"], ["Privacy", "#64D2FF", "privacy"], ["About & Updates", "#FF9500", "components"], ["Backups", "#34C759", "backups"],
                                      ["Help", "#5E5CE6", "help"]]
     readonly property string sectionName: sections[section][0]
     signal configureFolder(int id, var source)      // the dashboard opens the folder's Configure window
@@ -46,12 +46,14 @@ Item {
     readonly property var appInfo: Backend.appInfo()
     readonly property var appRow: comps.length ? comps[0] : ({})
     property var castLibs: ({})
+    property var lock: ({})                  // Privacy: what sign-ins are set up (never a secret)
     property var castDevices: []
     property bool searching: false
     function refreshHealth() { report = Backend.health() }
     onSectionNameChanged: {
         if (sectionName === "Library Status") refreshHealth()
         if (sectionName === "Streaming") { castLibs = Backend.castSupport(); castDevices = Backend.devices() }
+        if (sectionName === "Privacy") lock = Backend.lockInfo()
         if (sectionName === "About & Updates") { comps = Backend.components(); checking = true; Backend.checkComponents() }
     }
     Connections {
@@ -754,6 +756,83 @@ Item {
                             IgnoreButtons { kind: "missing_art"; key: modelData.key }
                         }
                     }
+                }
+
+                // Privacy: a lock when Media Vault starts (utils/applock.py)
+                ColumnLayout {
+                    visible: root.sectionName === "Privacy"
+                    Layout.fillWidth: true
+                    spacing: 10
+                    Heading { title: "Privacy"; sub: "Ask for a password, Windows Hello, a security key or a passkey before your library shows. A lock screen, not encryption: your video files stay readable in File Explorer."; Layout.rightMargin: 48 }
+                    Connections { target: Backend; function onLockChanged() { root.lock = Backend.lockInfo() } }
+
+                    Caption { text: "STATUS" }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 10
+                        Rectangle { width: 8; height: 8; radius: 4; color: root.lock.enabled ? Theme.green : Theme.faint }
+                        Text { Layout.fillWidth: true; color: Theme.text; font.pixelSize: 13
+                            text: root.lock.enabled ? "On: Media Vault asks you to sign in when it starts" : "Off: anyone at this PC can open Media Vault" }
+                        GlassButton { small: true; visible: root.lock.enabled === true; label: "Lock now"; onClicked: { root.close(); Backend.lockNow() } }
+                    }
+
+                    Caption { text: "PASSWORD"; Layout.topMargin: 8 }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+                        Field { id: newPw; Layout.fillWidth: true; echoMode: TextInput.Password
+                            placeholderText: root.lock.password ? "New password" : "Choose a password (at least 4 characters)" }
+                        Field { id: newPw2; Layout.fillWidth: true; echoMode: TextInput.Password; placeholderText: "Type it again"
+                            onAccepted: savePw.clicked() }
+                        GlassButton {
+                            id: savePw
+                            small: true; primary: true; label: root.lock.password ? "Change" : "Set password"
+                            enabled: newPw.text !== ""
+                            onClicked: {
+                                if (newPw.text !== newPw2.text) { pwNote.text = "The two passwords are different"; return }
+                                var err = Backend.setLockPassword(newPw.text)
+                                pwNote.text = err; if (err === "") { newPw.text = ""; newPw2.text = "" }
+                            }
+                        }
+                        GlassButton { small: true; visible: root.lock.password === true; label: "Remove"; onClicked: Backend.clearLockPassword() }
+                    }
+                    Text { id: pwNote; visible: text !== ""; color: Theme.red; font.pixelSize: 12 }
+
+                    Caption { text: "PASSKEYS AND SECURITY KEYS"; Layout.topMargin: 8 }
+                    Text { Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 12
+                        text: root.lock.webauthn ? "Windows shows its own sign-in prompt. Windows Hello uses this PC's PIN, face or fingerprint; a security key (a YubiKey, for example) is plugged in and tapped; a phone passkey is made by scanning a QR code with your iPhone or Android phone."
+                                                 : "Needs Windows 10 (version 1903) or later." }
+                    Flow {
+                        Layout.fillWidth: true
+                        spacing: 8
+                        visible: root.lock.webauthn === true
+                        GlassButton { small: true; label: "Add Windows Hello"; glyph: "+"; enabled: root.lock.hello === true
+                            tip: root.lock.hello ? "" : "Set up Windows Hello in Windows Settings \u203A Accounts \u203A Sign-in options first"
+                            onClicked: Backend.addLockKey("hello") }
+                        GlassButton { small: true; label: "Add security key"; glyph: "+"; onClicked: Backend.addLockKey("key") }
+                        GlassButton { small: true; label: "Add phone passkey"; glyph: "+"; onClicked: Backend.addLockKey("phone") }
+                    }
+                    Repeater {
+                        model: root.lock.keys || []
+                        Rectangle {
+                            Layout.fillWidth: true; height: 44; radius: 10; color: Theme.slate; border.color: Theme.line
+                            Text { x: 14; anchors.verticalCenter: parent.verticalCenter; text: modelData.label; color: Theme.text; font.pixelSize: 13; font.weight: Font.DemiBold }
+                            Text { anchors { right: rm.left; rightMargin: 12; verticalCenter: parent.verticalCenter }
+                                text: "Added " + modelData.added; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10 }
+                            GlassButton { id: rm; small: true; label: "Remove"; anchors { right: parent.right; rightMargin: 8; verticalCenter: parent.verticalCenter }
+                                onClicked: Backend.removeLockKey(modelData.id) }
+                        }
+                    }
+                    Text {
+                        visible: root.lock.enabled === true && !root.lock.password
+                        Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.amber; font.pixelSize: 12
+                        text: "Add a password too, so a lost key or phone does not lock you out."
+                    }
+
+                    Caption { text: "IF YOU ARE LOCKED OUT"; Layout.topMargin: 8 }
+                    Text { Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 12
+                        text: "Close Media Vault, press Win + R and run  \u201CMediaVault.exe\u201D --reset-lock  from its folder. It asks before turning the lock off; your library is not changed." }
+                    GlassButton { small: true; visible: root.lock.enabled === true; label: "Turn the lock off"; onClicked: Backend.turnOffLock() }
                 }
 
                 // Integrations

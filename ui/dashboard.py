@@ -413,6 +413,10 @@ class Dashboard(QObject):
     componentsChecked = Signal("QVariantList")   # Settings > About & Updates, after a check or an update
     updateCountChanged = Signal()                # how many things have an update (badge on Settings)
     startupReadyChanged = Signal()               # the library is loaded: the opening vault may open
+    lockedChanged = Signal()                     # Privacy lock: the lock screen shows / goes away
+    lockChanged = Signal()                       # a sign-in was added or removed (Settings > Privacy)
+    unlockResult = Signal(bool, str)             # ok, message for the lock screen
+    _unlocked = Signal()                         # from a worker thread: open the library (on the main thread)
     _quitForUpdate = Signal()                    # from a worker thread: close Media Vault so setup can replace it
     appUpdateProgress = Signal(float)            # 0..1 while the new setup.exe downloads; -1 = failed              # path, suggested tab name
     matchResults = Signal(str, "QVariantList")   # key, candidates
@@ -439,11 +443,121 @@ class Dashboard(QObject):
         self._startup_ready = False
         self.componentsChecked.connect(self._count_updates)
         self._quitForUpdate.connect(self._quit_for_update)     # queued: runs on the main thread
+        self._locked = False
+        self._unlocking = False
+        self.hwnd = None                                       # the library window: Windows' sign-in prompt sits on it
+        self._unlocked.connect(self._set_unlocked)
+        try:
+            from utils import applock
+            self._locked = db.db_exists() and applock.enabled()
+        except Exception:
+            log.exception("app lock")
 
     # -- properties
     @Property(bool, notify=startupReadyChanged)
     def startupReady(self):
         return self._startup_ready
+
+    # -- Privacy: the launch lock (utils/applock.py)
+    @Property(bool, notify=lockedChanged)
+    def locked(self):
+        return self._locked
+
+    def _set_unlocked(self):
+        if self._locked:
+            self._locked = False
+            self.lockedChanged.emit()
+
+    @Slot(result="QVariantMap")
+    def lockInfo(self):
+        from utils import applock
+        return applock.summary()
+
+    @Slot(str)
+    def unlockWithPassword(self, password: str):
+        self._try_unlock(lambda a: a.check_password(password), "Wrong password")
+
+    @Slot(str)
+    def unlockWithKey(self, kind: str):
+        """kind: "hello", "key", "phone", or "" for any saved one. Windows shows its own sign-in prompt."""
+        self._try_unlock(lambda a: a.verify_key(kind or None, self.hwnd), "Sign-in was cancelled or not recognised")
+
+    def _try_unlock(self, check, failed: str):
+        if not self._locked or self._unlocking:
+            return
+        self._unlocking = True
+
+        def work():
+            from utils import applock
+            try:
+                ok = check(applock)
+            except Exception as e:
+                log.exception("unlock")
+                ok, failed_msg = False, f"Could not sign in: {e}"
+            else:
+                failed_msg = failed
+            self._unlocking = False
+            if ok:
+                self._unlocked.emit()
+            self.unlockResult.emit(ok, "" if ok else failed_msg)
+        threading.Thread(target=work, daemon=True, name="unlock").start()
+
+    @Slot()
+    def lockNow(self):
+        """Settings > Privacy > Lock now: stop playback and show the lock screen."""
+        from utils import applock
+        if not applock.enabled() or self._locked:
+            return
+        try:
+            self.app.engine.stop()
+        except Exception:
+            log.warning("stop before lock", exc_info=True)
+        self._locked = True
+        self.lockedChanged.emit()
+
+    @Slot(str, result=str)
+    def setLockPassword(self, password: str) -> str:
+        """Returns "" when saved, else what is wrong with it."""
+        from utils import applock
+        try:
+            applock.set_password(password)
+        except ValueError as e:
+            return str(e)
+        self.lockChanged.emit()
+        self.toast.emit("Password set: Media Vault asks for it when it starts")
+        return ""
+
+    @Slot()
+    def clearLockPassword(self):
+        from utils import applock
+        applock.clear_password()
+        self.lockChanged.emit()
+
+    @Slot(str)
+    def addLockKey(self, kind: str):
+        def work():
+            from utils import applock
+            try:
+                entry = applock.add_key(kind, self.hwnd)
+                self.toast.emit(f"{entry['label']} added")
+            except Exception as e:
+                log.info("adding a sign-in did not complete", exc_info=True)
+                self.toast.emit(f"Not added: {e}" if str(e) else "Not added: cancelled")
+            self.lockChanged.emit()
+        threading.Thread(target=work, daemon=True, name="add-passkey").start()
+
+    @Slot(str)
+    def removeLockKey(self, key_id: str):
+        from utils import applock
+        applock.remove_key(key_id)
+        self.lockChanged.emit()
+
+    @Slot()
+    def turnOffLock(self):
+        from utils import applock
+        applock.reset()
+        self.lockChanged.emit()
+        self.toast.emit("Lock turned off")
 
     def mark_ready(self):
         if not self._startup_ready:

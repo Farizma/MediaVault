@@ -52,6 +52,8 @@ def command() -> list[str]:
            # Chromecast and AirPlay ship inside the app: the installed app has no Python for pip to install them into
            # (pyatv loads its protocols by name, so every submodule and data file comes along)
            "--collect-all", "pychromecast", "--collect-all", "pyatv", "--exclude-module", "numpy",
+           # Privacy lock: Windows' WebAuthn prompt (imported only when a sign-in is used, so name it)
+           "--collect-submodules", "fido2",
            "--hidden-import", "PySide6.QtMultimedia",
            "--hidden-import", "PySide6.QtQuickControls2", "--hidden-import", "PySide6.QtWidgets",
            "--add-data", f"{ROOT / 'ui'}{os.pathsep}ui",          # QML files

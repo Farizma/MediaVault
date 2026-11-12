@@ -4,3 +4,4 @@ python-vlc
 watchdog
 pillow
 py7zr
+fido2
