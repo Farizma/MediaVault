@@ -986,6 +986,12 @@ Item {
     InsightsSheet { id: insightsSheet; anchors.fill: parent }
     Connections { target: Backend; function onFolderPicked(path, name) { folderSheet.open(path, name) } }
 
+    // long jobs (scraping, artwork, downloads): progress pills under the top bar
+    ProgressDock {
+        z: 49
+        anchors { top: parent.top; topMargin: 72; horizontalCenter: parent.horizontalCenter }   // just under the 60 px top bar
+        width: Math.min(420, parent.width - 48)
+    }
     Rectangle {
         id: toast
         z: 50

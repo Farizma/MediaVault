@@ -417,6 +417,8 @@ class Dashboard(QObject):
     lockChanged = Signal()                       # a sign-in was added or removed (Settings > Privacy)
     unlockResult = Signal(bool, str)             # ok, message for the lock screen
     _unlocked = Signal()                         # from a worker thread: open the library (on the main thread)
+    jobsChanged = Signal()                       # progress pills under the top bar (utils/progress.py)
+    _progress = Signal("QVariantMap")            # from any thread: one job's new state, handled on the main thread
     _quitForUpdate = Signal()                    # from a worker thread: close Media Vault so setup can replace it
     appUpdateProgress = Signal(float)            # 0..1 while the new setup.exe downloads; -1 = failed              # path, suggested tab name
     matchResults = Signal(str, "QVariantList")   # key, candidates
@@ -447,6 +449,10 @@ class Dashboard(QObject):
         self._unlocking = False
         self.hwnd = None                                       # the library window: Windows' sign-in prompt sits on it
         self._unlocked.connect(self._set_unlocked)
+        self._jobs: dict[int, dict] = {}
+        self._progress.connect(self._on_progress)
+        from utils import progress
+        progress.subscribe(self._progress.emit)
         try:
             from utils import applock
             self._locked = db.db_exists() and applock.enabled()
@@ -457,6 +463,23 @@ class Dashboard(QObject):
     @Property(bool, notify=startupReadyChanged)
     def startupReady(self):
         return self._startup_ready
+
+    # -- progress pills: scraping, artwork and downloads (utils/progress.py)
+    @Property("QVariantList", notify=jobsChanged)
+    def jobs(self):
+        return list(self._jobs.values())
+
+    @Slot("QVariantMap")
+    def _on_progress(self, event: dict):
+        jid = int(event["id"])
+        self._jobs[jid] = event
+        if event.get("state") != "running":              # it stays a moment to show it finished, then goes
+            QTimer.singleShot(1800 if event.get("state") == "done" else 4000, lambda: self._drop_job(jid))
+        self.jobsChanged.emit()
+
+    def _drop_job(self, jid: int):
+        if self._jobs.pop(jid, None) is not None:
+            self.jobsChanged.emit()
 
     # -- Privacy: the launch lock (utils/applock.py)
     @Property(bool, notify=lockedChanged)
@@ -1325,14 +1348,17 @@ class Dashboard(QObject):
             if not got["urls"]:
                 self.toast.emit("That page has no images to import")
                 return
+            from utils import progress
             d = scraper.gallery_dir(item)
             n, stamp = 0, int(time.time() * 1000)
-            for i, url in enumerate(got["urls"]):
-                try:
-                    scraper.save_webp(scraper.fetch_image(url), d / f"c-{stamp}-{i:02d}.webp", box=scraper.GALLERY_BOX)
-                    n += 1
-                except Exception:
-                    log.warning("gallery import %s", url, exc_info=True)
+            with progress.task("Importing Gallery images", total=len(got["urls"])) as t:
+                for i, url in enumerate(got["urls"]):
+                    try:
+                        scraper.save_webp(scraper.fetch_image(url), d / f"c-{stamp}-{i:02d}.webp", box=scraper.GALLERY_BOX)
+                        n += 1
+                    except Exception:
+                        log.warning("gallery import %s", url, exc_info=True)
+                    t.step(detail=f"{n} saved")
             if n and replace:
                 for p in d.glob("s-*.webp"):
                     p.unlink(missing_ok=True)

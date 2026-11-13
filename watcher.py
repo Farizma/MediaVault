@@ -14,7 +14,7 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 import database as db
-from utils import autotag, media_probe, scraper, tagrules
+from utils import autotag, media_probe, progress, scraper, tagrules
 
 log = logging.getLogger(__name__)
 
@@ -51,12 +51,19 @@ def index_paths(directory: dict, paths) -> int:
     new = sorted({db.norm(p) for p in paths if os.path.isfile(p)} - known)
     if not new:
         return 0
+    with progress.task(f"Adding {len(new)} file{'s' if len(new) != 1 else ''} \u00B7 {directory.get('tab_name') or 'library'}",
+                       total=len(new)) as t:
+        return _index(directory, new, t)
+
+
+def _index(directory: dict, new: list, t) -> int:
     scrape = bool(directory["should_scrape"])
     auto = db.get_setting("auto_tags", "1") != "0"     # tags from folders and file names (Settings > Library)
     hp = _headless()
     rows, tags = [], []
     try:
         for p in new:
+            t.step(detail=Path(p).name)
             parsed = scraper.clean_name(p, fallback=Path(p).parent.name)
             kind = "clip" if not scrape else "show" if parsed.episode is not None else "movie"
             title = parsed.title
@@ -72,7 +79,8 @@ def index_paths(directory: dict, paths) -> int:
         if hp:
             hp.close()
     if scrape:
-        _scrape_into(rows, tags, db.scrape_opts(directory), directory.get("source") or "tmdb")
+        _scrape_into(rows, tags, db.scrape_opts(directory), directory.get("source") or "tmdb", t,
+                     directory.get("tab_name") or "library")
     # computed tags (folder and file names, age rating, your rules) once the scrape has filled in what it found
     rules = tagrules.load()
     for row, _ in rows:
@@ -84,7 +92,7 @@ def index_paths(directory: dict, paths) -> int:
     return len(rows)
 
 
-def _scrape_into(rows, tags, opts=None, source: str = "tmdb") -> None:
+def _scrape_into(rows, tags, opts=None, source: str = "tmdb", task=None, tab: str = "library") -> None:
     """Fill rows from TMDB / OMDb, or AniList for an anime folder. opts: which parts this folder wants
     (database.SCRAPE_PARTS); None = all."""
     opts = {k for k, _ in db.SCRAPE_PARTS} if opts is None else opts
@@ -94,10 +102,14 @@ def _scrape_into(rows, tags, opts=None, source: str = "tmdb") -> None:
     todo = [(r, p) for r, p in rows if not db.is_failed(db.file_hash(r["file_path"]))]
     if not todo:
         return
-    answers = asyncio.run(scraper.scrape_many([(r["media_type"], p) for r, p in todo], keys, source))
+    task = task or progress.Task("")             # a caller without a progress pill: report to nobody
+    task.update(label=f"Looking up titles \u00B7 {tab}", done=0, total=0, detail="")
+    answers = asyncio.run(scraper.scrape_many([(r["media_type"], p) for r, p in todo], keys, source, task=task))
+    task.update(label=f"Downloading artwork \u00B7 {tab}", done=0, total=len(todo), detail="")
     gallery_done = set()
     images, missed, cast_done = {}, [], set()
     for (row, parsed), hit in zip(todo, answers):
+        task.step(detail=parsed.title)
         if isinstance(hit, Exception):
             log.warning("scrape skipped for %s: %s", parsed.title, hit)
         elif hit is None:
@@ -223,48 +235,66 @@ def convert_ova_series(directory: dict) -> int:
     question per series, nothing else is fetched). Runs once after updating to 1.0.7. Returns series converted."""
     if (directory.get("source") or "tmdb") != "anilist":
         return 0
-    from utils import anilist
     groups: dict[str, list[dict]] = {}
     for it in db.list_media(directory["id"]):
         if it["media_type"] == "show" and it.get("anilist_id"):
             groups.setdefault(db.cast_owner(it), []).append(it)
     done = 0
-    for owner, items in groups.items():
-        try:
-            hit = anilist.details(items[0]["anilist_id"])
-        except Exception as e:        # offline, rate limited: the next start tries again
-            log.warning("OVA check skipped for %s: %s", items[0]["title"], e)
-            raise
-        if _ova_to_set(items, hit, owner):
-            db.set_tag_group([i["uuid"] for i in items], "studio:", hit.get("studios") or [])
-            done += 1
+    if not groups:
+        return 0
+    with progress.task(f"Checking OVAs \u00B7 {directory.get('tab_name') or 'library'}", total=len(groups)) as t:
+        for owner, items in groups.items():
+            t.step(detail=db.series_title(items[0]["title"]))
+            done += _ova_one(owner, items)
     return done
+
+
+def _ova_one(owner, items) -> int:
+    from utils import anilist
+    try:
+        hit = anilist.details(items[0]["anilist_id"])
+    except Exception as e:        # offline, rate limited: the next start tries again
+        log.warning("OVA check skipped for %s: %s", items[0]["title"], e)
+        raise
+    if _ova_to_set(items, hit, owner):
+        db.set_tag_group([i["uuid"] for i in items], "studio:", hit.get("studios") or [])
+        return 1
+    return 0
 
 
 def fetch_set_banners(directory: dict) -> int:
     """Banners for this folder's box sets that have none (one TMDB lookup each; AniList sets are looked up by name).
     Returns how many were added."""
-    from utils import anilist
-    done, seen = 0, set()
+    done, seen, todo = 0, set(), []
     for it in db.list_media(directory["id"]):
         cid = it.get("collection_id")
         if cid is None or cid < 0 or cid in seen:        # your own sets keep what you give them
             continue
         seen.add(cid)
-        if scraper.banner_path(scraper.collection_item(cid)).exists():
-            continue
-        try:
-            if cid >= anilist.OVA_SET_OFFSET and it.get("anilist_id"):
-                hit = anilist.details(it["anilist_id"])
-            elif it.get("tmdb_id") and scraper.api_keys().get("tmdb"):
-                hit = scraper.tmdb_details("movie", it["tmdb_id"], scraper.api_keys()["tmdb"])
-            else:
-                continue
-        except Exception as e:
-            log.warning("box set banner skipped for %s: %s", it.get("collection_name"), e)
-            continue
-        done += bool(set_banner(cid, hit))
+        if not scraper.banner_path(scraper.collection_item(cid)).exists():
+            todo.append((cid, it))
+    if not todo:
+        return 0
+    with progress.task(f"Box set banners \u00B7 {directory.get('tab_name') or 'library'}", total=len(todo)) as t:
+        for cid, it in todo:
+            t.step(detail=it.get("collection_name") or "")
+            done += _set_banner_one(cid, it)
     return done
+
+
+def _set_banner_one(cid, it) -> int:
+    from utils import anilist
+    try:
+        if cid >= anilist.OVA_SET_OFFSET and it.get("anilist_id"):
+            hit = anilist.details(it["anilist_id"])
+        elif it.get("tmdb_id") and scraper.api_keys().get("tmdb"):
+            hit = scraper.tmdb_details("movie", it["tmdb_id"], scraper.api_keys()["tmdb"])
+        else:
+            return 0
+    except Exception as e:
+        log.warning("box set banner skipped for %s: %s", it.get("collection_name"), e)
+        return 0
+    return int(bool(set_banner(cid, hit)))
 
 
 def fetch_missing(directory: dict, redo_images: bool = False) -> int:
@@ -280,7 +310,24 @@ def fetch_missing(directory: dict, redo_images: bool = False) -> int:
         if it["media_type"] != "clip":
             groups.setdefault(db.cast_owner(it), []).append(it)
     updated = 0
+    tab = directory.get("tab_name") or "library"
+    t = progress.Task(f"{'Downloading images again' if redo_images else 'Fetching missing details'} \u00B7 {tab}", len(groups))
+    t._send(force=True)
+    try:
+        updated = _fetch_groups(directory, groups, opts, keys, anime, redo_images, t)
+    except BaseException:
+        t.finish(ok=False)
+        raise
+    t.finish()
+    if updated:
+        tagrules.retag_all([directory])     # new age ratings and titles can change computed tags
+    return updated
+
+
+def _fetch_groups(directory, groups, opts, keys, anime, redo_images, t) -> int:
+    updated = 0
     for owner, items in groups.items():
+        t.step(detail=items[0]["title"])
         first = items[0]
         kind = first["media_type"]
         tags = set(db.tags_for(first["uuid"]))
@@ -386,8 +433,6 @@ def fetch_missing(directory: dict, redo_images: bool = False) -> int:
         if anime and kind == "show":
             _ova_to_set(items, hit, owner)          # an adult OVA kept as a series becomes a box set
         updated += 1
-    if updated:
-        tagrules.retag_all([directory])     # new age ratings and titles can change computed tags
     return updated
 
 

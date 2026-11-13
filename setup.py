@@ -191,14 +191,17 @@ def _fetch_text(url: str) -> str:
         return r.read(8 << 20).decode("utf-8", "ignore")
 
 
-def _download(url: str, dest: Path, log, sha256: str | None = None) -> None:
+def _download(url: str, dest: Path, log, sha256: str | None = None, label: str | None = None) -> None:
+    from utils import progress
     log(f"Downloading {url}")
     digest, done, mark = hashlib.sha256(), 0, 5
-    with urllib.request.urlopen(urllib.request.Request(_https(url), headers=UA), timeout=60) as r, open(dest, "wb") as f:
+    with urllib.request.urlopen(urllib.request.Request(_https(url), headers=UA), timeout=60) as r, open(dest, "wb") as f, \
+            progress.task(label or f"Downloading {dest.name}", total=int(getattr(r, "headers", {}).get("Content-Length") or 0), unit="bytes") as t:
         for chunk in iter(lambda: r.read(1 << 20), b""):
             digest.update(chunk)
             f.write(chunk)
             done += len(chunk)
+            t.update(done=done)
             if done > MAX_DOWNLOAD:
                 raise RuntimeError(f"download from {url} is far larger than expected: stopped")
             if done >> 20 >= mark:

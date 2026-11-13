@@ -441,8 +441,10 @@ Item {
                         // every title: shown as text until the pencil (or a click on it) starts editing; in a box set a
                         // click opens the list of its films instead
                         readonly property bool picker: !root.renaming
-                        Layout.preferredWidth: root.renaming ? titleCol.width - 84
-                                             : Math.min(tm.advanceWidth + 6, titleCol.width - (root.d.isSet === true ? 84 : 48))
+                        // sized from the scroll column's fixed width, never from this layout's own width: a width
+                        // that depends on itself made Qt re-lay it out every frame (the dashboard slowed down)
+                        Layout.preferredWidth: root.renaming ? col.width - 84
+                                             : Math.min(tm.advanceWidth + 6, col.width - (root.d.isSet === true ? 84 : 48))
                         text: root.info.title || ""
                         font.pixelSize: 28; font.weight: Font.ExtraBold; font.letterSpacing: -0.6
                         leftPadding: 0; rightPadding: 0

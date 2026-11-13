@@ -44,7 +44,7 @@ class OvaTests(unittest.TestCase):
             open(p, "w").close()
             paths.append(p)
 
-        async def fake_many(jobs, keys, source):
+        async def fake_many(jobs, keys, source, task=None):
             return [OVA for _ in jobs]
         with mock.patch.object(scraper, "scrape_many", side_effect=fake_many), mock.patch.object(watcher, "_headless", return_value=None):
             watcher.index_paths(db.get_directory(did), paths)

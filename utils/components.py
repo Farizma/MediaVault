@@ -343,7 +343,10 @@ def download_setup(url: str, name: str, progress=lambda done, total: None, sha25
         raise ValueError("GitHub lists no checksum for this installer, so it was not installed. Download it from the release page.")
     dest = Path(tempfile.mkdtemp(prefix="mediavault-update-")) / name     # not a shared, guessable temp path
     digest = hashlib.sha256()
-    with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=30) as r, open(dest, "wb") as f:
+    from utils import progress as pill
+    with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=30) as r, open(dest, "wb") as f, \
+            pill.task(f"Downloading {name.replace('_setup.exe', '').replace('_', ' ')}",
+                      total=int(r.headers.get("Content-Length") or 0), unit="bytes") as t:
         total, done = int(r.headers.get("Content-Length") or 0), 0
         while chunk := r.read(1 << 16):
             f.write(chunk)
@@ -352,6 +355,7 @@ def download_setup(url: str, name: str, progress=lambda done, total: None, sha25
             if done > 1 << 30:
                 raise IOError("the download is far larger than a Media Vault installer")
             progress(done, total)
+            t.update(done=done)
     if (total and dest.stat().st_size != total) or digest.hexdigest() != want:
         dest.unlink(missing_ok=True)
         raise IOError("the installer did not match GitHub's checksum, so it was deleted and not run")

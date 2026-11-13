@@ -509,10 +509,13 @@ def _lookup(kind: str, p: Parsed, keys: dict, source: str = "tmdb") -> dict | No
     return _omdb(kind, p, keys["omdb"]) if keys.get("omdb") else None
 
 
-async def scrape_many(jobs: list[tuple[str, Parsed]], keys: dict, source: str = "tmdb") -> list:
-    """jobs = [(media_type, Parsed)]. Same show/title is asked once (memory cache)."""
+async def scrape_many(jobs: list[tuple[str, Parsed]], keys: dict, source: str = "tmdb", task=None) -> list:
+    """jobs = [(media_type, Parsed)]. Same show/title is asked once (memory cache). task: a utils.progress.Task that
+    counts the lookups as they finish."""
     sem = asyncio.Semaphore(CONCURRENCY)
     unique = list(dict.fromkeys((k, p.title, p.year) for k, p in jobs))
+    if task is not None:
+        task.update(done=0, total=len(unique))
 
     async def one(kind, title, year):
         async with sem:
@@ -520,6 +523,9 @@ async def scrape_many(jobs: list[tuple[str, Parsed]], keys: dict, source: str = 
                 return await asyncio.to_thread(_lookup, kind, Parsed(title, year, None, None), keys, source)
             except ScrapeError as e:
                 return e
+            finally:
+                if task is not None:
+                    task.step(detail=title)
 
     answers = dict(zip(unique, await asyncio.gather(*(one(*u) for u in unique))))
     return [answers[(k, p.title, p.year)] for k, p in jobs]
