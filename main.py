@@ -374,7 +374,15 @@ def setup_logging():
     levels = {QtMsgType.QtDebugMsg: logging.DEBUG, QtMsgType.QtInfoMsg: logging.INFO,
               QtMsgType.QtWarningMsg: logging.WARNING, QtMsgType.QtCriticalMsg: logging.ERROR,
               QtMsgType.QtFatalMsg: logging.CRITICAL}
-    qInstallMessageHandler(lambda kind, ctx, msg: logging.getLogger("qt").log(levels.get(kind, logging.INFO), msg))
+    # Qt names the GPU and graphics API it draws with (QSG_INFO) as debug messages of these categories: keep them
+    shown = ("qt.scenegraph.general", "qt.rhi.general")
+
+    def handle(kind, ctx, msg):
+        level = levels.get(kind, logging.INFO)
+        if level == logging.DEBUG and getattr(ctx, "category", "") in shown:
+            level = logging.INFO
+        logging.getLogger("qt").log(level, msg)
+    qInstallMessageHandler(handle)
 
 
 def main() -> int:

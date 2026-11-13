@@ -42,7 +42,7 @@ class QtTests(unittest.TestCase):
         db.add_items([{"uuid": db.file_id(p), "file_path": db.norm(p), "parent_directory_id": did, "title": "Film",
                        "media_type": "movie", "duration": 7200, "resolution": "1080p"}])
         model = LibraryModel()
-        model.reload(None)
+        model.reload(did)          # this test's folder only: other tests in the same run add titles too
         self.assertEqual(model.rowCount(), 1)
         names = {bytes(v).decode() for v in model.roleNames().values()}
         self.assertTrue({"key", "title", "poster", "progress", "videoUrl"} <= names)
@@ -50,7 +50,7 @@ class QtTests(unittest.TestCase):
         seen = []
         model.modelReset.connect(lambda: seen.append("reset"))
         db.save_progress(db.file_id(p), 600, False)
-        model.reload(None)
+        model.reload(did)
         self.assertEqual(seen, [])  # same cards: refreshed in place, scroll position kept
 
     def test_billboard_deck_is_random_stable_and_prefers_unwatched(self):

@@ -230,6 +230,40 @@ def library_view(cards: list[dict], index: dict, query: str = "", sort: str = "t
     return out
 
 
+class FolderIndex:
+    """Which files exist, by listing each folder once (with each file's change time for the image URL). The grid
+    asks about 4 to 13 files per card; on Windows each check is a trip to the disk, on the interface's own thread."""
+
+    def __init__(self):
+        self._dirs: dict[str, dict[str, int]] = {}
+
+    def _listing(self, folder: str) -> dict[str, int]:
+        got = self._dirs.get(folder)
+        if got is None:
+            got = {}
+            try:
+                with os.scandir(folder) as it:
+                    for e in it:
+                        try:
+                            got[os.path.normcase(e.name)] = e.stat().st_mtime_ns    # cached by the listing on Windows
+                        except OSError:
+                            pass
+            except OSError:          # missing folder, unplugged drive
+                pass
+            self._dirs[folder] = got
+        return got
+
+    def has(self, path) -> bool:
+        p = os.fspath(path)
+        return os.path.normcase(os.path.basename(p)) in self._listing(os.path.dirname(p))
+
+    def url(self, path) -> str:
+        """file:/// URL with ?v=<mtime>, like file_url, from the listing (no extra disk check)."""
+        p = os.fspath(path)
+        mtime = self._listing(os.path.dirname(p)).get(os.path.normcase(os.path.basename(p)))
+        return file_url(p, bust=False) + (f"?v={mtime}" if mtime is not None else "")
+
+
 class LibraryModel(QAbstractListModel):
     """One row per card. QML's GridView only creates delegates for what is on screen and recycles them."""
     KEY, TITLE, META, POSTER, PROGRESS, DONE, BADGE, VIDEO, DURATION, OFFLINE, SPINE, YEAR, DISC, SUBTITLE = \
@@ -261,11 +295,11 @@ class LibraryModel(QAbstractListModel):
         value = self._rows[index.row()][field] if field else None
         return scraper.untag(value) if isinstance(value, str) else value     # titles from before 1.0.6 too
 
-    def _row(self, card: dict, online: bool) -> dict:
+    def _row(self, card: dict, online: bool, files: "FolderIndex") -> dict:
         art = art_item(card)
-        poster = scraper.cover_path(art)
-        if art is not card and not poster.exists():
-            poster = scraper.cover_path(card)        # box set without its own poster: the first film's
+        poster = scraper.cover_path(art, files.has)
+        if art is not card and not files.has(poster):
+            poster = scraper.cover_path(card, files.has)        # box set without its own poster: the first film's
         shows, films = card["episodes"], card.get("films", 0)
         if films:
             progress = card["watched"] / films
@@ -275,21 +309,21 @@ class LibraryModel(QAbstractListModel):
             progress = card["watched"] / shows if shows else 0.0
         meta = " · ".join(x for x in ((card["release_date"] or "")[:4], card["resolution"] if not films else "",
                                       duration_label(card["duration"]) if not (shows or films) else "") if x)
-        spine = scraper.spine_path(art) if (self.spines and online) else None
+        spine = scraper.spine_path(art, files.has) if (self.spines and online) else None
         title, subtitle = display_titles(card, self.title_pref)
         return {"key": card["key"], "title": title, "subtitle": subtitle, "meta": meta,
-                "poster": file_url(poster) if online and poster.exists() else "", "progress": progress,
+                "poster": files.url(poster) if online and files.has(poster) else "", "progress": progress,
                 "done": bool(card["is_completed"]), "badge": f"{shows} episodes" if shows else f"{films} films" if films else "",
                 "video": file_url(card["file_path"], bust=False), "duration_ms": int((card["duration"] or 0) * 1000),
-                "offline": not online, "spine": file_url(spine) if spine else "", "year": (card["release_date"] or "")[:4],
-                "disc": self._disc(art) if online else ""}
+                "offline": not online, "spine": files.url(spine) if spine else "", "year": (card["release_date"] or "")[:4],
+                "disc": self._disc(art, files) if online else ""}
 
     @staticmethod
-    def _disc(card) -> str:
-        """Disc art only (your own or scraped); the card falls back to its poster itself, without more file checks."""
+    def _disc(card, files: "FolderIndex") -> str:
+        """Disc art only (your own or scraped); the card falls back to its poster itself."""
         for p in (scraper.custom_disc_path(card), scraper.disc_path(card)):
-            if p.exists():
-                return file_url(p)
+            if files.has(p):
+                return files.url(p)
         return ""
 
     def reload(self, dir_id, fresh: bool = False) -> list[dict]:
@@ -303,11 +337,15 @@ class LibraryModel(QAbstractListModel):
             cards = db.visible_in_all(cards, index)
         online = {d["id"]: os.path.isdir(d["folder_path"]) for d in db.list_directories()}   # one check per folder
         shown = library_view(cards, index, **self.view) if self.view else cards
-        rows = [self._row(c, online.get(c["parent_directory_id"], True)) for c in shown]
+        files = FolderIndex()               # one listing per art folder instead of several file checks per card
+        rows = [self._row(c, online.get(c["parent_directory_id"], True), files) for c in shown]
+        if not fresh and rows == self._rows:
+            return cards                   # nothing changed (View More or Settings closed without an edit)
         if not fresh and [r["key"] for r in rows] == [r["key"] for r in self._rows]:
+            changed = [i for i, (a, b) in enumerate(zip(rows, self._rows)) if a != b]
             self._rows = rows  # same cards: refresh in place so the grid keeps its scroll position
-            if rows:
-                self.dataChanged.emit(self.index(0), self.index(len(rows) - 1))
+            if changed:        # only the cards that changed redraw
+                self.dataChanged.emit(self.index(changed[0]), self.index(changed[-1]))
             return cards
         # another change while the last one is still animating: interrupted view transitions can strand cards
         # half-faded or out of place, so rebuild the list at once instead
@@ -386,8 +424,11 @@ class TabsModel(QAbstractListModel):
         return tab_id if role == self.ID else name if role == self.NAME else None
 
     def reload(self):
+        rows = [(-1, "All")] + [(d["id"], d["tab_name"]) for d in db.list_directories()]
+        if rows == self._rows:             # the tab bar is not rebuilt (and does not flicker) for nothing
+            return
         self.beginResetModel()
-        self._rows = [(-1, "All")] + [(d["id"], d["tab_name"]) for d in db.list_directories()]
+        self._rows = rows
         self.endResetModel()
 
 
@@ -685,15 +726,17 @@ class Dashboard(QObject):
         self.mark_ready()        # the cards and the carousel are in: the opening vault can open
 
     def _refresh_billboard(self, cards: list[dict]):
-        self._billboard = billboard_deck(cards, self._bb_keys)
-        self._bb_keys = [i["key"] for i in self._billboard["items"]]
-        self.billboardChanged.emit()
+        deck = billboard_deck(cards, self._bb_keys)
+        self._bb_keys = [i["key"] for i in deck["items"]]
+        if deck != self._billboard:         # unchanged: the carousel keeps its slide and timer
+            self._billboard = deck
+            self.billboardChanged.emit()
 
     def _refresh_insights(self):
         excluded = db.excluded_tags()
         data = db.analytics(excluded, excluded_dirs=db.hidden("insights_dirs"))
         h, m = divmod(data["total_minutes"], 60)
-        self._insights = {
+        insights = {
             "total": f"{h}h {m:02d}m",
             "days": [{"label": d[8:], "minutes": mins} for d, mins in data["days"]],
             "genres": [{"name": n, "minutes": mins, "rating": r or 0} for n, mins, r in data["genres"]],
@@ -701,7 +744,9 @@ class Dashboard(QObject):
             "folders": [{"id": d["id"], "name": d["tab_name"], "hidden": d["id"] in set(db.hidden("insights_dirs"))}
                         for d in db.list_directories()],
         }
-        self.insightsChanged.emit()
+        if insights != self._insights:
+            self._insights = insights
+            self.insightsChanged.emit()
 
     @Slot()
     def refreshInsights(self):

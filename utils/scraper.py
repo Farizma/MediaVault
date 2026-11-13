@@ -408,17 +408,29 @@ def person_photo_path(person_id) -> Path:
     return db.data_dir() / "cache" / "people" / f"{int(person_id)}.webp"
 
 
+IMAGE_WORKERS = 6          # pictures of one title downloaded at once (each one waits mostly on the network)
+
+
+def _parallel(fn, items) -> list:
+    """fn over items, IMAGE_WORKERS at a time, results in order."""
+    items = list(items)
+    if len(items) < 2:
+        return [fn(i) for i in items]
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(min(IMAGE_WORKERS, len(items))) as pool:
+        return list(pool.map(fn, items))
+
+
 def save_person_photos(cast: list[dict]) -> None:
-    for c in cast:
-        if not (c.get("id") and c.get("photo_url")):
-            continue
+    def one(c):
         dest = person_photo_path(c["id"])
         if dest.exists():
-            continue
+            return
         try:
             save_round(fetch_image(c["photo_url"]), dest)
         except Exception:
             logging.getLogger(__name__).warning("photo failed for %s", c["name"], exc_info=True)
+    _parallel(one, [c for c in cast if c.get("id") and c.get("photo_url")])
 
 
 def _omdb(kind: str, p: Parsed, key: str) -> dict | None:
@@ -601,11 +613,11 @@ SPINE_NAMES = ("{stem}-spine", "{stem}.spine", "spine")  # beside the video; no 
 IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".webp")
 
 
-def spine_path(item: dict) -> Path | None:
+def spine_path(item: dict, exists=os.path.isfile) -> Path | None:
     """Spine art: the user's own first, then an image found next to the video (Movie-spine.jpg, spine.png, ...).
-    None: the box draws a spine from the title."""
+    None: the box draws a spine from the title. exists: how to check a file (the grid passes a folder listing)."""
     custom = custom_spine_path(item)
-    if custom.exists():
+    if exists(custom):
         return custom
     if item["media_type"] == "clip":
         return None
@@ -613,7 +625,7 @@ def spine_path(item: dict) -> Path | None:
     for name in SPINE_NAMES:
         for ext in IMAGE_EXTS:
             p = folder / (name.format(stem=stem) + ext)
-            if p.is_file():
+            if exists(p):
                 return p
     return None
 
@@ -731,21 +743,23 @@ def save_gallery(item: dict, urls: list[str], replace: bool = False) -> int:
     if replace and d.is_dir():
         for p in d.glob("s-*.webp"):
             p.unlink(missing_ok=True)
-    saved = 0
     limit = GALLERY_MAX_SERIES if item.get("media_type") == "show" else GALLERY_MAX
-    for i, url in enumerate(urls[:limit], 1):
+
+    def one(job) -> int:
+        i, url = job
         dest = d / f"s-{i:02d}.webp"
         if dest.exists():
-            continue
+            return 0
         try:
             save_webp(fetch_image(url), dest, box=GALLERY_BOX)
-            saved += 1
+            return 1
         except Exception:
             logging.getLogger(__name__).warning("gallery image failed: %s", url, exc_info=True)
-    return saved
+            return 0
+    return sum(_parallel(one, enumerate(urls[:limit], 1)))
 
 
-def cover_path(item: dict) -> Path:
+def cover_path(item: dict, exists=os.path.isfile) -> Path:
     """The front cover to show: the user's own art if set, else the scraped / captured poster."""
     custom = custom_front_path(item)
-    return custom if custom.exists() else poster_path(item)
+    return custom if exists(custom) else poster_path(item)

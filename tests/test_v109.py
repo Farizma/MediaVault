@@ -147,7 +147,7 @@ class GridSettleTests(unittest.TestCase):
         m.modelReset.connect(lambda: resets.append(1))
         with mock.patch.object(db, "list_library", return_value=[]), mock.patch.object(db, "search_index", return_value={}), \
                 mock.patch.object(db, "list_directories", return_value=[]), \
-                mock.patch.object(m, "_row", side_effect=lambda c, on: {"key": c["k"]}):
+                mock.patch.object(m, "_row", side_effect=lambda c, on, files: {"key": c["k"]}):
             with mock.patch("ui.dashboard.library_view", return_value=[{"k": "a", "parent_directory_id": 1}, {"k": "c", "parent_directory_id": 1}]):
                 m.reload(1)
             self.assertEqual(resets, [])                      # stepped: animated

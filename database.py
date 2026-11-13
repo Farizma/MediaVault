@@ -222,6 +222,8 @@ def init_db() -> None:
                       ("alt_titles", "TEXT"), ("episode_title", "TEXT"), ("episode_synopsis", "TEXT")):
         if col not in cols:
             c.execute(f"ALTER TABLE media_items ADD COLUMN {col} {kind}")
+    # box set lookups (after the column exists in a database from an older version)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_media_collection ON media_items(collection_id)")
     c.commit()
     try:
         protect_secrets()          # API keys saved in plain text by an older version: encrypt them now

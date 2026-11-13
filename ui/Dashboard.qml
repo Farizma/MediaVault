@@ -356,24 +356,27 @@ Item {
                                 GradientStop { position: 1.0; color: Theme.graphite }
                             }
                         }
-                        Rectangle {   // time to the next slide
-                            visible: billboard.count > 1
-                            anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
-                            height: 4
-                            color: "#CC000000"
-                            Rectangle {
-                                width: parent.width * billboard.progress; height: parent.height
-                                gradient: Gradient {
-                                    orientation: Gradient.Horizontal
-                                    GradientStop { position: 0.0; color: Theme.blue }
-                                    GradientStop { position: 0.6; color: Theme.green }
-                                }
-                            }
-                        }
                     }
                     Item { id: bbMask; anchors.fill: parent; visible: false; layer.enabled: true
                         Rectangle { anchors.fill: parent; radius: billboard.radius; color: "black" } }
                     MultiEffect { source: bbArt; anchors.fill: bbArt; maskEnabled: true; maskSource: bbMask }
+                    // time to the next slide. Outside the masked picture above: inside it, the moving bar made Qt
+                    // redraw the whole picture and its mask every frame. Inset by the corner radius, so the
+                    // rounded corners need no mask.
+                    Rectangle {
+                        visible: billboard.count > 1
+                        anchors { left: parent.left; right: parent.right; bottom: parent.bottom; leftMargin: billboard.radius; rightMargin: billboard.radius }
+                        height: 4
+                        color: "#CC000000"
+                        Rectangle {
+                            width: parent.width * billboard.progress; height: parent.height
+                            gradient: Gradient {
+                                orientation: Gradient.Horizontal
+                                GradientStop { position: 0.0; color: Theme.blue }
+                                GradientStop { position: 0.6; color: Theme.green }
+                            }
+                        }
+                    }
                     Rectangle { anchors.fill: parent; radius: parent.radius; color: "transparent"; border.color: Theme.line }
 
                     // kicker
@@ -699,15 +702,14 @@ Item {
                         // once the cover has turned past its edge you see its inside, not a mirrored poster
                         Rectangle { anchors.fill: parent; color: Theme.slate; visible: cell.opening > 0.62 }
                     }
-                    Item { id: mask; width: art.width; height: art.height; visible: false; layer.enabled: true; Rectangle { width: mask.width; height: mask.height; radius: 12; color: "black" } }
-                    MultiEffect { source: art; anchors.fill: art; maskEnabled: true; maskSource: mask }
+                    MultiEffect { source: art; anchors.fill: art; maskEnabled: true; maskSource: posterMask }
                     // the hover preview: its own layer above the poster (not inside the hidden, masked poster layer,
                     // where the video frames never reached the screen), rounded by the same mask
                     Item {
                         anchors.fill: art
                         visible: cell.previewing
                         layer.enabled: visible
-                        layer.effect: MultiEffect { maskEnabled: true; maskSource: mask }
+                        layer.effect: MultiEffect { maskEnabled: true; maskSource: posterMask }
                         VideoOutput { id: vo; anchors.fill: parent; fillMode: VideoOutput.PreserveAspectCrop }
                     }
                     Rectangle { anchors.fill: parent; radius: 12; color: "transparent"
@@ -985,6 +987,10 @@ Item {
     FolderSheet { id: folderSheet; anchors.fill: parent }
     InsightsSheet { id: insightsSheet; anchors.fill: parent }
     Connections { target: Backend; function onFolderPicked(path, name) { folderSheet.open(path, name) } }
+
+    // the rounded-corner mask every poster card uses: one shared picture, not one per card
+    Item { id: posterMask; width: 180; height: 270; visible: false; layer.enabled: true
+        Rectangle { anchors.fill: parent; radius: 12; color: "black" } }
 
     // long jobs (scraping, artwork, downloads): progress pills under the top bar
     ProgressDock {

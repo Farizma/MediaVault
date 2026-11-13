@@ -31,7 +31,7 @@ if __name__ == "__main__":
 class PreviewTests(unittest.TestCase):
     def test_video_is_not_inside_the_hidden_poster_layer(self):
         qml = (ROOT / "ui" / "Dashboard.qml").read_text(encoding="utf-8")
-        art = qml[qml.index("id: art"):qml.index("Item { id: mask")]
+        art = qml[qml.index("id: art"):qml.index("MultiEffect { source: art")]
         self.assertNotIn("VideoOutput", art)
         self.assertIn("VideoOutput { id: vo; anchors.fill: parent; fillMode: VideoOutput.PreserveAspectCrop }", qml)
 
