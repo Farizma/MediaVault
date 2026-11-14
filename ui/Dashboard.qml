@@ -120,7 +120,8 @@ Item {
         var c = url ? Backend.tintOf(url) : ""
         glow = c !== "" ? c : Theme.blue
     }
-    Connections { target: settings; function onVisibleChanged() { if (!settings.visible) { dash.hoverPreview = Backend.setting("hover_preview") !== "0"; dash.animatedTheme = Backend.setting("animated_theme") !== "0"; if (!dash.animatedTheme) dash.glow = Theme.blue } } }
+    Connections { target: settings; function onVisibleChanged() { if (!settings.visible) { dash.hoverPreview = Backend.setting("hover_preview") !== "0"; dash.animatedTheme = Backend.setting("animated_theme") !== "0"; if (!dash.animatedTheme) dash.glow = Theme.blue
+        dash.showContinue = Backend.setting("continue_watching") !== "0"; dash.showRecent = Backend.setting("recently_added") !== "0" } } }
 
     // ---- search, sort, filters, grid / shelf
     property string query: ""
@@ -129,6 +130,14 @@ Item {
     property string quality: ""
     property bool unwatched: false
     property bool boxSets: Backend.setting("group_collections") !== "0"
+    // the two rows above the catalog: on or off from the filter bar (also in Settings > Library, and per tab)
+    property bool showContinue: Backend.setting("continue_watching") !== "0"
+    property bool showRecent: Backend.setting("recently_added") !== "0"
+    function toggleRow(which) {
+        if (which === "continue") { showContinue = !showContinue; Backend.setSetting("continue_watching", showContinue ? "1" : "0") }
+        else { showRecent = !showRecent; Backend.setSetting("recently_added", showRecent ? "1" : "0") }
+        Backend.reload()
+    }
     property bool hoverPreview: Backend.setting("hover_preview") !== "0"    // Settings › Appearance
     property int tabDragFrom: -1          // tab being dragged (index), where it would land, and its width
     property int tabDragTo: -1
@@ -542,7 +551,15 @@ Item {
                     visible: rows.length > 0
                     width: grid.span
                     spacing: 10
-                    Text { text: continueRow.resumes ? "Continue Watching" : "Recently Added"; color: "#FFFFFF"; font.pixelSize: 16; font.weight: Font.ExtraBold; font.letterSpacing: -0.3 }
+                    Item {
+                        width: parent.width; height: rowTitle.implicitHeight
+                        Text { id: rowTitle; text: continueRow.resumes ? "Continue Watching" : "Recently Added"; color: "#FFFFFF"; font.pixelSize: 16; font.weight: Font.ExtraBold; font.letterSpacing: -0.3 }
+                        Text { anchors { right: parent.right; verticalCenter: rowTitle.verticalCenter }
+                            text: "Hide"; color: hideArea.containsMouse ? Theme.text : Theme.faint; font.pixelSize: 12
+                            MouseArea { id: hideArea; anchors.fill: parent; anchors.margins: -6; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                onClicked: dash.toggleRow(continueRow.resumes ? "continue" : "recent") }
+                            Tip { visible: hideArea.containsMouse; text: "Turn it back on with the pill in the filters" } }
+                    }
                     ListView {
                         id: continueList
                         width: parent.width; height: 96
@@ -620,7 +637,9 @@ Item {
                                 Pill { height: 32; label: "Unwatched"; selected: dash.unwatched; accent: Theme.blue; onClicked: { dash.unwatched = !dash.unwatched; dash.applyView() } }
                                 Pill { height: 32; label: "\u2665 Favourites"; selected: dash.mark === "favourite"; accent: Theme.red; onClicked: dash.setMark("favourite") }
                                 Pill { height: 32; label: "Watchlist"; selected: dash.mark === "watchlist"; accent: Theme.green; onClicked: dash.setMark("watchlist") }
-                                Pill { id: surprisePill; height: 32; label: "\u2684 Surprise me"; accent: Theme.blue
+                                Pill { height: 32; label: "Continue Watching"; selected: dash.showContinue; accent: Theme.green; onClicked: dash.toggleRow("continue") }
+                                Pill { height: 32; label: "Recently Added"; selected: dash.showRecent; accent: Theme.green; onClicked: dash.toggleRow("recent") }
+                                Pill { id: surprisePill; height: 32; label: "\u2684 Surprise me"; selected: false; accent: Theme.blue
                                     onClicked: { var k = Backend.surprise(); if (k !== "") detail.open(k, surprisePill.mapToItem(detail, 0, 0, width, height), "button") } }
                                 // box sets on or off, right here (also in Settings > Library)
                                 Pill { height: 32; label: "Box sets"; selected: dash.boxSets; accent: Theme.amber

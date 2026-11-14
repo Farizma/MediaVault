@@ -225,7 +225,7 @@ class WiringTests(unittest.TestCase):
         self.assertIn('get_setting("pip_keep_library", "0") != "1"', read("main.py"))
         self.assertIn("Backend.windowMinimized()", read("ui", "Main.qml"))
         dash = read("ui", "Dashboard.qml")
-        for needle in ("Backend.recentlyAdded", "Backend.surprise()", "ResumeAsk {", "RenameSheet {", "function playCard(k)"):
+        for needle in ("Backend.recentlyAdded", "Backend.surprise()", "ResumeAsk {", "RenameSheet {", "function playCard(k)", 'dash.toggleRow("continue")', 'dash.toggleRow("recent")'):
             self.assertIn(needle, dash)
         self.assertIn("Backend.moveFilm(", read("ui", "DetailView.qml"))
         self.assertIn("tests.test_v134", read(".github", "workflows", "release.yml"))
