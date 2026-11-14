@@ -14,6 +14,7 @@ Rectangle {
     property var info: ({})
     property bool busy: false
     property string error: ""
+    readonly property bool forTab: Backend.lockReason === "private"     // a private tab was clicked: can be cancelled
     readonly property var kinds: {
         var seen = {}
         ;(info.keys || []).forEach(function(k) { seen[k.kind] = true })
@@ -23,6 +24,7 @@ Rectangle {
     function tryPassword() { if (pw.text === "" || busy) return; busy = true; error = ""; Backend.unlockWithPassword(pw.text) }
     function tryKey(kind) { if (busy) return; busy = true; error = ""; Backend.unlockWithKey(kind) }
 
+    Keys.onEscapePressed: if (forTab) Backend.cancelLock()
     onVisibleChanged: if (visible) {
         refresh()
         if (info.password) pw.forceActiveFocus()
@@ -53,11 +55,12 @@ Rectangle {
 
         Image { Layout.alignment: Qt.AlignHCenter; source: "brand/icon-128.png"; sourceSize: Qt.size(128, 128)
             Layout.preferredWidth: 72; Layout.preferredHeight: 72; smooth: true; mipmap: true }
-        Text { Layout.alignment: Qt.AlignHCenter; text: "Media Vault is locked"; color: Theme.text; font.pixelSize: 22; font.weight: Font.ExtraBold }
+        Text { Layout.alignment: Qt.AlignHCenter; text: root.forTab ? "This tab is private" : "Media Vault is locked"
+            color: Theme.text; font.pixelSize: 22; font.weight: Font.ExtraBold }
         Text { Layout.alignment: Qt.AlignHCenter; Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap
             color: Theme.faint; font.pixelSize: 12
             text: root.info.password ? "Enter your password" + (root.kinds.length ? ", or sign in another way." : ".")
-                                     : "Sign in to open your library." }
+                                     : root.forTab ? "Sign in to open your private tabs." : "Sign in to open your library." }
 
         RowLayout {
             visible: root.info.password === true
@@ -83,6 +86,8 @@ Rectangle {
                 GlassButton { small: true; label: modelData[1]; enabled: !root.busy; onClicked: root.tryKey(modelData[0]) }
             }
         }
+        GlassButton { visible: root.forTab; small: true; label: "Cancel"; Layout.alignment: Qt.AlignHCenter; enabled: !root.busy
+            onClicked: Backend.cancelLock() }
         Text {
             Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap
             visible: text !== ""

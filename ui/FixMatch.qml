@@ -27,6 +27,8 @@ Item {
     property var choices: ({})                 // field -> pid ("" = keep yours)
     property var gallerySel: ({})              // Gallery, image by image: url / "file:<path>" (add) and "keep:<name>" (current)
     property string primary: ""
+    property var only: null                    // a box set: just these fields can be taken
+    function offered(f) { return only === null || only.indexOf(f) >= 0 }
     property var uploads: ({})                 // field -> [{pid: "file:<path>", source: "file", fields}] from "Upload file"
     readonly property var uploadable: ["poster", "banner", "disc", "gallery"]
 
@@ -109,6 +111,9 @@ Item {
         var c = Object.assign({}, choices), add = [], keep = []
         Object.keys(gallerySel).forEach(function(k) { if (k.indexOf("keep:") === 0) keep.push(k.substring(5)); else add.push(k) })
         c.gallery = add; c.galleryKeep = keep
+        if (only !== null) {                 // a box set: nothing but its own fields
+            Object.keys(c).forEach(function(f) { if (only.indexOf(f) < 0) delete c[f] })
+        }
         phase = "applying"; Backend.applyMatchParts(key, c, primary)
     }
     function srcName(s) { return ({ anilist: "AniList", omdb: "IMDb", tvmaze: "TVmaze", mal: "MyAnimeList", kitsu: "Kitsu",
@@ -303,7 +308,7 @@ Item {
 
                     // which result the title is linked to (its ids: later lookups ask about this one)
                     RowLayout {
-                        visible: root.details.length > 1
+                        visible: root.details.length > 1 && root.only === null
                         spacing: 10
                         Text { Layout.preferredWidth: 130; text: "LINKED TO"; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 11 }
                         Flow {
@@ -325,7 +330,7 @@ Item {
                             readonly property var offers: root.details.filter(function(d) { return root.has(d, fieldRow.f) })
                                                           .concat(root.uploads[fieldRow.f] || [])
                             readonly property bool canUpload: root.uploadable.indexOf(fieldRow.f) >= 0
-                            visible: offers.length > 0 || canUpload
+                            visible: root.offered(f) && (offers.length > 0 || canUpload)
                             Layout.fillWidth: true
                             spacing: 10
                             Text { Layout.preferredWidth: 130; Layout.alignment: Qt.AlignTop; topPadding: 8

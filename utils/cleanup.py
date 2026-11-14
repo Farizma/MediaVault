@@ -19,7 +19,7 @@ import database as db
 from utils import scraper
 
 # what follows a video's name in an artwork file name (".vault-assets/<video>.<this>")
-SUFFIXES = ("fanart.webp", "front.webp", "back.webp", "spine.webp", "discart.webp", "disc.webp", "banner.webp", "gallery", "webp")
+SUFFIXES = ("still.webp", "fanart.webp", "front.webp", "back.webp", "spine.webp", "discart.webp", "disc.webp", "banner.webp", "gallery", "webp")
 YOURS = ("front.webp", "back.webp", "spine.webp", "disc.webp")          # box art you chose yourself
 SERIES = "_series"
 
@@ -28,6 +28,8 @@ def _owners(name: str) -> list[tuple[str, str]]:
     """Every way to read an artwork name: "Movie.banner.webp" is the banner of "Movie", or the cover of a video
     called "Movie.banner". Art counts as used when any reading names a video in the library. [] for a name Media
     Vault never writes."""
+    if name.endswith(".srt") and name.count(".") >= 2:        # a downloaded subtitle: "<video>.<language>.srt"
+        return [(name.rsplit(".", 2)[0], "srt")]
     return [(name[: -len(s) - 1], s) for s in SUFFIXES if name.endswith("." + s) and len(name) > len(s) + 1]
 
 

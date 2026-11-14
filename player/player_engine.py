@@ -187,6 +187,9 @@ class MpvCore:
     def set_sub(self, track_id):
         self.p.sid = track_id if track_id else "no"
 
+    def add_sub(self, path: str):
+        self.p.command("sub-add", path, "select")
+
     def set_audio(self, track_id):
         self.p.aid = track_id
 
@@ -344,6 +347,10 @@ class VlcCore:
 
     def set_sub(self, track_id):
         self.mp.video_set_spu(track_id if track_id else -1)
+
+    def add_sub(self, path: str):
+        import vlc
+        self.mp.add_slave(vlc.MediaSlaveType.subtitle, Path(path).as_uri(), True)
 
     def set_audio(self, track_id):
         self.mp.audio_set_track(track_id)
@@ -765,6 +772,62 @@ class PlayerEngine(QObject):
     def seekBy(self, seconds: float):
         if self.core:
             self.core.seek(seconds, relative=True)
+
+    _subReady = Signal(str, str)          # path, message: from the search thread back to the player's thread
+
+    @Slot()
+    def findSubtitles(self):
+        """Search OpenSubtitles for the video that is playing, take the most downloaded match in your language and
+        switch it on."""
+        import threading
+
+        import database as db
+        from utils import scraper, subtitles
+        s = self.session
+        if not (self.core and s):
+            return
+        key = db.get_setting("opensubtitles_key", "") or ""
+        if not key:
+            self._say("Add a free OpenSubtitles API key in Settings \u203A Integrations & APIs")
+            self.stateChanged.emit()
+            return
+        lang = (db.get_setting("subtitle_language", "en") or "en").strip().lower()
+        item = db.get_media(s.uuid) if s.uuid else None
+        show = bool(item) and item["media_type"] == "show"
+        title = (db.series_title(item["title"]) if show else item["title"]) if item else scraper.clean_name(s.path).title
+        se = scraper.season_episode(item["title"]) if show else None
+        dest = Path(s.path).parent / scraper.ASSET_DIR / f"{Path(s.path).stem}.{lang}.srt"
+        if not getattr(self, "_sub_wired", False):
+            self._subReady.connect(self._sub_ready)
+            self._sub_wired = True
+        self._say("Looking for subtitles\u2026")
+        self.stateChanged.emit()
+
+        def work():
+            try:
+                found = subtitles.search(key, title, lang, item.get("tmdb_id") if item else None,
+                                         se[0] if se else None, se[1] if se else None, show)
+                if not found and item and item.get("tmdb_id"):       # not filed under the id: by name
+                    found = subtitles.search(key, title, lang, None, se[0] if se else None, se[1] if se else None, show)
+                if not found:
+                    self._subReady.emit("", f"No {lang.upper()} subtitles found for this title")
+                    return
+                subtitles.download(key, found[0]["file_id"], dest)
+                self._subReady.emit(str(dest), "Subtitles added" + (f": {found[0]['release'][:60]}" if found[0]["release"] else ""))
+            except Exception as e:
+                self._subReady.emit("", str(e) if isinstance(e, subtitles.SubtitleError) else "Could not get subtitles")
+        threading.Thread(target=work, daemon=True, name="subtitles").start()
+
+    def _sub_ready(self, path: str, message: str):
+        if path and self.core and self.session and Path(path).stem.startswith(Path(self.session.path).stem):
+            try:
+                self.core.add_sub(path)
+                self._tracks_at = 0
+            except Exception:
+                logging.getLogger(__name__).exception("adding subtitles")
+                message = "The subtitles were downloaded but could not be switched on"
+        self._say(message)
+        self.stateChanged.emit()
 
     @Slot(int)
     def setSub(self, track_id: int):

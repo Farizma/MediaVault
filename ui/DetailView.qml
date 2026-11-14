@@ -97,6 +97,7 @@ Item {
         renaming = false
         order = Backend.detailSections().map(function(x) { return x.id })
         d = Backend.detail(key)
+        if (d.isShow) Backend.fetchEpisodeGuide(key)        // names, synopses and pictures, once (they arrive in a moment)
         from = rect || Qt.rect(width / 2 - 20, height / 2 - 20, 40, 40)
         fromCard = kind === "card" || kind === "spine"
         startYaw = kind === "spine" ? 90 : 0
@@ -115,6 +116,7 @@ Item {
     function fixData() {
         var i = info, tags = i.tags || []
         var g = (i.gallery || []).map(function(x) { return x.url })
+        fixMatch.only = setSlide ? ["title", "synopsis", "poster", "banner", "disc"] : null      // a box set's own page
         fixMatch.open(infoKey, i.title || "", i.year || "", i.isShow === true, {
             title: i.title || "", year: i.year || "", synopsis: i.synopsis || "", poster: i.cover || "", banner: i.banner || "",
             gallery: g, galleryCount: g.length,
@@ -846,8 +848,52 @@ Item {
                 ColumnLayout {
                     spacing: 4
                     Caption { text: root.d.isSet ? "FILMS" : "EPISODES"; Layout.bottomMargin: 4 }
+                    // a series: each episode with its picture, name, length and what happens, under its season
                     Repeater {
-                        model: root.d.episodes || []
+                        model: root.d.isShow ? (root.d.episodes || []) : []
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+                            readonly property var prev: index > 0 ? root.d.episodes[index - 1] : null
+                            Caption { visible: modelData.season > 0 && (!parent.prev || parent.prev.season !== modelData.season)
+                                text: "SEASON " + modelData.season; Layout.topMargin: index > 0 ? 10 : 0; Layout.bottomMargin: 2 }
+                            Rectangle {
+                                Layout.fillWidth: true; height: 84; radius: 10
+                                color: rowArea.containsMouse ? Theme.fillHover : Theme.slate
+                                border.color: Theme.line
+                                clip: true
+                                Rectangle { id: epStill; x: 7; y: 7; width: 124; height: 70; radius: 6; color: Theme.graphite; clip: true
+                                    Image { anchors.fill: parent; source: modelData.still || ""; fillMode: Image.PreserveAspectCrop; asynchronous: true
+                                        sourceSize.width: 248; sourceSize.height: 140 }
+                                    Text { anchors.centerIn: parent; visible: !modelData.still; text: modelData.number > 0 ? "E" + modelData.number : "\u25B6"
+                                        color: Theme.faint; font.family: Theme.mono; font.pixelSize: 16; font.weight: Font.Bold }
+                                    Rectangle { visible: rowArea.containsMouse; anchors.centerIn: parent; width: 30; height: 30; radius: 15; color: "#CC000000"
+                                        Text { anchors.centerIn: parent; anchors.horizontalCenterOffset: 1; text: "\u25B6"; color: "#FFFFFF"; font.pixelSize: 11 } }
+                                    Rectangle { visible: modelData.progress > 0; anchors.bottom: parent.bottom; height: 3; width: parent.width * modelData.progress; color: Theme.green }
+                                }
+                                Column {
+                                    anchors { left: epStill.right; leftMargin: 12; right: parent.right; rightMargin: 40; verticalCenter: parent.verticalCenter }
+                                    spacing: 3
+                                    Row {
+                                        width: parent.width; spacing: 8
+                                        Text { visible: modelData.number > 0; text: "E" + modelData.number; color: Theme.blue; font.family: Theme.mono; font.pixelSize: 11; font.weight: Font.Bold
+                                            anchors.verticalCenter: parent.verticalCenter }
+                                        Text { width: Math.min(implicitWidth, parent.width - 110); elide: Text.ElideRight; color: Theme.text; font.pixelSize: 13; font.weight: Font.DemiBold
+                                            text: modelData.name || modelData.title }
+                                        Text { text: modelData.length || ""; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10; anchors.verticalCenter: parent.verticalCenter }
+                                    }
+                                    Text { width: parent.width; visible: text !== ""; text: modelData.synopsis || ""; color: Theme.faint; font.pixelSize: 11
+                                        wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight }
+                                }
+                                Text { visible: modelData.done; anchors { right: parent.right; rightMargin: 14; verticalCenter: parent.verticalCenter }
+                                    text: "\u2713"; color: Theme.green; font.pixelSize: 15; font.weight: Font.Bold }
+                                MouseArea { id: rowArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                    onClicked: root.play(modelData.uuid, false) }
+                            }
+                        }
+                    }
+                    Repeater {
+                        model: root.d.isShow ? [] : (root.d.episodes || [])
                         Rectangle {
                             Layout.fillWidth: true; height: 38; radius: 10
                             readonly property bool shown: root.count > 0 && root.cur.uuid === modelData.uuid

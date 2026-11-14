@@ -122,7 +122,7 @@ class ImageResolutionTests(unittest.TestCase):
         self.assertIn('Backend.setSetting("image_quality", modelData[0])', sv)
         self.assertIn("Backend.redownloadImages()", sv)
         w = (ROOT / "watcher.py").read_text(encoding="utf-8")
-        self.assertIn("def fetch_missing(directory: dict, redo_images: bool = False)", w)
+        self.assertIn("def fetch_missing(directory: dict, redo_images: bool = False", w)
         d = (ROOT / "ui" / "dashboard.py").read_text(encoding="utf-8")
         self.assertIn('save_box_art(img.crop((left, 0, left + tw, h)), [item], "front")', d)   # a picked frame is yours
 

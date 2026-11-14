@@ -252,6 +252,21 @@ def parse_link(text: str) -> dict | None:
     return None
 
 
+def tmdb_collection_search(query: str, key: str) -> list[dict]:
+    data = _tmdb_json("search/collection", key, query=query)
+    return [{"id": f"collection:{r.get('id')}", "source": "tmdb", "title": r.get("name") or "", "year": "",
+             "overview": untag(r.get("overview") or "")[:400],
+             "thumb": f"{IMG}w185{r['poster_path']}" if r.get("poster_path") else ""} for r in (data.get("results") or [])[:8]]
+
+
+def tmdb_collection_details(cid: int, key: str) -> dict:
+    r = _tmdb_json(f"collection/{int(cid)}", key, append_to_response="images", include_image_language="null,en")
+    return {"title": r.get("name") or "", "synopsis": untag(r.get("overview") or "") or None, "tmdb_id": None, "kind": "collection",
+            "poster_url": f"{IMG}{image_quality()['tmdb_poster']}{r['poster_path']}" if r.get("poster_path") else None,
+            "banner_url": _best_backdrop(r.get("images") or {}) or (f"{IMG}original{r['backdrop_path']}" if r.get("backdrop_path") else None),
+            "gallery_urls": [], "genres": [], "cast": []}
+
+
 IMPORT_MAX = 30          # images from one pasted link
 _TMDB_IMAGES = re.compile(r"themoviedb\.org/(movie|tv)/(\d+)[^/?#]*(?:/season/(\d+)(?:/episode/(\d+))?)?(?:/images/(\w+))?", re.I)
 _IMAGE_URL = re.compile(r"^https://\S+\.(?:jpe?g|png|webp)(?:\?\S*)?$", re.I)
@@ -760,6 +775,71 @@ def save_gallery(item: dict, urls: list[str], replace: bool = False) -> int:
             logging.getLogger(__name__).warning("gallery image failed: %s", url, exc_info=True)
             return 0
     return sum(_parallel(one, enumerate(urls[:limit], 1)))
+
+
+def still_path(item: dict) -> Path:
+    """An episode's own picture, shown in the series' episode list."""
+    return _assets(item) / f"{_stem(item)}.still.webp"
+
+
+_SE = re.compile(r"S(\d{1,3})E(\d{1,4})", re.I)
+
+
+def season_episode(title: str) -> tuple[int, int] | None:
+    m = _SE.search(title or "")
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def episode_guide(title: str, tmdb_id, seasons, keys: dict) -> dict:
+    """{(season, episode): {"name", "overview", "still"}} for a series: from TMDB when it is matched there (one
+    request per season), else from TVmaze by name (one request, no key). Best effort: {} when nothing answers."""
+    out: dict = {}
+    if tmdb_id and keys.get("tmdb"):
+        for n in sorted(set(seasons)):
+            try:
+                eps = _tmdb_json(f"tv/{int(tmdb_id)}/season/{int(n)}", keys["tmdb"]).get("episodes") or []
+            except ScrapeError:
+                continue
+            for e in eps:
+                out[(int(n), int(e.get("episode_number") or 0))] = {
+                    "name": untag(e.get("name") or ""), "overview": untag(e.get("overview") or ""),
+                    "still": f"{IMG}{image_quality()['tmdb_still']}{e['still_path']}" if e.get("still_path") else None}
+    if out:
+        return out
+    try:
+        show = _get_json(f"https://api.tvmaze.com/singlesearch/shows?q={urllib.parse.quote(title)}&embed=episodes")
+    except ScrapeError:
+        return {}
+    for e in ((show.get("_embedded") or {}).get("episodes") or []):
+        if e.get("season") is None or e.get("number") is None:
+            continue
+        out[(int(e["season"]), int(e["number"]))] = {
+            "name": untag(e.get("name") or ""), "overview": untag(e.get("summary") or ""),
+            "still": safe_url((e.get("image") or {}).get("original"))}
+    return out
+
+
+def save_episode_guide(items: list[dict], guide: dict) -> int:
+    """Fill each episode's name and synopsis (only where empty: yours stay) and save its picture. Returns how many
+    episodes got something."""
+    todo = []
+    for it in items:
+        se = season_episode(it["title"])
+        info = guide.get(se) if se else None
+        if info:
+            todo.append((it, info))
+
+    def one(job) -> int:
+        it, info = job
+        db.set_episode(it["uuid"], title=info["name"] or None, synopsis=info["overview"] or None, only_empty=True)
+        dest = still_path(it)
+        if info.get("still") and not dest.exists():
+            try:
+                save_webp(fetch_image(info["still"]), dest, box=GALLERY_BOX)
+            except Exception:
+                log.warning("episode picture failed: %s", it["title"], exc_info=True)
+        return 1
+    return sum(_parallel(one, todo))
 
 
 def add_gallery(item: dict, urls: list[str]) -> int:

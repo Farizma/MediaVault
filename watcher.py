@@ -297,7 +297,7 @@ def _set_banner_one(cid, it) -> int:
     return int(bool(set_banner(cid, hit)))
 
 
-def fetch_missing(directory: dict, redo_images: bool = False) -> int:
+def fetch_missing(directory: dict, redo_images: bool = False, only: set | None = None) -> int:
     """Fill gaps for titles already in a folder, by what the folder scrapes: cast and photos, cover, disc art,
     box set, genres, synopsis. Titles, and anything you set yourself, are never touched. Returns titles updated."""
     opts = db.scrape_opts(directory)
@@ -307,7 +307,7 @@ def fetch_missing(directory: dict, redo_images: bool = False) -> int:
         return 0
     groups: dict[str, list[dict]] = {}          # one lookup per film, and per series
     for it in db.list_media(directory["id"]):
-        if it["media_type"] != "clip":
+        if it["media_type"] != "clip" and (only is None or it["uuid"] in only):     # only: just the selected titles
             groups.setdefault(db.cast_owner(it), []).append(it)
     updated = 0
     tab = directory.get("tab_name") or "library"

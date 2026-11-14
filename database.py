@@ -115,6 +115,11 @@ CREATE TABLE IF NOT EXISTS collection_info (
     collection_id INTEGER PRIMARY KEY,  -- a box set's own page: what you wrote about the set as a whole
     synopsis TEXT
 );
+CREATE TABLE IF NOT EXISTS marks (
+    key TEXT NOT NULL,                  -- a card: a file's uuid, 'show:<folder>' or 'set:<id>'
+    kind TEXT NOT NULL,                 -- favourite | watchlist
+    PRIMARY KEY (key, kind)
+);
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT
@@ -796,7 +801,7 @@ def mark_failed(hashes) -> None:
 
 # ---------------------------------------------------------------- settings
 
-SECRET_SETTINGS = {"tmdb_key", "omdb_key", "fanart_key"}     # API keys: encrypted with Windows DPAPI at rest
+SECRET_SETTINGS = {"tmdb_key", "omdb_key", "fanart_key", "opensubtitles_key"}     # API keys: encrypted with Windows DPAPI at rest
 
 
 def get_setting(key: str, default=None):
@@ -831,6 +836,43 @@ def protect_secrets() -> int:
             set_setting(key, r["value"])
             n += 1
     return n
+
+
+MARKS = ("favourite", "watchlist")
+
+
+def marks() -> dict[str, set]:
+    """{"favourite": {card keys}, "watchlist": {card keys}}"""
+    out = {k: set() for k in MARKS}
+    for r in conn().execute("SELECT key, kind FROM marks"):
+        out.setdefault(r["kind"], set()).add(r["key"])
+    return out
+
+
+def set_mark(keys, kind: str, on: bool) -> None:
+    if kind not in MARKS:
+        return
+    with _tx() as c:
+        if on:
+            c.executemany("INSERT OR IGNORE INTO marks(key, kind) VALUES(?, ?)", [(k, kind) for k in keys])
+        else:
+            c.executemany("DELETE FROM marks WHERE key=? AND kind=?", [(k, kind) for k in keys])
+
+
+def set_watched(uids, done: bool) -> None:
+    """Mark files watched (finished, position kept at 0) or unwatched (history line removed)."""
+    with _tx() as c:
+        if done:
+            c.executemany("INSERT INTO watch_history (media_uuid, profile_id, last_position, last_watched, is_completed) "
+                          "VALUES (?,?,0,?,1) ON CONFLICT(media_uuid) DO UPDATE SET last_position=0, is_completed=1",
+                          [(u, PROFILE, _now()) for u in uids])
+        else:
+            c.executemany("DELETE FROM watch_history WHERE media_uuid=?", [(u,) for u in uids])
+
+
+def private_dirs() -> set:
+    """Folders (tabs) marked private: hidden until you sign in (Settings > Privacy)."""
+    return {int(d) for d in hidden("private_dirs")}
 
 
 def excluded_tags() -> list[str]:

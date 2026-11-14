@@ -25,7 +25,7 @@ SETTINGS = {"tmdb_key", "omdb_key", "night_mode", "reduce_motion", "upscale_leve
             "custom_muted", "custom_amber", "custom_red", "auto_credits", "auto_tags",
             "fanart_key", "animated_theme", "hover_preview", "detail_order", "title_language", "group_collections", "discord", "discord_detail", "discord_app_id",
             "discord_details", "discord_state", "discord_paused", "discord_hide_adult", "discord_image_text",
-            "discord_folders", "discord_hide_tags", "image_quality", "gpu_high_performance"}
+            "discord_folders", "discord_hide_tags", "image_quality", "gpu_high_performance", "continue_watching", "lock_scope", "opensubtitles_key", "subtitle_language"}
 
 
 TITLE_LANGUAGES = [("english", "English"), ("romaji", "Romaji"), ("original", "Original")]
@@ -95,9 +95,20 @@ def banner_for(card: dict):
 # Fix Scraped Data: what can be taken from which result, in the order the window lists them
 MATCH_FIELDS = ("title", "year", "synopsis", "poster", "banner", "disc", "genres", "score", "rating", "titles", "cast", "boxset")
 MATCH_SOURCES = ("tmdb", "anilist", "omdb", "tvmaze", "mal", "kitsu")
+SET_FIELDS = ("title", "synopsis", "poster", "banner", "disc")     # what a box set's own page can take
+HIDDEN_KINDS = ("all_dirs", "all_tags", "insights_dirs", "continue_dirs", "private_dirs")
 UPLOAD_FIELDS = ("poster", "banner", "disc", "gallery")      # the "Upload file" tile in the window
 PERCENT_SOURCES = ("anilist", "kitsu")                        # scores shown as a percentage
 GALLERY_PICK_MAX = 40                                         # Gallery images offered per result, to pick one by one
+
+
+def episode_row(e: dict) -> dict:
+    """What a series' episode list shows for one episode: its number, name, synopsis, length and picture."""
+    se = scraper.season_episode(e["title"])
+    still = scraper.still_path(e)
+    return {"season": se[0] if se else 0, "number": se[1] if se else 0, "name": e.get("episode_title") or "",
+            "synopsis": e.get("episode_synopsis") or "", "length": duration_label(e["duration"]),
+            "still": file_url(still) if still.exists() else ""}
 
 
 def _upload_path(choice) -> str | None:
@@ -237,13 +248,15 @@ def quality_of(resolution: str | None) -> str:
 
 
 def library_view(cards: list[dict], index: dict, query: str = "", sort: str = "title", genre: str = "",
-                 quality: str = "", unwatched: bool = False) -> list[dict]:
+                 quality: str = "", unwatched: bool = False, marked: set | None = None) -> list[dict]:
     """Search (every word must appear in the title, synopsis, tags, genres, notes, year or format), filter, sort."""
     words = query.lower().split()
     out = []
     for c in cards:
         info = index.get(c["uuid"], {})
         if unwatched and c["is_completed"]:
+            continue
+        if marked is not None and c["key"] not in marked:      # the Favourites / Watchlist filter
             continue
         if genre and genre not in info.get("genres", ()):
             continue
@@ -306,14 +319,15 @@ class FolderIndex:
 
 class LibraryModel(QAbstractListModel):
     """One row per card. QML's GridView only creates delegates for what is on screen and recycles them."""
-    KEY, TITLE, META, POSTER, PROGRESS, DONE, BADGE, VIDEO, DURATION, OFFLINE, SPINE, YEAR, DISC, SUBTITLE = \
-        (Qt.UserRole + i for i in range(1, 15))
+    KEY, TITLE, META, POSTER, PROGRESS, DONE, BADGE, VIDEO, DURATION, OFFLINE, SPINE, YEAR, DISC, SUBTITLE, FAV, WATCH = \
+        (Qt.UserRole + i for i in range(1, 17))
     NAMES = {KEY: b"key", TITLE: b"title", META: b"meta", POSTER: b"poster", PROGRESS: b"progress",
              DONE: b"done", BADGE: b"badge", VIDEO: b"videoUrl", DURATION: b"durationMs",
-             OFFLINE: b"offline", SPINE: b"spine", YEAR: b"year", DISC: b"disc", SUBTITLE: b"subtitle"}
+             OFFLINE: b"offline", SPINE: b"spine", YEAR: b"year", DISC: b"disc", SUBTITLE: b"subtitle",
+             FAV: b"favourite", WATCH: b"watchlist"}
     FIELDS = {KEY: "key", TITLE: "title", META: "meta", POSTER: "poster", PROGRESS: "progress", DONE: "done",
               BADGE: "badge", VIDEO: "video", DURATION: "duration_ms", OFFLINE: "offline", SPINE: "spine", YEAR: "year",
-              DISC: "disc", SUBTITLE: "subtitle"}
+              DISC: "disc", SUBTITLE: "subtitle", FAV: "fav", WATCH: "watch"}
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -321,6 +335,15 @@ class LibraryModel(QAbstractListModel):
         self.view: dict = {}           # search / sort / filters (Dashboard.setView)
         self.spines = False            # look up spine art only while the shelf view is on (it costs file checks)
         self.title_pref = "english"    # Settings > Library > Titles (set by reload)
+        self.private_closed: set = set()   # private folders not signed in to: their titles are left out everywhere
+        self.mark = ""                 # "favourite" / "watchlist": show only those
+        self._marks: dict = {}
+
+    @Slot(int, int, result="QVariantList")
+    def keysBetween(self, a: int, b: int):
+        """The cards from row a to row b (Shift-click selects a range)."""
+        lo, hi = max(0, min(a, b)), min(len(self._rows) - 1, max(a, b))
+        return [r["key"] for r in self._rows[lo:hi + 1]]
 
     def roleNames(self):
         return self.NAMES
@@ -336,6 +359,12 @@ class LibraryModel(QAbstractListModel):
         return scraper.untag(value) if isinstance(value, str) else value     # titles from before 1.0.6 too
 
     def _row(self, card: dict, online: bool, files: "FolderIndex") -> dict:
+        row = self._card_row(card, online, files)
+        row["fav"] = card["key"] in self._marks.get("favourite", ())
+        row["watch"] = card["key"] in self._marks.get("watchlist", ())
+        return row
+
+    def _card_row(self, card: dict, online: bool, files: "FolderIndex") -> dict:
         art = art_item(card)
         poster = scraper.cover_path(art, files.has)
         if art is not card and not files.has(poster):
@@ -373,10 +402,14 @@ class LibraryModel(QAbstractListModel):
         self.title_pref = db.get_setting("title_language", "english") or "english"
         cards = db.list_library(dir_id)
         index = db.search_index()
+        if self.private_closed:            # private folders you have not signed in to
+            cards = [c for c in cards if c["parent_directory_id"] not in self.private_closed]
         if dir_id is None:                 # the All tab leaves out the folders and tags you chose to hide from it
             cards = db.visible_in_all(cards, index)
+        self._marks = db.marks()
         online = {d["id"]: os.path.isdir(d["folder_path"]) for d in db.list_directories()}   # one check per folder
-        shown = library_view(cards, index, **self.view) if self.view else cards
+        marked = self._marks.get(self.mark) if self.mark else None
+        shown = library_view(cards, index, **self.view, marked=marked) if (self.view or marked is not None) else cards
         files = FolderIndex()               # one listing per art folder instead of several file checks per card
         rows = [self._row(c, online.get(c["parent_directory_id"], True), files) for c in shown]
         if not fresh and rows == self._rows:
@@ -445,14 +478,15 @@ class LibraryModel(QAbstractListModel):
 
 
 class TabsModel(QAbstractListModel):
-    ID, NAME = Qt.UserRole + 1, Qt.UserRole + 2
+    ID, NAME, LOCKED = Qt.UserRole + 1, Qt.UserRole + 2, Qt.UserRole + 3
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._rows = [(-1, "All")]
+        self._rows = [(-1, "All", False)]
+        self.private_closed: set = set()
 
     def roleNames(self):
-        return {self.ID: b"tabId", self.NAME: b"name"}
+        return {self.ID: b"tabId", self.NAME: b"name", self.LOCKED: b"locked"}
 
     def rowCount(self, parent=QModelIndex()):
         return 0 if parent.isValid() else len(self._rows)
@@ -460,11 +494,11 @@ class TabsModel(QAbstractListModel):
     def data(self, index, role=Qt.DisplayRole):
         if not index.isValid():
             return None
-        tab_id, name = self._rows[index.row()]
-        return tab_id if role == self.ID else name if role == self.NAME else None
+        tab_id, name, locked = self._rows[index.row()]
+        return tab_id if role == self.ID else name if role == self.NAME else locked if role == self.LOCKED else None
 
     def reload(self):
-        rows = [(-1, "All")] + [(d["id"], d["tab_name"]) for d in db.list_directories()]
+        rows = [(-1, "All", False)] + [(d["id"], d["tab_name"], d["id"] in self.private_closed) for d in db.list_directories()]
         if rows == self._rows:             # the tab bar is not rebuilt (and does not flicker) for nothing
             return
         self.beginResetModel()
@@ -498,6 +532,9 @@ class Dashboard(QObject):
     lockChanged = Signal()                       # a sign-in was added or removed (Settings > Privacy)
     unlockResult = Signal(bool, str)             # ok, message for the lock screen
     _unlocked = Signal()                         # from a worker thread: open the library (on the main thread)
+    continueChanged = Signal()                   # the Continue Watching row
+    privateOpened = Signal(int)                  # signed in for a private tab: the dashboard switches to it (-1: none)
+    undoOffered = Signal(str)                    # a message with an Undo button (Backend.undoLast)
     jobsChanged = Signal()                       # progress pills under the top bar (utils/progress.py)
     _progress = Signal("QVariantMap")            # from any thread: one job's new state, handled on the main thread
     _quitForUpdate = Signal()                    # from a worker thread: close Media Vault so setup can replace it
@@ -537,6 +574,11 @@ class Dashboard(QObject):
         self._locked = False
         self._unlocking = False
         self._match_hits: dict[str, dict] = {}                # Fix Scraped Data: key -> {pid: full details}
+        self._private_open = False                            # signed in this session: private tabs show
+        self._lock_reason, self._pending_tab = "app", -1
+        self._continue: list = []
+        self._undo = None
+        self._guides: set = set()                             # series whose episode guide was asked for this session
         self.hwnd = None                                       # the library window: Windows' sign-in prompt sits on it
         self._unlocked.connect(self._set_unlocked)
         self._jobs: dict[int, dict] = {}
@@ -545,7 +587,8 @@ class Dashboard(QObject):
         progress.subscribe(self._progress.emit)
         try:
             from utils import applock
-            self._locked = db.db_exists() and applock.enabled()
+            # "private": only the private tabs ask you to sign in; the rest of the library opens as usual
+            self._locked = db.db_exists() and applock.enabled() and db.get_setting("lock_scope", "app") != "private"
         except Exception:
             log.exception("app lock")
 
@@ -579,6 +622,39 @@ class Dashboard(QObject):
     def _set_unlocked(self):
         if self._locked:
             self._locked = False
+            self._private_open = True                # one sign-in opens the private tabs too
+            tab, self._pending_tab, self._lock_reason = self._pending_tab, -1, "app"
+            self.lockedChanged.emit()
+            if not self._needs_setup:
+                self.reload()
+                self.privateOpened.emit(tab)
+
+    def private_closed(self) -> set:
+        """Private folders whose titles are hidden right now."""
+        if self._private_open:
+            return set()
+        try:
+            from utils import applock
+            return db.private_dirs() if applock.enabled() else set()
+        except Exception:
+            return set()
+
+    @Property(str, notify=lockedChanged)
+    def lockReason(self):
+        return self._lock_reason
+
+    @Slot(int)
+    def requestPrivate(self, tab_id: int):
+        """A private tab was clicked: ask to sign in (the lock screen, with a Cancel)."""
+        if self._locked or not self.private_closed():
+            return
+        self._lock_reason, self._pending_tab, self._locked = "private", tab_id, True
+        self.lockedChanged.emit()
+
+    @Slot()
+    def cancelLock(self):
+        if self._locked and self._lock_reason == "private":
+            self._locked, self._lock_reason, self._pending_tab = False, "app", -1
             self.lockedChanged.emit()
 
     @Slot(result="QVariantMap")
@@ -625,6 +701,12 @@ class Dashboard(QObject):
             self.app.engine.stop()
         except Exception:
             log.warning("stop before lock", exc_info=True)
+        self._private_open = False
+        if db.get_setting("lock_scope", "app") == "private":     # only the private tabs close
+            self.reload()
+            self.privateOpened.emit(-1)
+            self.toast.emit("Private tabs locked")
+            return
         self._locked = True
         self.lockedChanged.emit()
 
@@ -733,8 +815,14 @@ class Dashboard(QObject):
     def reload(self):
         if self._needs_setup:
             return
+        closed = self.private_closed()
+        self.library.private_closed = self.tabs.private_closed = closed
+        if self._tab in closed:
+            self._tab = -1
         self.tabs.reload()
-        self._refresh_billboard(self.library.reload(None if self._tab < 0 else self._tab))
+        cards = self.library.reload(None if self._tab < 0 else self._tab)
+        self._refresh_billboard(cards)
+        self._refresh_continue(cards)
         offline = [d["tab_name"] for d in db.list_directories() if not os.path.isdir(d["folder_path"])]
         if offline != self._offline:
             self._offline = offline
@@ -763,9 +851,130 @@ class Dashboard(QObject):
 
     @Slot(int)
     def selectTab(self, tab_id: int):
+        if tab_id in self.private_closed():
+            return
         self._tab = tab_id
         self._bb_keys = []  # new tab, new random picks
-        self._refresh_billboard(self.library.reload(None if tab_id < 0 else tab_id, fresh=True))
+        cards = self.library.reload(None if tab_id < 0 else tab_id, fresh=True)
+        self._refresh_billboard(cards)
+        self._refresh_continue(cards)
+
+    # -- Continue Watching: what you stopped part-way, newest first (off in Settings, or per tab in its Configure)
+    @Property("QVariantList", notify=continueChanged)
+    def continueWatching(self):
+        return self._continue
+
+    def _refresh_continue(self, cards: list[dict]):
+        rows = []
+        if db.get_setting("continue_watching", "1") != "0" and self._tab not in set(db.hidden("continue_dirs")):
+            files = FolderIndex()
+            started = [c for c in cards if not c["is_completed"] and (
+                (c["last_position"] or 0) > 10 or (c["watched"] and (c["episodes"] or c.get("films"))))]
+            started.sort(key=lambda c: c.get("last_watched") or "", reverse=True)
+            pref = self.library.title_pref
+            for c in started[:12]:
+                poster = scraper.cover_path(art_item(c), files.has)
+                dur, pos = c["duration"] or 0, c["last_position"] or 0
+                left = duration_label(max(0, dur - pos)) if pos > 10 and dur else ""
+                what = db.episode_suffix(c["title"]).strip() if c["episodes"] else ""
+                rows.append({"key": c["key"], "title": display_titles(c, pref)[0], "poster": files.url(poster) if files.has(poster) else "",
+                             "progress": min(1.0, pos / dur) if dur and pos > 10 else 0.0,
+                             "note": " \u00B7 ".join(x for x in (what or ("Next up" if pos <= 10 else ""), f"{left} left" if left else "") if x)})
+        if rows != self._continue:
+            self._continue = rows
+            self.continueChanged.emit()
+
+    @Slot(int, result=str)
+    def tabName(self, tab_id: int) -> str:
+        d = db.get_directory(tab_id) if tab_id >= 0 else None
+        return d["tab_name"] if d else "All"
+
+    @Slot(str, str)
+    def setMarkFilter(self, kind: str, _unused: str = ""):
+        """The Favourites / Watchlist pills: "" shows everything."""
+        self.library.mark = kind if kind in db.MARKS else ""
+        self.library.reload(None if self._tab < 0 else self._tab)
+
+    # -- things done to one card or to a selection of them (right-click menu, selection bar)
+    @Slot("QVariantList", bool)
+    def setWatched(self, keys, done: bool):
+        db.set_watched([u for k in keys for u in db.uuids_for(str(k))], done)
+        self.reload()
+
+    @Slot("QVariantList", str, bool)
+    def setMark(self, keys, kind: str, on: bool):
+        db.set_mark([str(k) for k in keys], kind, on)
+        self.library.reload(None if self._tab < 0 else self._tab)
+
+    @Slot("QVariantList", str, result=str)
+    def groupIntoSet(self, keys, name: str) -> str:
+        """Selected films into one new box set. Returns its key ("" when fewer than two films were selected)."""
+        uids = [str(k) for k in keys if not str(k).startswith(("show:", "set:"))]
+        films = [u for u in uids if (db.get_media(u) or {}).get("media_type") == "movie"]
+        name = name.strip()
+        if len(films) < 2 or not name:
+            self.toast.emit("Select two or more films to make a box set")
+            return ""
+        cid = db.new_set_id()
+        db.add_to_set(films, cid, name)
+        self.reload()
+        return f"set:{cid}"
+
+    @Slot("QVariantList")
+    def fetchMissingFor(self, keys):
+        """Fetch missing details for the selected titles only."""
+        uids = {u for k in keys for u in db.uuids_for(str(k))}
+        dirs = {(db.get_media(u) or {}).get("parent_directory_id") for u in uids} - {None}
+
+        def work():
+            from watcher import fetch_missing
+            n = 0
+            for did in dirs:
+                d = db.get_directory(did)
+                try:
+                    n += fetch_missing(d, only=uids) if d else 0
+                except Exception as e:
+                    log.exception("fetch missing (selection)")
+                    self.toast.emit(f"Could not update: {e}")
+            self.toast.emit(f"Updated {n} title{'s' if n != 1 else ''}" if n else "Nothing missing in the selection")
+            self.libraryChanged.emit()
+        threading.Thread(target=work, daemon=True, name="fetch-selection").start()
+
+    # -- Undo: the last removal can be taken back for a few seconds
+    def _offer_undo(self, message: str, undo):
+        self._undo = undo
+        self.undoOffered.emit(message)
+
+    @Slot()
+    def undoLast(self):
+        undo, self._undo = self._undo, None
+        if undo:
+            try:
+                undo()
+            except Exception:
+                log.exception("undo")
+                self.toast.emit("Could not undo that")
+            self.reload()
+
+    # -- a series' episode guide: names, synopses and pictures (TMDB, else TVmaze), fetched once when it is opened
+    @Slot(str)
+    def fetchEpisodeGuide(self, key: str):
+        if not key.startswith("show:") or key in self._guides:
+            return
+        self._guides.add(key)
+        eps = db.episodes_in(key[5:])
+        if not eps or all(e.get("episode_title") and scraper.still_path(e).exists() for e in eps):
+            return
+
+        def work():
+            try:
+                seasons = {se[0] for se in (scraper.season_episode(e["title"]) for e in eps) if se}
+                guide = scraper.episode_guide(db.series_title(eps[0]["title"]), eps[0].get("tmdb_id"), seasons, scraper.api_keys())
+                if guide and scraper.save_episode_guide(eps, guide):
+                    self.boxArtChanged.emit(key)
+            except Exception:
+                log.warning("episode guide for %s", key, exc_info=True)
+        threading.Thread(target=work, daemon=True, name="episode-guide").start()
 
     def start(self):
         self._insights_visible = db.get_setting("show_insights") == "1"
@@ -783,7 +992,7 @@ class Dashboard(QObject):
 
     def _refresh_insights(self):
         excluded = db.excluded_tags()
-        data = db.analytics(excluded, excluded_dirs=db.hidden("insights_dirs"))
+        data = db.analytics(excluded, excluded_dirs=set(db.hidden("insights_dirs")) | self.private_closed())
         h, m = divmod(data["total_minutes"], 60)
         insights = {
             "total": f"{h}h {m:02d}m",
@@ -872,7 +1081,7 @@ class Dashboard(QObject):
             if not films and not eps and item.get("collection_id") is not None else None
         return {
             "key": key, "isShow": bool(eps), "isSet": bool(films), "kind": "show" if eps or item["media_type"] == "show" else "movie",
-            "canMatch": not films and item["media_type"] != "clip", "title": shown[0] if not films else item["title"],
+            "canMatch": item["media_type"] != "clip", "title": shown[0] if not films else item["title"],
             "subtitle": shown[1] if not films else "",
             "synopsis": (own if films else in_set if in_set is not None else item["synopsis"]) or "",
             # a film in a box set: its own episode name and synopsis (an OVA's "#2" is an episode of a series)
@@ -910,6 +1119,7 @@ class Dashboard(QObject):
             "episodes": [{"uuid": e["uuid"], "title": e["title"] + (f' \u2014 ({e["release_date"][:4]})' if films and e["release_date"] else "")
                           + (f' \u2014 {e["episode_title"]}' if films and e.get("episode_title") else ""),
                           "done": bool(e["is_completed"]),
+                          **(episode_row(e) if eps else {}),
                           "progress": min(1.0, e["last_position"] / e["duration"]) if e["duration"] and not e["is_completed"] else 0}
                          for e in (eps or films)],
         }
@@ -972,6 +1182,9 @@ class Dashboard(QObject):
                 jobs["omdb"] = lambda: scraper.omdb_search(kind, q, y, keys["omdb"])
             order = (["anilist", "mal", "kitsu", "tmdb", "tvmaze", "omdb"] if anime
                      else ["tmdb", "tvmaze", "omdb", "anilist", "mal", "kitsu"])
+            if key.startswith("set:") and keys.get("tmdb"):          # a box set: TMDB's collections first
+                jobs["tmdbset"] = lambda: scraper.tmdb_collection_search(q, keys["tmdb"])
+                order.insert(0, "tmdbset")
             from concurrent.futures import as_completed
             got, errors = {}, []
             with ThreadPoolExecutor(len(jobs)) as pool:
@@ -1015,6 +1228,8 @@ class Dashboard(QObject):
             return scraper.omdb_details(ident, keys["omdb"])
         # "tv:123" / "movie:123" (a pasted link names its kind, whatever this title was)
         kind, _, num = ident.rpartition(":")
+        if kind == "collection":
+            return scraper.tmdb_collection_details(int(num), keys["tmdb"])
         show = key.startswith("show:")
         return scraper.tmdb_details({"tv": "show", "movie": "movie"}.get(kind, "show" if show else "movie"), int(num), keys["tmdb"])
 
@@ -1056,6 +1271,43 @@ class Dashboard(QObject):
                 self.matchFailed.emit(key, "; ".join(errors) or "Nothing came back")
         threading.Thread(target=work, daemon=True, name="match-details").start()
 
+    def _apply_set_parts(self, key: str, choices: dict, hits: dict):
+        """Fix Scraped Data on a box set's own page: its name, synopsis, poster, banner and disc. Its films are not
+        touched."""
+        cid = key[4:]
+        films = db.films_in_set(cid)
+        if not films or not hits:
+            self.matchFailed.emit(key, "Search again: the results have expired")
+            return
+        item = scraper.collection_item(cid, films[0].get("collection_name") or "")
+
+        def pick(field):
+            pid = choices.get(field)
+            return hits.get(pid) if isinstance(pid, str) else None
+        try:
+            if (h := pick("title")) and h.get("title"):
+                db.rename_collection(cid, h["title"])
+            if (h := pick("synopsis")):
+                db.set_collection_synopsis(cid, h.get("synopsis") or "")
+            for field, face, url_key, path, box in (("poster", "front", "poster_url", scraper.poster_path, scraper.POSTER_BOX),
+                                                    ("disc", "disc", "disc_url", scraper.disc_path, (500, 500))):
+                if (f := _upload_path(choices.get(field))):
+                    save_box_art(Image.open(f), [item], face)
+                elif (h := pick(field)) and h.get(url_key):
+                    scraper.save_webp(scraper.fetch_image(h[url_key]), path(item), box=box)
+            if (f := _upload_path(choices.get("banner"))):
+                scraper.save_webp(ImageOps.exif_transpose(Image.open(f)), scraper.banner_path(item), box=scraper.BANNER_BOX)
+            elif (h := pick("banner")):
+                scraper.save_banner(item, h.get("banner_url"), force=True)
+        except Exception as e:
+            log.exception("fix box set")
+            self.matchFailed.emit(key, f"Could not apply: {e}")
+            return
+        self.toast.emit("Box set updated")
+        self.libraryChanged.emit()
+        self.boxArtChanged.emit(key)
+        self.matchApplied.emit(key, key)
+
     @Slot(str, str)
     def pickMatchFiles(self, key: str, field: str):
         """Fix Scraped Data > "Upload file": choose your own picture for a field (several for the Gallery).
@@ -1082,6 +1334,8 @@ class Dashboard(QObject):
     def _apply_parts(self, key: str, choices: dict, primary: str):
         from utils import anilist, progress
         hits = self._match_hits.get(key) or {}
+        if key.startswith("set:"):
+            return self._apply_set_parts(key, choices, hits)
         show = key.startswith("show:")
         items = [i for i in (db.get_media(u) for u in db.uuids_for(key)) if i]
         if not items or not hits:
@@ -1247,14 +1501,23 @@ class Dashboard(QObject):
 
     @Slot(str)
     def removeFromSet(self, uuid: str):
+        was = db.get_media(uuid) or {}
         db.remove_from_set([uuid])
         self.libraryChanged.emit()
+        if was.get("collection_id") is not None:
+            self._offer_undo(f"Removed from {was.get('collection_name') or 'the box set'}",
+                             lambda: db.add_to_set([uuid], was["collection_id"], was.get("collection_name") or ""))
 
     @Slot(str)
     def ungroupSet(self, key: str):
         if key.startswith("set:"):
-            db.remove_from_set(db.uuids_for(key))
+            films = db.films_in_set(key[4:])
+            db.remove_from_set([f["uuid"] for f in films])
             self.libraryChanged.emit()
+            if films:
+                name = films[0].get("collection_name") or ""
+                self._offer_undo(f"Ungrouped {name or 'the box set'}",
+                                 lambda: db.add_to_set([f["uuid"] for f in films], int(key[4:]), name))
 
     @staticmethod
     def _slide(key, item, label, uuid=""):
@@ -1431,8 +1694,11 @@ class Dashboard(QObject):
 
     @Slot(str, str)
     def removeTag(self, key: str, name: str):
-        db.remove_tag_many(db.uuids_for(key), name)
+        uids = db.uuids_for(key)
+        db.remove_tag_many(uids, name)
         self._refresh_insights()
+        shown = name.split(":", 1)[1] if name.startswith("auto:") else name
+        self._offer_undo(f"Removed the tag {shown}", lambda: (db.add_tag_many(uids, name), self.boxArtChanged.emit(key)))
 
     @Slot(str, int)
     def setRating(self, key: str, stars: int):
@@ -1651,8 +1917,15 @@ class Dashboard(QObject):
     def removeGalleryImage(self, key: str, name: str):
         item = self._target(key)
         if item and re.fullmatch(r"[cs]-[\w.-]+\.webp", name):
-            (scraper.gallery_dir(item) / name).unlink(missing_ok=True)
+            src = scraper.gallery_dir(item) / name
+            if not src.is_file():
+                return
+            # set aside, not deleted, until the next removal or the end of the session: Undo puts it back
+            aside = db.data_dir() / "cache" / "undo.webp"
+            aside.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(src), str(aside))
             self.boxArtChanged.emit(key)
+            self._offer_undo("Removed the image", lambda: (shutil.move(str(aside), str(src)), self.boxArtChanged.emit(key)))
 
     @Slot(str, str)
     def resetBoxArt(self, key: str, face: str):
@@ -1705,7 +1978,9 @@ class Dashboard(QObject):
                  "parts": sorted(db.scrape_opts({**d, "should_scrape": 1})),
                  "anime": (d.get("source") or "tmdb") == "anilist",
                  "inAll": d["id"] not in set(db.hidden("all_dirs")),
-                 "inInsights": d["id"] not in set(db.hidden("insights_dirs"))} for d in db.list_directories()]
+                 "inInsights": d["id"] not in set(db.hidden("insights_dirs")),
+                 "continueRow": d["id"] not in set(db.hidden("continue_dirs")),
+                 "private": d["id"] in db.private_dirs()} for d in db.list_directories()]
 
     @Slot(result="QVariantList")
     def scrapeParts(self):
@@ -1725,12 +2000,17 @@ class Dashboard(QObject):
     # -- keep folders / tags out of the All tab, or folders out of Insights
     @Slot(str, result="QVariantList")
     def hiddenFrom(self, kind: str):
-        return db.hidden(kind) if kind in ("all_dirs", "all_tags", "insights_dirs") else []
+        return db.hidden(kind) if kind in HIDDEN_KINDS else []
 
     @Slot(str, str)
     def toggleHidden(self, kind: str, value: str):
-        if kind not in ("all_dirs", "all_tags", "insights_dirs"):
+        if kind not in HIDDEN_KINDS:
             return
+        if kind == "private_dirs":
+            from utils import applock
+            if not applock.enabled():
+                self.toast.emit("Set a password or another sign-in first (Settings \u203A Privacy)")
+                return
         v = int(value) if kind.endswith("dirs") else value
         now = set(db.hidden(kind))
         now.symmetric_difference_update({v})

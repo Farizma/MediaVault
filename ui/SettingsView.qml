@@ -609,6 +609,21 @@ Item {
                             text: "For titles already in your library. Your own box art and Gallery images, and banners, are kept. It takes a while for a large library." }
                     }
 
+                    Caption { text: "CONTINUE WATCHING"; Layout.topMargin: 10 }
+                    Toggle {
+                        Layout.fillWidth: true
+                        text: "Show a Continue Watching row"
+                        hint: "Titles you stopped part-way, above the catalog. Each folder can leave it out of its own tab (Configure)."
+                        checked: Backend.setting("continue_watching") !== "0"
+                        onToggled: { Backend.setSetting("continue_watching", checked ? "1" : "0"); Backend.reload() }
+                    }
+                    Toggle {
+                        Layout.fillWidth: true
+                        text: "Also in the All tab"
+                        checked: Backend.hiddenFrom("continue_dirs").indexOf(-1) < 0
+                        onToggled: { Backend.toggleHidden("continue_dirs", "-1"); Backend.reload() }
+                    }
+
                     Caption { text: "STORAGE"; Layout.topMargin: 10 }
                     ColumnLayout {
                         id: storage
@@ -825,6 +840,28 @@ Item {
                         GlassButton { small: true; visible: root.lock.enabled === true; label: "Lock now"; onClicked: { root.close(); Backend.lockNow() } }
                     }
 
+                    Caption { text: "WHAT IS LOCKED"; Layout.topMargin: 8 }
+                    Flow {
+                        Layout.fillWidth: true; spacing: 8
+                        property string scope: Backend.setting("lock_scope") || "app"
+                        id: scopeRow
+                        Repeater {
+                            model: [["app", "All of Media Vault"], ["private", "Only private tabs"]]
+                            Pill { label: modelData[1]; selected: scopeRow.scope === modelData[0]; accent: Theme.blue
+                                onClicked: { scopeRow.scope = modelData[0]; Backend.setSetting("lock_scope", modelData[0]) } }
+                        }
+                    }
+                    Text { Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 12
+                        text: scopeRow.scope === "private" ? "Media Vault opens without asking. Private tabs (a folder's Configure \u203A Private tab) and their titles stay hidden, also from All, search, Insights and Discord, until you click one and sign in."
+                                                           : "Media Vault asks you to sign in when it starts. Signing in opens private tabs too." }
+                    Flow {
+                        Layout.fillWidth: true; spacing: 6
+                        visible: privateRep.count > 0
+                        Text { text: "Private tabs:"; color: Theme.muted; font.pixelSize: 12; height: 26; verticalAlignment: Text.AlignVCenter }
+                        Repeater { id: privateRep; model: Backend.directories().filter(function(d) { return d.private })
+                            Pill { label: modelData.name; accent: Theme.amber } }
+                    }
+
                     Caption { text: "PASSWORD"; Layout.topMargin: 8 }
                     RowLayout {
                         Layout.fillWidth: true
@@ -894,6 +931,17 @@ Item {
                     Field { Layout.fillWidth: true; placeholderText: "Paste your TMDB key"; echoMode: TextInput.Password; text: Backend.setting("tmdb_key"); onActiveFocusChanged: if (!activeFocus) Backend.setSetting("tmdb_key", text) }
                     Caption { text: "OMDB API KEY (FALLBACK)" }
                     Field { Layout.fillWidth: true; placeholderText: "Paste your OMDb key"; echoMode: TextInput.Password; text: Backend.setting("omdb_key"); onActiveFocusChanged: if (!activeFocus) Backend.setSetting("omdb_key", text) }
+                    Caption { text: "OPENSUBTITLES API KEY (SUBTITLE DOWNLOADS)" }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+                        Field { Layout.fillWidth: true; placeholderText: "Paste your OpenSubtitles API key"; echoMode: TextInput.Password
+                            text: Backend.setting("opensubtitles_key"); onActiveFocusChanged: if (!activeFocus) Backend.setSetting("opensubtitles_key", text) }
+                        Field { Layout.preferredWidth: 110; placeholderText: "Language (en)"; maximumLength: 5
+                            text: Backend.setting("subtitle_language"); onActiveFocusChanged: if (!activeFocus) Backend.setSetting("subtitle_language", text) }
+                    }
+                    Text { Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 11
+                        text: "Free at opensubtitles.com (Consumers). In the player: Audio & Subtitles \u203A Find subtitles online takes the most downloaded match in that language." }
                     Caption { text: "FANART.TV API KEY (DISC ART FOR FILMS)" }
                     Field { Layout.fillWidth: true; placeholderText: "Paste your fanart.tv key"; echoMode: TextInput.Password; text: Backend.setting("fanart_key"); onActiveFocusChanged: if (!activeFocus) Backend.setSetting("fanart_key", text) }
                     Text { Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 11

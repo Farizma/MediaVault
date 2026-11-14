@@ -466,6 +466,8 @@ Window {
                     }
                     Head { text: "SUBTITLES" }
                     Drop { id: subDrop; tracks: win.subs; onPickedId: (id) => Player.setSub(id) }
+                    GlassButton { small: true; label: "Find subtitles online"; Layout.topMargin: 4
+                        tip: "Search OpenSubtitles for this video and switch the best match on"; onClicked: Player.findSubtitles() }
                     // timing: nudge in 0.1 s steps (Z / X on the keyboard)
                     RowLayout {
                         Layout.fillWidth: true

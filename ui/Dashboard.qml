@@ -130,9 +130,49 @@ Item {
     property bool shelf: false
     property var opts: ({})
     property var searchField: null
-    readonly property bool filtered: query !== "" || genre !== "" || quality !== "" || unwatched || sort !== "title"
+    property string mark: ""              // "favourite" / "watchlist": show only those
+    readonly property bool filtered: query !== "" || genre !== "" || quality !== "" || unwatched || sort !== "title" || mark !== ""
     function applyView() { Backend.setView(query, sort, genre, quality, unwatched) }
-    function clearView() { query = ""; sort = "title"; genre = ""; quality = ""; unwatched = false; applyView() }
+    function setMark(kind) { mark = mark === kind ? "" : kind; Backend.setMarkFilter(mark, "") }
+    function clearView() { query = ""; sort = "title"; genre = ""; quality = ""; unwatched = false; if (mark !== "") setMark(mark); applyView() }
+
+    // ---- selecting several cards: Ctrl-click adds one, Shift-click a range; then one click acts on all of them
+    property var selection: ({})
+    property int selAnchor: -1
+    readonly property int selCount: Object.keys(selection).length
+    function selKeys() { return Object.keys(selection) }
+    function selToggle(key, idx) {
+        var s = Object.assign({}, selection)
+        if (s[key]) delete s[key]; else s[key] = true
+        selection = s; selAnchor = idx
+    }
+    function selRange(idx) {
+        var s = Object.assign({}, selection)
+        Library.keysBetween(selAnchor < 0 ? idx : selAnchor, idx).forEach(function(k) { s[k] = true })
+        selection = s
+    }
+    function selClear() { selection = ({}); selAnchor = -1 }
+    // a click on a card: the menu (right), the selection (Ctrl, Shift, or while selecting), else what it normally does
+    function cardClicked(m, key, idx, item, row, normal) {
+        if (m.button === Qt.RightButton) { cardMenu.show(key, idx, item, m.x, m.y, row); return }
+        if (m.modifiers & Qt.ShiftModifier) { selRange(idx); return }
+        if ((m.modifiers & Qt.ControlModifier) || selCount > 0) { selToggle(key, idx); return }
+        normal()
+    }
+    Shortcut { sequence: "Esc"; enabled: dash.selCount > 0 && !dash.overlayOpen && !cardMenu.opened; onActivated: dash.selClear() }
+    Shortcut { sequences: [StandardKey.SelectAll]; enabled: !dash.overlayOpen && grid.activeFocus
+        onActivated: { dash.selAnchor = 0; dash.selRange(grid.count - 1) } }
+
+    // ---- keyboard: arrows move a focus ring over the cards, Enter opens View More, Space plays
+    property bool keyNav: false
+    Keys.onPressed: (e) => {
+        if (overlayOpen) return
+        if ([Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down].indexOf(e.key) >= 0 && !grid.activeFocus) {
+            grid.forceActiveFocus(); keyNav = true
+            if (grid.currentIndex < 0) grid.currentIndex = 0
+            e.accepted = true
+        }
+    }
     function setShelf(on) { shelf = on; stagger = true; staggerOff.restart(); grid.keptY = -1; Backend.setShelf(on); grid.keptY = -1; grid.userScrolled = false; grid.positionViewAtBeginning() }
     Timer { id: searchDebounce; interval: 160; onTriggered: dash.applyView() }
     Shortcut { sequences: [StandardKey.Find]; onActivated: if (dash.searchField) { grid.contentY = grid.originY; dash.searchField.forceActiveFocus() } }
@@ -192,6 +232,17 @@ Item {
             onMovementStarted: userScrolled = true
             cacheBuffer: 900
             reuseItems: true
+            focus: true
+            keyNavigationEnabled: true
+            currentIndex: -1
+            highlightFollowsCurrentItem: true
+            Keys.onPressed: (e) => {
+                if ([Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down].indexOf(e.key) >= 0) {
+                    dash.keyNav = true
+                    if (currentIndex < 0) { currentIndex = 0; e.accepted = true }
+                } else if ((e.key === Qt.Key_Return || e.key === Qt.Key_Enter) && currentItem) { currentItem.openBox(); e.accepted = true }
+                else if (e.key === Qt.Key_Space && currentItem) { currentItem.playNow(); e.accepted = true }
+            }
             boundsBehavior: Flickable.StopAtBounds
             ScrollBar.vertical: ScrollBar { parent: content; x: content.width - width; y: grid.y; height: grid.height }
             SmoothWheel { view: grid; onScrolled: grid.userScrolled = true }
@@ -474,6 +525,59 @@ Item {
                     }
                 }
 
+                // ---- Continue Watching: what you stopped part-way, newest first (Settings > Library, or per tab)
+                Column {
+                    id: continueRow
+                    readonly property var rows: Backend.continueWatching || []
+                    visible: rows.length > 0
+                    width: grid.span
+                    spacing: 10
+                    Text { text: "Continue Watching"; color: "#FFFFFF"; font.pixelSize: 16; font.weight: Font.ExtraBold; font.letterSpacing: -0.3 }
+                    ListView {
+                        id: continueList
+                        width: parent.width; height: 96
+                        orientation: ListView.Horizontal
+                        spacing: 12
+                        clip: true
+                        boundsBehavior: Flickable.StopAtBounds
+                        model: continueRow.rows
+                        delegate: Rectangle {
+                            id: cw
+                            width: 300; height: 88; radius: 12
+                            color: cwArea.containsMouse ? Theme.fillHover : Theme.slate
+                            border.color: cwArea.containsMouse ? "#40FFFFFF" : Theme.line
+                            Behavior on color { ColorAnimation { duration: 140 * Theme.motion } }
+                            scale: cwArea.pressed ? 0.98 : 1
+                            Behavior on scale { NumberAnimation { duration: 140 * Theme.motion; easing.type: Easing.OutCubic } }
+                            Rectangle { id: cwArt; x: 8; y: 8; width: 48; height: 72; radius: 6; color: Theme.graphite; clip: true
+                                Image { anchors.fill: parent; source: modelData.poster; fillMode: Image.PreserveAspectCrop; asynchronous: true
+                                    sourceSize.width: 96; sourceSize.height: 144 } }
+                            Column {
+                                anchors { left: cwArt.right; leftMargin: 12; right: cwPlay.left; rightMargin: 10; verticalCenter: parent.verticalCenter }
+                                spacing: 5
+                                Text { width: parent.width; text: modelData.title; color: Theme.text; font.pixelSize: 13; font.weight: Font.Bold; elide: Text.ElideRight }
+                                Text { width: parent.width; text: modelData.note; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10; elide: Text.ElideRight }
+                                Rectangle { width: parent.width; height: 4; radius: 2; color: Theme.fill
+                                    Rectangle { width: Math.max(parent.height, parent.width * modelData.progress); height: parent.height; radius: 2; color: Theme.green
+                                        visible: modelData.progress > 0 } }
+                            }
+                            Rectangle { id: cwPlay; anchors { right: parent.right; rightMargin: 12; verticalCenter: parent.verticalCenter }
+                                width: 34; height: 34; radius: 17; color: cwArea.containsMouse ? Theme.text : Qt.rgba(1, 1, 1, 0.10)
+                                Behavior on color { ColorAnimation { duration: 140 * Theme.motion } }
+                                Text { anchors.centerIn: parent; anchors.horizontalCenterOffset: 1; text: "\u25B6"; font.pixelSize: 12
+                                    color: cwArea.containsMouse ? Theme.black : Theme.text } }
+                            MouseArea { id: cwArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                onClicked: (m) => {
+                                    var k = modelData.key
+                                    if (m.button === Qt.RightButton) { cardMenu.show(k, -1, cw, m.x, m.y, { done: false, fav: false, watch: false }); return }
+                                    dash.launch(function() { Backend.play(k) }, k)
+                                } }
+                        }
+                    }
+                    Item { width: 1; height: 6 }
+                }
+
                 // ---- catalog title, search, view toggle, sort and filters
                 Item {
                     width: grid.span
@@ -501,6 +605,8 @@ Item {
                                 Dropdown { options: dash.opts.genres || []; value: dash.genre; onChosen: (v) => { dash.genre = v; dash.applyView() } }
                                 Dropdown { options: dash.opts.qualities || []; value: dash.quality; onChosen: (v) => { dash.quality = v; dash.applyView() } }
                                 Pill { height: 32; label: "Unwatched"; selected: dash.unwatched; accent: Theme.blue; onClicked: { dash.unwatched = !dash.unwatched; dash.applyView() } }
+                                Pill { height: 32; label: "\u2665 Favourites"; selected: dash.mark === "favourite"; accent: Theme.red; onClicked: dash.setMark("favourite") }
+                                Pill { height: 32; label: "Watchlist"; selected: dash.mark === "watchlist"; accent: Theme.green; onClicked: dash.setMark("watchlist") }
                                 // box sets on or off, right here (also in Settings > Library)
                                 Pill { height: 32; label: "Box sets"; selected: dash.boxSets; accent: Theme.amber
                                     onClicked: { dash.boxSets = !dash.boxSets; Backend.setSetting("group_collections", dash.boxSets ? "1" : "0") }
@@ -603,6 +709,11 @@ Item {
                 GridView.onReused: { pointerIn = false; hovered = false; enter() }
                 Component.onCompleted: enter()
                 readonly property int cellIndex: index
+                readonly property bool picked: dash.selection[key] === true
+                readonly property bool ringed: dash.keyNav && GridView.isCurrentItem && grid.activeFocus
+                function rowInfo() { return { done: done, fav: favourite, watch: watchlist } }
+                function openBox() { if (dash.shelf) spineHit.openSpine(); else hit.openBox() }
+                function playNow() { if (offline) return; var k = key; dash.launch(function() { Backend.play(k) }, k) }
                 property real appear: 1
                 // a recycled card may come back half-way through a filter animation (faded, shrunk): start it clean
                 function enter() { scale = 1; appear = 1; if (dash.stagger && Theme.motion > 0) { appear = 0; rise.restart() } }
@@ -718,7 +829,26 @@ Item {
                         border.color: cell.previewing ? "#66FFFFFF" : cell.pointerIn ? "#33FFFFFF" : Theme.line
                         Behavior on border.color { ColorAnimation { duration: 200 * Theme.motion } } }
 
-                    Rectangle { visible: done && cell.opening === 0; width: 24; height: 24; radius: 12; color: Theme.green; anchors { top: parent.top; right: parent.right; margins: 8 }
+                    // selected (blue) or under the keyboard's focus ring (white)
+                    Rectangle { anchors.fill: parent; anchors.margins: -3; radius: 15; color: "transparent"; visible: cell.picked || cell.ringed
+                        border.width: 3; border.color: cell.picked ? Theme.blue : "#FFFFFF" }
+                    Rectangle { visible: cell.picked; width: 24; height: 24; radius: 12; color: Theme.blue; border.color: "#FFFFFF"
+                        anchors { bottom: parent.bottom; left: parent.left; margins: 8 }
+                        Text { anchors.centerIn: parent; text: "\u2713"; color: "#FFFFFF"; font.pixelSize: 13; font.weight: Font.Bold } }
+                    // favourite: a heart, shown when it is one or while the pointer is over the card
+                    Rectangle {
+                        id: heart
+                        visible: (favourite || cell.pointerIn) && cell.opening === 0
+                        width: 26; height: 26; radius: 13; color: heartArea.containsMouse ? "#E6000000" : "#99000000"
+                        anchors { top: parent.top; right: parent.right; margins: 8 }
+                        scale: heartArea.pressed ? 0.85 : 1
+                        Behavior on scale { NumberAnimation { duration: 140 * Theme.motion; easing.type: Easing.OutBack } }
+                        Text { anchors.centerIn: parent; text: favourite ? "\u2665" : "\u2661"; color: favourite ? Theme.red : "#FFFFFF"; font.pixelSize: 14 }
+                    }
+                    Rectangle { visible: watchlist && cell.opening === 0; height: 18; width: wlText.implicitWidth + 10; radius: 5; color: "#BF000000"; border.color: Theme.green
+                        anchors { bottom: parent.bottom; right: parent.right; margins: 8 }
+                        Text { id: wlText; anchors.centerIn: parent; text: "WATCHLIST"; color: Theme.green; font.family: Theme.mono; font.pixelSize: 8; font.weight: Font.Bold } }
+                    Rectangle { visible: done && cell.opening === 0; width: 24; height: 24; radius: 12; color: Theme.green; anchors { top: parent.top; right: parent.right; margins: 8; rightMargin: heart.visible ? 40 : 8 }
                         Text { anchors.centerIn: parent; text: "\u2713"; color: Theme.onGreen; font.pixelSize: 13; font.weight: Font.Bold } }
                     Rectangle { visible: badge !== "" && cell.opening === 0; height: 20; width: badgeText.implicitWidth + 12; radius: 5; color: "#BF000000"; border.color: Theme.line
                         anchors { top: parent.top; left: parent.left; margins: 8 }
@@ -753,7 +883,8 @@ Item {
                         anchors.fill: parent
                         radius: 3
                         color: "#0E0E10"
-                        border.color: spineItem.pulled ? "#66FFFFFF" : "#1FFFFFFF"
+                        border.width: cell.picked || cell.ringed ? 2 : 1
+                        border.color: cell.picked ? Theme.blue : cell.ringed ? "#FFFFFF" : spineItem.pulled ? "#66FFFFFF" : "#1FFFFFFF"
                         clip: true
                         Image { id: spineArt; anchors.fill: parent; anchors.margins: 1; source: spine; visible: status === Image.Ready; fillMode: Image.Stretch; asynchronous: true }
                         Item {
@@ -782,8 +913,10 @@ Item {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.PointingHandCursor
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
                         // the box flies out spine-first and turns to show its cover
-                        onClicked: detail.open(key, cell.mapToItem(detail, spineItem.x, spineItem.y, spineItem.width, spineItem.height), "spine")
+                        function openSpine() { detail.open(key, cell.mapToItem(detail, spineItem.x, spineItem.y, spineItem.width, spineItem.height), "spine") }
+                        onClicked: (m) => dash.cardClicked(m, key, index, spineHit, cell.rowInfo(), openSpine)
                     }
                     Tip { visible: spineItem.pulled; delay: 300; text: title + (year ? "  \u00B7  " + year : "") }
                 }
@@ -805,11 +938,19 @@ Item {
                     function openBox() { detail.open(key, cell.mapToItem(detail, box.x, box.y, box.width, box.height), "card") }
                     onEntered: { cell.pointerIn = true; linger.restart() }
                     onPositionChanged: (m) => {
+                        dash.keyNav = false
                         cell.tx = Math.max(-1, Math.min(1, (m.x / width - 0.5) * 2))
                         cell.ty = Math.max(-1, Math.min(1, (m.y / height - 0.5) * 2))
                     }
                     onExited: { cell.pointerIn = false; cell.tx = 0; cell.ty = 0; linger.stop(); if (cell.hovered) dash.tintTo(dash.billboardArt); cell.hovered = false; dash.stopPreview(vo) }
-                    onClicked: openBox()                 // the poster becomes the 3D box and grows into View More
+                    // the poster becomes the 3D box and grows into View More (or: the menu, the selection)
+                    onClicked: (m) => dash.cardClicked(m, key, index, hit, cell.rowInfo(), openBox)
+                    MouseArea {      // the heart sits on the poster: its own click
+                        id: heartArea
+                        x: parent.width - 34; y: 8; width: 26; height: 26
+                        enabled: heart.visible; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                        onClicked: Backend.setMark([key], "favourite", !favourite)
+                    }
 
                     // hover actions
                     Row {
@@ -901,6 +1042,13 @@ Item {
                                 height: tabList.height; radius: 10
                                 color: !on && tabArea.containsMouse ? Theme.fill : "transparent"
                                 Behavior on width { NumberAnimation { duration: 200 * Theme.motion; easing.type: Easing.OutCubic } }
+                                Canvas {     // private and not signed in: a small padlock
+                                    visible: locked
+                                    anchors { right: parent.right; top: parent.top; rightMargin: 5; topMargin: 4 }
+                                    width: 8; height: 10
+                                    onPaint: { var c = getContext("2d"); c.reset(); c.strokeStyle = c.fillStyle = "#B3FFFFFF"; c.lineWidth = 1.3
+                                        c.beginPath(); c.arc(4, 4, 2.4, Math.PI, 0); c.stroke(); c.fillRect(0.5, 4.5, 7, 5) }
+                                }
                                 Text { id: tabName; visible: !tab.editing; anchors.centerIn: parent; text: name
                                     color: tab.on ? "#000000" : (tabArea.containsMouse ? "#FFFFFF" : "#99FFFFFF"); font.pixelSize: 12; font.weight: Font.Bold
                                     Behavior on color { ColorAnimation { duration: 200 * Theme.motion } } }
@@ -950,6 +1098,7 @@ Item {
                                     onClicked: (m) => {
                                         if (dragged) return
                                         if (m.button === Qt.RightButton) { rename(); return }
+                                        if (locked) { Backend.requestPrivate(tabId); return }     // private: sign in first
                                         if (tab.on) return
                                         dash.stagger = true; staggerOff.restart()
                                         dash.currentTab = tabId; dash.currentTabName = name
@@ -1005,13 +1154,131 @@ Item {
         z: 50
         opacity: 0
         visible: opacity > 0
-        anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 24 + 12 * (1 - opacity) }
-        width: Math.min(toastText.implicitWidth + 36, parent.width - 48); height: 40; radius: 12
+        anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom
+                  bottomMargin: 24 + 12 * (1 - opacity) + (dash.selCount > 0 ? 64 : 0) }      // above the selection bar
+        height: 40; radius: 12
         color: Theme.slate; border.color: "#33FFFFFF"
         Behavior on opacity { NumberAnimation { duration: 200 * Theme.motion; easing.type: Easing.OutCubic } }
-        Text { id: toastText; anchors.centerIn: parent; width: Math.min(implicitWidth, parent.width - 36); elide: Text.ElideRight
+        property bool undo: false
+        width: Math.min(toastText.implicitWidth + 36 + (undo ? undoBtn.width + 14 : 0), parent.width - 48)
+        Text { id: toastText; x: 18; anchors.verticalCenter: parent.verticalCenter
+            width: Math.min(implicitWidth, toast.parent.width - 84 - (toast.undo ? undoBtn.width + 14 : 0)); elide: Text.ElideRight
             color: Theme.text; font.family: Theme.mono; font.pixelSize: 12 }
-        Timer { id: toastHide; interval: 3500; onTriggered: toast.opacity = 0 }
+        Rectangle {
+            id: undoBtn
+            visible: toast.undo
+            anchors { right: parent.right; rightMargin: 8; verticalCenter: parent.verticalCenter }
+            width: undoText.implicitWidth + 20; height: 26; radius: 8
+            color: undoArea.containsMouse ? Theme.text : Qt.rgba(1, 1, 1, 0.12)
+            Text { id: undoText; anchors.centerIn: parent; text: "Undo"; font.pixelSize: 12; font.weight: Font.Bold
+                color: undoArea.containsMouse ? Theme.black : Theme.text }
+            MouseArea { id: undoArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                onClicked: { toast.opacity = 0; toast.undo = false; Backend.undoLast() } }
+        }
+        Timer { id: toastHide; interval: toast.undo ? 7000 : 3500; onTriggered: { toast.opacity = 0; toast.undo = false } }
+    }
+    Connections {
+        target: Backend
+        function onUndoOffered(message) { toastText.text = message; toast.undo = true; toast.opacity = 1; toastHide.restart() }
+        function onPrivateOpened(tab) {       // signed in for a private tab (go to it), or private tabs locked again (-1: back to All)
+            dash.selClear()
+            if (tab === -1 && dash.currentTab === -1) return
+            dash.stagger = true; staggerOff.restart()
+            dash.currentTab = tab; dash.currentTabName = tab < 0 ? "All" : Backend.tabName(tab)
+            Backend.selectTab(tab); grid.keptY = -1; grid.userScrolled = false; grid.positionViewAtBeginning()
+        }
+    }
+
+    // ---- right-click menu for a card (or for the whole selection, when the card is part of it)
+    Popup {
+        id: cardMenu
+        property var keys: []
+        property string key: ""
+        property var row: ({})
+        property rect from: Qt.rect(0, 0, 0, 0)
+        readonly property bool many: keys.length > 1
+        function show(k, idx, item, mx, my, info) {
+            key = k; row = info
+            keys = dash.selection[k] ? dash.selKeys() : [k]
+            var p = item.mapToItem(dash, mx, my)
+            from = item.mapToItem(detail, 0, 0, item.width, item.height)
+            x = Math.max(8, Math.min(p.x, dash.width - width - 8)); y = Math.max(8, Math.min(p.y, dash.height - implicitHeight - 8))
+            open()
+        }
+        function act(fn) { close(); fn() }
+        z: 60
+        width: 230
+        padding: 6
+        transformOrigin: Item.TopLeft
+        enter: Transition { ParallelAnimation {
+            NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 120 * Theme.motion }
+            NumberAnimation { property: "scale"; from: 0.94; to: 1; duration: 160 * Theme.motion; easing.type: Easing.OutCubic } } }
+        exit: Transition { NumberAnimation { property: "opacity"; to: 0; duration: 90 * Theme.motion } }
+        background: Rectangle { radius: 12; color: Theme.graphite; border.color: "#33FFFFFF" }
+        contentItem: Column {
+            spacing: 1
+            Text { visible: cardMenu.many; leftPadding: 10; topPadding: 4; bottomPadding: 6; text: cardMenu.keys.length + " SELECTED"
+                color: Theme.faint; font.family: Theme.mono; font.pixelSize: 9 }
+            Repeater {
+                model: [
+                    { t: "Play", show: !cardMenu.many, f: function() { var k = cardMenu.key; dash.launch(function() { Backend.play(k) }, k) } },
+                    { t: "View More", show: !cardMenu.many, f: function() { detail.open(cardMenu.key, cardMenu.from, "button") } },
+                    { line: true, show: !cardMenu.many },
+                    { t: cardMenu.row.done && !cardMenu.many ? "Mark unwatched" : "Mark watched", show: true,
+                      f: function() { Backend.setWatched(cardMenu.keys, !(cardMenu.row.done && !cardMenu.many)) } },
+                    { t: "Mark unwatched", show: cardMenu.many, f: function() { Backend.setWatched(cardMenu.keys, false) } },
+                    { t: cardMenu.row.fav && !cardMenu.many ? "Remove from Favourites" : "Add to Favourites", show: true,
+                      f: function() { Backend.setMark(cardMenu.keys, "favourite", !(cardMenu.row.fav && !cardMenu.many)) } },
+                    { t: cardMenu.row.watch && !cardMenu.many ? "Remove from Watchlist" : "Add to Watchlist", show: true,
+                      f: function() { Backend.setMark(cardMenu.keys, "watchlist", !(cardMenu.row.watch && !cardMenu.many)) } },
+                    { line: true, show: true },
+                    { t: "Add a tag\u2026", show: true, f: function() { if (!dash.selection[cardMenu.key]) dash.selToggle(cardMenu.key, -1); selTag.forceActiveFocus() } },
+                    { t: dash.selection[cardMenu.key] ? "Deselect" : "Select", show: true, f: function() { dash.selToggle(cardMenu.key, -1) } },
+                    { t: "Fetch missing details", show: true, f: function() { Backend.fetchMissingFor(cardMenu.keys) } },
+                    { t: "Fix Scraped Data\u2026", show: !cardMenu.many,
+                      f: function() { detail.open(cardMenu.key, cardMenu.from, "button"); Qt.callLater(detail.fixData) } }
+                ]
+                Item {
+                    visible: modelData.show
+                    width: 218; height: modelData.line ? 9 : 32
+                    Rectangle { visible: !!modelData.line; anchors.centerIn: parent; width: parent.width - 16; height: 1; color: Theme.line }
+                    Rectangle { visible: !modelData.line; anchors.fill: parent; radius: 7; color: miArea.containsMouse ? Qt.rgba(1, 1, 1, 0.12) : "transparent" }
+                    Text { visible: !modelData.line; x: 10; anchors.verticalCenter: parent.verticalCenter; text: modelData.t || ""; color: Theme.text; font.pixelSize: 13 }
+                    MouseArea { id: miArea; anchors.fill: parent; enabled: !modelData.line; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                        onClicked: cardMenu.act(modelData.f) }
+                }
+            }
+        }
+    }
+
+    // ---- the selection bar: what to do with everything selected
+    Rectangle {
+        id: selBar
+        z: 48
+        visible: opacity > 0.01
+        opacity: dash.selCount > 0 && !dash.overlayOpen ? 1 : 0
+        Behavior on opacity { NumberAnimation { duration: 180 * Theme.motion; easing.type: Easing.OutCubic } }
+        anchors { horizontalCenter: parent.horizontalCenter; bottom: parent.bottom; bottomMargin: 24 + 14 * (1 - opacity) }
+        width: Math.min(selRow.implicitWidth + 28, parent.width - 32); height: 54; radius: 16
+        color: Theme.graphite; border.color: "#40FFFFFF"
+        Rectangle { z: -1; anchors.fill: parent; anchors.topMargin: 8; anchors.margins: -2; radius: 18; color: "#73000000" }
+        MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }
+        Row {
+            id: selRow
+            anchors.centerIn: parent
+            spacing: 8
+            Text { anchors.verticalCenter: parent.verticalCenter; text: dash.selCount + " selected"; color: Theme.text; font.pixelSize: 13; font.weight: Font.Bold; rightPadding: 4 }
+            GlassButton { small: true; label: "Watched"; onClicked: Backend.setWatched(dash.selKeys(), true) }
+            GlassButton { small: true; label: "Unwatched"; onClicked: Backend.setWatched(dash.selKeys(), false) }
+            GlassButton { small: true; label: "\u2665"; tip: "Add to Favourites"; onClicked: Backend.setMark(dash.selKeys(), "favourite", true) }
+            GlassButton { small: true; label: "Watchlist"; onClicked: Backend.setMark(dash.selKeys(), "watchlist", true) }
+            TagField { id: selTag; width: 150; anchors.verticalCenter: parent.verticalCenter; placeholderText: "Add a tag"
+                onChosen: (name) => Backend.bulkTag(dash.selKeys(), name, true) }
+            Field { id: selSet; width: 140; anchors.verticalCenter: parent.verticalCenter; placeholderText: "New box set name"
+                onAccepted: if (Backend.groupIntoSet(dash.selKeys(), text) !== "") { text = ""; dash.selClear() } }
+            GlassButton { small: true; label: "Fetch missing"; onClicked: Backend.fetchMissingFor(dash.selKeys()) }
+            GlassButton { small: true; label: "\u2715"; tip: "Clear the selection (Esc)"; onClicked: dash.selClear() }
+        }
     }
     Image { id: themeShot; anchors.fill: parent; z: 90; opacity: 0; visible: opacity > 0; cache: false }
     NumberAnimation { id: themeFade; target: themeShot; property: "opacity"; to: 0; duration: 450; easing.type: Easing.InOutQuad
@@ -1029,7 +1296,7 @@ Item {
 
     Connections {
         target: Backend
-        function onToast(message) { toastText.text = message; toast.opacity = 1; toastHide.restart() }
+        function onToast(message) { toastText.text = message; toast.undo = false; toast.opacity = 1; toastHide.restart() }
         function onThumbnailsReady(n) { picker.show(n) }
     }
 }

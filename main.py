@@ -144,6 +144,8 @@ class App:
                 hidden = _json.loads(self.db.get_setting("discord_hide_tags", "[]") or "[]")
             except ValueError:
                 modes, hidden = {}, []
+            for d in self.db.private_dirs():          # a private tab never shows on Discord
+                modes[str(d)] = "off"
             self._presence_privacy = privacy(item or None, self.db.tags_for(item["uuid"]) if item else (), modes,
                                              self.db.get_setting("discord_hide_adult", "1") != "0", hidden)
             self._presence_privacy_for = self._presence_item[0]
