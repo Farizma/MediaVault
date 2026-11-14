@@ -188,9 +188,20 @@ Item {
         launchBox.restart()
         playRequested(function() { Backend.playFrom(key, again) })
     }
-    Keys.onEscapePressed: close()
-    Keys.onLeftPressed: step(-1)
-    Keys.onRightPressed: step(1)
+    // keyboard and controller (Settings > Controls): back closes, left / right turn a box set, up / down scroll,
+    // Play or View More plays (asking "resume or start over" when it was stopped part-way)
+    Keys.onPressed: (e) => {
+        var a = Backend.keyAction(e.key, e.modifiers)
+        if (a === "back") close()
+        else if (a === "left") step(-1)
+        else if (a === "right") step(1)
+        else if (a === "up" || a === "down") {
+            var f = flick, top = f.originY, bottom = f.originY + Math.max(0, f.contentHeight - f.height)
+            f.contentY = Math.max(top, Math.min(bottom, f.contentY + (a === "down" ? 160 : -160)))
+        } else if (a === "play" || a === "viewMore") play(root.cur.uuid || "")
+        else return
+        e.accepted = true
+    }
 
     // carousel rotation, like a turntable seen from the front: the box in focus spins as it slides to the side
     // and back, the next film slides forward into the middle, the one on the far side drifts back and fades, and a
@@ -1206,9 +1217,14 @@ Item {
         visible: shown > 0.001
         opacity: shown
         Behavior on shown { NumberAnimation { duration: 220 * Theme.motion; easing.type: Easing.OutCubic } }
-        Keys.onEscapePressed: close()
-        Keys.onLeftPressed: index = (index - 1 + shots.length) % Math.max(1, shots.length)
-        Keys.onRightPressed: index = (index + 1) % Math.max(1, shots.length)
+        Keys.onPressed: (e) => {
+            var a = Backend.keyAction(e.key, e.modifiers)
+            if (a === "back" || a === "viewMore") close()
+            else if (a === "left") index = (index - 1 + shots.length) % Math.max(1, shots.length)
+            else if (a === "right") index = (index + 1) % Math.max(1, shots.length)
+            else return
+            e.accepted = true
+        }
         Rectangle { anchors.fill: parent; color: "#F0000000" }
         MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onClicked: (m) => { if (m.button === Qt.LeftButton) lightbox.close() }; onWheel: (w) => w.accepted = true }
         Image {

@@ -217,7 +217,7 @@ class SubtitleTests(unittest.TestCase):
         self.assertIn("Player.findSubtitles()", (ROOT / "player" / "Hud.qml").read_text(encoding="utf-8"))
         self.assertIn('"opensubtitles_key"', (ROOT / "database.py").read_text(encoding="utf-8"))      # encrypted like the other keys
         dash = (ROOT / "ui" / "Dashboard.qml").read_text(encoding="utf-8")
-        for needle in ("id: cardMenu", "id: selBar", "Backend.continueWatching", "keyNavigationEnabled: true", "Backend.undoLast()"):
+        for needle in ("id: cardMenu", "id: selBar", "Backend.continueWatching", "keyNavigationEnabled: false", "Backend.undoLast()"):
             self.assertIn(needle, dash)
         wf = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
         self.assertIn("tests.test_v133", wf)

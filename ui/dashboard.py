@@ -583,6 +583,8 @@ class Dashboard(QObject):
     toast = Signal(str)
     raiseWindow = Signal()
     recentChanged = Signal()
+    controlsChanged = Signal()         # a binding changed, or a controller came or went
+    padButton = Signal(str)            # a controller button, while Settings > Controls waits for one
     minimizeWindow = Signal()          # picture in picture: only the small video window stays on screen
     thumbnailsReady = Signal(int)
     boxArtChanged = Signal(str)        # key whose covers changed: the open detail view reloads its textures
@@ -627,6 +629,10 @@ class Dashboard(QObject):
         self._devices: list = []
         self._insights_visible = False
         self._recent: list = []
+        from utils.gamepad import Gamepad
+        self.gamepad = Gamepad(self)
+        self.gamepad.connectedChanged.connect(self.controlsChanged)
+        self.gamepad.buttonPressed.connect(lambda b: self.gamepad.capturing and self.padButton.emit(b))
         self._idle = QTimer(self)                 # auto-lock: a look at the clock every 20 seconds, nothing per event
         self._idle.setInterval(20_000)
         self._idle.timeout.connect(lambda: self.idle_check(idle_seconds()))
@@ -985,6 +991,60 @@ class Dashboard(QObject):
         if rows != self._recent:
             self._recent = rows
             self.recentChanged.emit()
+
+    # -- keyboard and controller: one list of actions, each remappable in Settings > Controls (utils/controls.py)
+    @Slot(int, int, result=str)
+    def keyAction(self, key: int, modifiers: int) -> str:
+        """The action a key press means ("" = none): the grid, the tab bar and View More ask this."""
+        from utils import controls
+        return controls.action_for_key(key, modifiers)
+
+    @Property("QVariantList", notify=controlsChanged)
+    def controlRows(self):
+        from utils import controls
+        return controls.rows()
+
+    @Property("QVariantList", constant=True)
+    def padButtons(self):
+        from utils import controls
+        return list(controls.BUTTONS)
+
+    @Property(str, notify=controlsChanged)
+    def padStatus(self):
+        g = self.gamepad
+        if not g.available:
+            return "Controllers need Windows (XInput)"
+        if not g.connected:
+            return "No controller connected. Xbox controllers, and most others in their Xbox mode, work."
+        return f"{g.connected} controller{'s' if g.connected != 1 else ''} connected"
+
+    @Slot(str, int, int)
+    def setKeyBinding(self, action: str, key: int, modifiers: int):
+        from utils import controls
+        controls.set_key(action, key, modifiers)
+        self.controlsChanged.emit()
+
+    @Slot(str, str)
+    def setPadBinding(self, action: str, button: str):
+        from utils import controls
+        controls.set_pad(action, button)
+        self.controlsChanged.emit()
+
+    @Slot(bool)
+    def capturePad(self, on: bool):
+        """Settings waits for a controller button: presses are reported (padButton), not turned into keys."""
+        self.gamepad.capturing = on
+
+    @Slot()
+    def resetControls(self):
+        from utils import controls
+        controls.reset()
+        self.controlsChanged.emit()
+
+    @Slot(result="QVariantList")
+    def tabOrder(self):
+        """The tab bar, left to right: [{id, name, locked}] (Tab / Shift+Tab, or the shoulder buttons, walk it)."""
+        return [{"id": i, "name": n, "locked": bool(l)} for i, n, l in self.tabs._rows]
 
     # -- resume or start over; a random pick
     @Slot(str, result=str)

@@ -44,6 +44,8 @@ Item {
         opacity: crop.shown; scale: 0.94 + 0.06 * crop.shown
         focus: true
         Keys.onEscapePressed: crop.close()
+        // a remapped Back key (Settings > Controls), or a controller's Back button, closes it too
+        Keys.onPressed: (e) => { if (Backend.keyAction(e.key, e.modifiers) === "back") { crop.close(); e.accepted = true } }
         Keys.onReturnPressed: crop.use()
         MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }
 

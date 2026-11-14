@@ -135,6 +135,10 @@ Item {
 
     Keys.onEscapePressed: close()
 
+    // a remapped Back key (Settings > Controls), or a controller's Back button, closes it too
+
+    Keys.onPressed: (e) => { if (Backend.keyAction(e.key, e.modifiers) === "back") { close(); e.accepted = true } }
+
     // dim, and eat every click and scroll meant for View More underneath
     Rectangle { anchors.fill: parent; color: Theme.scrim; opacity: root.shown }
     MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onWheel: (w) => w.accepted = true; onClicked: (m) => { if (m.button === Qt.LeftButton) root.close() } }

@@ -11,7 +11,7 @@ class ScrollTests(unittest.TestCase):
         self.assertIn("function onModelAboutToBeReset() { grid.keptY = grid.contentY - grid.originY }", qml)
         self.assertIn("contentY = originY + Math.min(keptY, Math.max(0, contentHeight - height))", qml)
         # tabs and Grid / Shelf still go to the top on purpose
-        self.assertIn("Backend.selectTab(tabId); grid.keptY = -1;", qml)
+        self.assertIn("Backend.selectTab(id); grid.keptY = -1;", qml)      # 1.3.3: in openTab, shared by clicks and Tab
 
 
 class WorkflowTests(unittest.TestCase):

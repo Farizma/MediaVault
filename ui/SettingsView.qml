@@ -27,7 +27,7 @@ Item {
     property int section: 0
     property real shown: 0                   // 0..1: the sheet materialises (scale + fade), and dematerialises faster
     // name, icon tint, icon: fixed system colours (like macOS) so they read the same in every theme
-    readonly property var sections: [["Library", "#0A84FF", "folders"], ["Appearance", "#AF52DE", "appearance"], ["Playback", "#FF3B30", "playback"],
+    readonly property var sections: [["Library", "#0A84FF", "folders"], ["Appearance", "#AF52DE", "appearance"], ["Playback", "#FF3B30", "playback"], ["Controls", "#FF2D55", "controls"],
                                      ["Library Status", "#FF9F0A", "health"], ["Integrations & APIs", "#8E8E93", "integrations"],
                                      ["Streaming", "#5AC8FA", "streaming"], ["Privacy", "#64D2FF", "privacy"], ["About & Updates", "#FF9500", "components"], ["Backups", "#34C759", "backups"],
                                      ["Help", "#5E5CE6", "help"]]
@@ -71,6 +71,8 @@ Item {
     focus: visible
     z: 20
     Keys.onEscapePressed: close()
+    // a remapped Back key (Settings > Controls), or a controller's Back button, closes it too
+    Keys.onPressed: (e) => { if (Backend.keyAction(e.key, e.modifiers) === "back") { close(); e.accepted = true } }
 
     // the sheet grows out of the button that opened it, and shrinks back into it
     property real originX: width / 2
@@ -856,6 +858,98 @@ Item {
                             }
                             IgnoreButtons { kind: "missing_art"; key: modelData.key }
                         }
+                    }
+                }
+
+                // Controls: the keys and controller buttons for moving around the library (utils/controls.py)
+                ColumnLayout {
+                    id: controlsPage
+                    visible: root.sectionName === "Controls"
+                    Layout.fillWidth: true
+                    spacing: 10
+                    property string waitKey: ""          // the action waiting for a key
+                    property string waitPad: ""          // ... or for a controller button
+                    onVisibleChanged: if (!visible) { waitKey = ""; if (waitPad !== "") { waitPad = ""; Backend.capturePad(false) } }
+                    Connections {
+                        target: Backend
+                        function onPadButton(button) {
+                            if (controlsPage.waitPad === "") return
+                            Backend.setPadBinding(controlsPage.waitPad, button)
+                            controlsPage.waitPad = ""; Backend.capturePad(false)
+                        }
+                    }
+                    Heading { title: "Controls"; Layout.rightMargin: 48
+                        sub: "Move around the library with the keyboard or a controller. Click a key to change it, then press the new one. A key or button already in use swaps with it." }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 10
+                        Rectangle { width: 8; height: 8; radius: 4; color: Backend.padStatus.indexOf("connected") > 0 && Backend.padStatus.indexOf("No ") !== 0 ? Theme.green : Theme.faint }
+                        Text { Layout.fillWidth: true; text: Backend.padStatus; color: Theme.text; font.pixelSize: 13; wrapMode: Text.Wrap }
+                        GlassButton { small: true; label: "Reset to defaults"; onClicked: { controlsPage.waitKey = ""; Backend.resetControls() } }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true; Layout.topMargin: 6
+                        Caption { text: "ACTION"; Layout.preferredWidth: 200; Layout.fillWidth: false }
+                        Caption { text: "KEYBOARD"; Layout.preferredWidth: 190; Layout.fillWidth: false }
+                        Caption { text: "CONTROLLER" }
+                    }
+                    Repeater {
+                        model: Backend.controlRows
+                        Rectangle {
+                            Layout.fillWidth: true; height: 48; radius: 10
+                            color: Theme.slate; border.color: Theme.line
+                            readonly property bool waitingKey: controlsPage.waitKey === modelData.id
+                            readonly property bool waitingPad: controlsPage.waitPad === modelData.id
+                            RowLayout {
+                                anchors { fill: parent; leftMargin: 14; rightMargin: 10 }
+                                spacing: 10
+                                Text { text: modelData.label; color: Theme.text; font.pixelSize: 13; font.weight: Font.DemiBold; Layout.preferredWidth: 186 }
+                                // the key: click, then press the new key (Esc and Tab too: any key can be bound)
+                                Rectangle {
+                                    id: keyBox
+                                    Layout.preferredWidth: 180; height: 32; radius: 8
+                                    color: parent.parent.waitingKey ? Qt.rgba(Qt.color(Theme.blue).r, Qt.color(Theme.blue).g, Qt.color(Theme.blue).b, 0.2)
+                                         : keyArea.containsMouse ? Theme.fillHover : Theme.fill
+                                    border.color: parent.parent.waitingKey ? Theme.blue : Theme.line
+                                    Text { anchors.centerIn: parent; font.family: Theme.mono; font.pixelSize: 12
+                                        text: keyBox.parent.parent.waitingKey ? "Press a key\u2026" : modelData.key
+                                        color: keyBox.parent.parent.waitingKey ? Theme.text : Theme.soft }
+                                    MouseArea { id: keyArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                        onClicked: { controlsPage.waitKey = modelData.id; keyCatcher.forceActiveFocus() } }
+                                    Item {
+                                        id: keyCatcher
+                                        Keys.onPressed: (e) => {
+                                            e.accepted = true
+                                            if ([Qt.Key_Shift, Qt.Key_Control, Qt.Key_Alt, Qt.Key_Meta, Qt.Key_AltGr].indexOf(e.key) >= 0) return   // wait for the key itself
+                                            var id = modelData.id
+                                            controlsPage.waitKey = ""        // first: saving rebuilds this row
+                                            Backend.setKeyBinding(id, e.key, e.modifiers)
+                                        }
+                                        Keys.onShortcutOverride: (e) => e.accepted = true      // Ctrl+F and the like are bound, not run
+                                        onActiveFocusChanged: if (!activeFocus && controlsPage.waitKey === modelData.id) controlsPage.waitKey = ""
+                                    }
+                                }
+                                // the controller button: pick it, or press it on the controller
+                                Dropdown {
+                                    Layout.preferredWidth: 140
+                                    options: Backend.padButtons.map(function(b) { return { value: b, label: b } })
+                                    value: modelData.button
+                                    onChosen: (v) => Backend.setPadBinding(modelData.id, v)
+                                }
+                                GlassButton {
+                                    small: true
+                                    visible: Backend.padStatus.indexOf("connected") > 0 && Backend.padStatus.indexOf("No ") !== 0
+                                    label: parent.parent.waitingPad ? "Press a button\u2026" : "Press on controller"
+                                    active: parent.parent.waitingPad
+                                    onClicked: { controlsPage.waitPad = modelData.id; Backend.capturePad(true) }
+                                }
+                                Item { Layout.fillWidth: true }
+                            }
+                        }
+                    }
+                    Text {
+                        Layout.fillWidth: true; Layout.topMargin: 4; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 12
+                        text: "The left stick moves like the D-pad. In View More, Play or View More plays the title, up and down scroll, left and right turn a box set. A controller button presses the key its action uses, so it works everywhere the keyboard does, the player included (there Space pauses and Enter starts the next episode)."
                     }
                 }
 

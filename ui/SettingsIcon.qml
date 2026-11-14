@@ -53,6 +53,13 @@ Rectangle {
                 c.beginPath(); c.moveTo(1.5, 7); c.lineTo(7, 9.8); c.lineTo(12.5, 7); c.stroke()
                 c.beginPath(); c.moveTo(1.5, 9.7); c.lineTo(7, 12.5); c.lineTo(12.5, 9.7); c.stroke()
                 break
+            case "controls":         // a game controller
+                c.beginPath(); c.moveTo(3.2, 4); c.lineTo(10.8, 4); c.quadraticCurveTo(13.6, 4, 13.8, 9.6); c.quadraticCurveTo(13.8, 11.6, 12, 11.2)
+                c.lineTo(10, 9); c.lineTo(4, 9); c.lineTo(2, 11.2); c.quadraticCurveTo(0.2, 11.6, 0.2, 9.6); c.quadraticCurveTo(0.4, 4, 3.2, 4); c.closePath(); c.fill()
+                c.fillStyle = root.tint
+                c.fillRect(3, 5.7, 3, 1); c.fillRect(4, 4.7, 1, 3)
+                c.beginPath(); c.arc(10, 5.6, 0.75, 0, Math.PI * 2); c.fill(); c.beginPath(); c.arc(11.2, 7, 0.75, 0, Math.PI * 2); c.fill()
+                break
             case "privacy":          // a padlock
                 c.beginPath(); c.arc(7, 5.4, 3, Math.PI, 0); c.stroke()
                 c.beginPath(); c.moveTo(2.4, 6); c.lineTo(11.6, 6); c.lineTo(11.6, 12.6); c.lineTo(2.4, 12.6); c.closePath(); c.fill()

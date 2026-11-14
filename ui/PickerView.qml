@@ -14,6 +14,8 @@ Item {
     focus: visible
     z: 30
     Keys.onEscapePressed: close()
+    // a remapped Back key (Settings > Controls), or a controller's Back button, closes it too
+    Keys.onPressed: (e) => { if (Backend.keyAction(e.key, e.modifiers) === "back") { close(); e.accepted = true } }
 
     property real originX: width / 2
     property real originY: height / 2

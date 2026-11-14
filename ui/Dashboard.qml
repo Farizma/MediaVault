@@ -174,20 +174,42 @@ Item {
         if ((m.modifiers & Qt.ControlModifier) || selCount > 0) { selToggle(key, idx); return }
         normal()
     }
-    Shortcut { sequence: "Esc"; enabled: dash.selCount > 0 && !dash.overlayOpen && !cardMenu.opened; onActivated: dash.selClear() }
     Shortcut { sequences: [StandardKey.SelectAll]; enabled: !dash.overlayOpen && grid.activeFocus
         onActivated: { dash.selAnchor = 0; dash.selRange(grid.count - 1) } }
 
-    // ---- keyboard: arrows move a focus ring over the cards, Enter opens View More, Space plays
+    // ---- keyboard and controller (Settings > Controls remaps both): arrows move a focus ring over the cards, Space
+    // opens View More, Enter plays, Tab / Shift+Tab change tabs, Esc steps back. A controller button arrives here as
+    // the key its action is bound to (utils/gamepad.py).
     property bool keyNav: false
-    Keys.onPressed: (e) => {
-        if (overlayOpen) return
-        if ([Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down].indexOf(e.key) >= 0 && !grid.activeFocus) {
+    function openTab(id, name, locked) {
+        if (locked) { Backend.requestPrivate(id); return }        // private: sign in first
+        if (id === dash.currentTab) return
+        dash.selClear()
+        dash.stagger = true; staggerOff.restart()
+        dash.currentTab = id; dash.currentTabName = name
+        Backend.selectTab(id); grid.keptY = -1; grid.userScrolled = false; grid.positionViewAtBeginning()
+        if (keyNav) grid.currentIndex = 0
+    }
+    function stepTab(by) {
+        var tabs = Backend.tabOrder().filter(function(t) { return !t.locked || t.id === dash.currentTab })
+        if (tabs.length < 2) return
+        var i = tabs.findIndex(function(t) { return t.id === dash.currentTab })
+        var t = tabs[(Math.max(0, i) + by + tabs.length) % tabs.length]
+        openTab(t.id, t.name, false)
+    }
+    // what the grid (or anything else on the page) did not take
+    function pageKey(e) {
+        if (overlayOpen || cardMenu.opened) return
+        var a = Backend.keyAction(e.key, e.modifiers)
+        if (a === "nextTab" || a === "prevTab") { stepTab(a === "nextTab" ? 1 : -1); e.accepted = true }
+        else if (a === "back" && selCount > 0) { selClear(); e.accepted = true }
+        else if (["up", "down", "left", "right", "viewMore", "play"].indexOf(a) >= 0 && !grid.activeFocus) {
             grid.forceActiveFocus(); keyNav = true
             if (grid.currentIndex < 0) grid.currentIndex = 0
             e.accepted = true
         }
     }
+    Keys.onPressed: (e) => pageKey(e)
     function setShelf(on) { shelf = on; stagger = true; staggerOff.restart(); grid.keptY = -1; Backend.setShelf(on); grid.keptY = -1; grid.userScrolled = false; grid.positionViewAtBeginning() }
     Timer { id: searchDebounce; interval: 160; onTriggered: dash.applyView() }
     Shortcut { sequences: [StandardKey.Find]; onActivated: if (dash.searchField) { grid.contentY = grid.originY; dash.searchField.forceActiveFocus() } }
@@ -248,15 +270,21 @@ Item {
             cacheBuffer: 900
             reuseItems: true
             focus: true
-            keyNavigationEnabled: true
+            keyNavigationEnabled: false                 // moves go through the bindings (Settings > Controls)
             currentIndex: -1
             highlightFollowsCurrentItem: true
             Keys.onPressed: (e) => {
-                if ([Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down].indexOf(e.key) >= 0) {
+                var a = Backend.keyAction(e.key, e.modifiers)
+                var moves = { up: moveCurrentIndexUp, down: moveCurrentIndexDown, left: moveCurrentIndexLeft, right: moveCurrentIndexRight }
+                if (moves[a]) {
+                    if (currentIndex < 0 || !dash.keyNav) { currentIndex = Math.max(0, currentIndex) } else moves[a]()
                     dash.keyNav = true
-                    if (currentIndex < 0) { currentIndex = 0; e.accepted = true }
-                } else if ((e.key === Qt.Key_Return || e.key === Qt.Key_Enter) && currentItem) { currentItem.openBox(); e.accepted = true }
-                else if (e.key === Qt.Key_Space && currentItem) { currentItem.playNow(); e.accepted = true }
+                    positionViewAtIndex(currentIndex, GridView.Contain)
+                    e.accepted = true
+                } else if (a === "viewMore" && currentItem) { dash.keyNav = true; currentItem.openBox(); e.accepted = true }
+                else if (a === "play" && currentItem) { dash.keyNav = true; currentItem.playNow(); e.accepted = true }
+                else if (a === "back" && dash.selCount === 0 && dash.keyNav) { dash.keyNav = false; e.accepted = true }
+                else dash.pageKey(e)                      // tabs, and Esc clearing a selection
             }
             boundsBehavior: Flickable.StopAtBounds
             ScrollBar.vertical: ScrollBar { parent: content; x: content.width - width; y: grid.y; height: grid.height }
@@ -1140,11 +1168,8 @@ Item {
                                     onClicked: (m) => {
                                         if (dragged) return
                                         if (m.button === Qt.RightButton) { rename(); return }
-                                        if (locked) { Backend.requestPrivate(tabId); return }     // private: sign in first
                                         if (tab.on) return
-                                        dash.stagger = true; staggerOff.restart()
-                                        dash.currentTab = tabId; dash.currentTabName = name
-                                        Backend.selectTab(tabId); grid.keptY = -1; grid.userScrolled = false; grid.positionViewAtBeginning()
+                                        dash.openTab(tabId, name, locked)
                                     }
                                     onDoubleClicked: rename()
                                 }

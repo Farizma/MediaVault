@@ -27,6 +27,14 @@ Item {
         opacity: root.shown
         scale: 0.96 + 0.04 * root.shown
         Keys.onEscapePressed: root.cancel()
+        // a remapped Back key (Settings > Controls), or a controller's Back button, closes it too
+        Keys.onPressed: (e) => {
+            var a = Backend.keyAction(e.key, e.modifiers)
+            if (a === "back") root.cancel()
+            else if (a === "play" || a === "viewMore") root.choose(false)       // resume
+            else return
+            e.accepted = true
+        }
         Keys.onReturnPressed: root.choose(false)
         Keys.onEnterPressed: root.choose(false)
         MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }

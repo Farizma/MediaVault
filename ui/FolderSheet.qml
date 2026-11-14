@@ -43,6 +43,8 @@ Item {
         scale: 0.92 + 0.08 * root.shown
         MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }
         Keys.onEscapePressed: root.close()
+        // a remapped Back key (Settings > Controls), or a controller's Back button, closes it too
+        Keys.onPressed: (e) => { if (Backend.keyAction(e.key, e.modifiers) === "back") { root.close(); e.accepted = true } }
 
         ColumnLayout {
             id: col
