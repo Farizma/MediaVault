@@ -243,8 +243,8 @@ class App:
 
     def _pip_changed(self, on: bool):
         """Picture in picture: only the small video window stays on screen; Media Vault minimises."""
-        if on and self.main_window:
-            self.dashboard.minimizeWindow.emit()
+        if on and self.main_window and self.db.get_setting("pip_keep_library", "0") != "1":
+            self.dashboard.minimizeWindow.emit()      # Settings > Playback can keep the library open to browse
 
     # -- the library window: same size and place as last time; closing it ends Media Vault, player included
     def _restore_window(self, w):

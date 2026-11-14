@@ -8,6 +8,7 @@ import shutil
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from PySide6.QtCore import Property, QAbstractListModel, QModelIndex, QObject, Qt, QTimer, Signal, Slot
@@ -25,7 +26,8 @@ SETTINGS = {"tmdb_key", "omdb_key", "night_mode", "reduce_motion", "upscale_leve
             "custom_muted", "custom_amber", "custom_red", "auto_credits", "auto_tags",
             "fanart_key", "animated_theme", "hover_preview", "detail_order", "title_language", "group_collections", "discord", "discord_detail", "discord_app_id",
             "discord_details", "discord_state", "discord_paused", "discord_hide_adult", "discord_image_text",
-            "discord_folders", "discord_hide_tags", "image_quality", "gpu_high_performance", "continue_watching", "lock_scope", "opensubtitles_key", "subtitle_language"}
+            "discord_folders", "discord_hide_tags", "image_quality", "gpu_high_performance", "continue_watching", "lock_scope", "opensubtitles_key", "subtitle_language",
+            "recently_added", "resume_prompt", "auto_lock_minutes", "lock_on_minimize", "show_missing_episodes", "pip_keep_library"}
 
 
 TITLE_LANGUAGES = [("english", "English"), ("romaji", "Romaji"), ("original", "Original")]
@@ -96,7 +98,7 @@ def banner_for(card: dict):
 MATCH_FIELDS = ("title", "year", "synopsis", "poster", "banner", "disc", "genres", "score", "rating", "titles", "cast", "boxset")
 MATCH_SOURCES = ("tmdb", "anilist", "omdb", "tvmaze", "mal", "kitsu")
 SET_FIELDS = ("title", "synopsis", "poster", "banner", "disc")     # what a box set's own page can take
-HIDDEN_KINDS = ("all_dirs", "all_tags", "insights_dirs", "continue_dirs", "private_dirs")
+HIDDEN_KINDS = ("all_dirs", "all_tags", "insights_dirs", "continue_dirs", "private_dirs", "recent_dirs")
 UPLOAD_FIELDS = ("poster", "banner", "disc", "gallery")      # the "Upload file" tile in the window
 PERCENT_SOURCES = ("anilist", "kitsu")                        # scores shown as a percentage
 GALLERY_PICK_MAX = 40                                         # Gallery images offered per result, to pick one by one
@@ -109,6 +111,54 @@ def episode_row(e: dict) -> dict:
     return {"season": se[0] if se else 0, "number": se[1] if se else 0, "name": e.get("episode_title") or "",
             "synopsis": e.get("episode_synopsis") or "", "length": duration_label(e["duration"]),
             "still": file_url(still) if still.exists() else ""}
+
+
+def missing_rows(folder: str, eps: list[dict]) -> list[dict]:
+    """Episodes the guide lists that are not on disk, as greyed rows of the episode list (off in Settings)."""
+    if db.get_setting("show_missing_episodes", "1") == "0":
+        return []
+    have = {se for se in (scraper.season_episode(e["title"]) for e in eps) if se}
+    return [{"uuid": "", "title": f"S{g['season']:02d}E{g['number']:02d}", "done": False, "progress": 0, "missing": True,
+             "season": g["season"], "number": g["number"], "name": g["name"] or "", "synopsis": "", "length": "", "still": ""}
+            for g in db.gaps(folder) if (g["season"], g["number"]) not in have]
+
+
+def clock_label(seconds) -> str:
+    s = int(seconds or 0)
+    return f"{s // 3600}:{s % 3600 // 60:02d}:{s % 60:02d}" if s >= 3600 else f"{s // 60}:{s % 60:02d}"
+
+
+def added_label(added_at: str, now) -> str:
+    """"Added today" ... "Added 3 weeks ago"; "" once it is older than 30 days."""
+    try:
+        then = datetime.fromisoformat(added_at)
+    except (TypeError, ValueError):
+        return ""
+    if then.tzinfo is None:
+        then = then.replace(tzinfo=timezone.utc)
+    days = (now - then).days
+    if days > 30:
+        return ""
+    if days < 1:
+        return "Added today"
+    if days < 7:
+        return f"Added {days} day{'s' if days != 1 else ''} ago"
+    return f"Added {days // 7} week{'s' if days // 7 != 1 else ''} ago"
+
+
+def idle_seconds() -> float:
+    """How long since the last key or mouse input anywhere on this PC (Windows keeps count). 0 where unknown."""
+    try:
+        import ctypes
+
+        class LastInput(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+        info = LastInput(ctypes.sizeof(LastInput), 0)
+        if not ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info)):
+            return 0.0
+        return ((ctypes.windll.kernel32.GetTickCount() - info.dwTime) & 0xFFFFFFFF) / 1000
+    except (AttributeError, OSError):
+        return 0.0
 
 
 def _upload_path(choice) -> str | None:
@@ -517,6 +567,7 @@ class Dashboard(QObject):
     libraryChanged = Signal()          # emit from any thread: the UI refreshes on the GUI thread
     toast = Signal(str)
     raiseWindow = Signal()
+    recentChanged = Signal()
     minimizeWindow = Signal()          # picture in picture: only the small video window stays on screen
     thumbnailsReady = Signal(int)
     boxArtChanged = Signal(str)        # key whose covers changed: the open detail view reloads its textures
@@ -559,6 +610,11 @@ class Dashboard(QObject):
         self.stream = streaming.StreamServer()
         self._devices: list = []
         self._insights_visible = False
+        self._recent: list = []
+        self._idle = QTimer(self)                 # auto-lock: a look at the clock every 20 seconds, nothing per event
+        self._idle.setInterval(20_000)
+        self._idle.timeout.connect(lambda: self.idle_check(idle_seconds()))
+        self._idle.start()
         self._thumbs: list = []
         # a burst of changes (a scan adding files, the folder watcher) becomes one refresh, not one per event
         self._reload_soon = QTimer(self)
@@ -694,8 +750,14 @@ class Dashboard(QObject):
     @Slot()
     def lockNow(self):
         """Settings > Privacy > Lock now: stop playback and show the lock screen."""
+        self._lock_now()
+
+    def _lock_now(self, quiet: bool = False):
+        """quiet: auto-lock, which does nothing when there is nothing left to lock."""
         from utils import applock
         if not applock.enabled() or self._locked:
+            return
+        if quiet and db.get_setting("lock_scope", "app") == "private" and not (self._private_open and db.private_dirs()):
             return
         try:
             self.app.engine.stop()
@@ -883,6 +945,107 @@ class Dashboard(QObject):
         if rows != self._continue:
             self._continue = rows
             self.continueChanged.emit()
+        self._refresh_recent(cards)
+
+    # -- Recently Added: the newest titles in this tab (off in Settings, or per tab in its Configure)
+    @Property("QVariantList", notify=recentChanged)
+    def recentlyAdded(self):
+        return self._recent
+
+    def _refresh_recent(self, cards: list[dict]):
+        rows = []
+        if db.get_setting("recently_added", "1") != "0" and self._tab not in set(db.hidden("recent_dirs")):
+            files = FolderIndex()
+            pref = self.library.title_pref
+            now = datetime.now(timezone.utc)
+            new = sorted((c for c in cards if c.get("added_at")), key=lambda c: c["added_at"], reverse=True)
+            for c in new[:12]:
+                age = added_label(c["added_at"], now)
+                if not age:                      # older than a month: not "recent" any more
+                    break
+                poster = scraper.cover_path(art_item(c), files.has)
+                rows.append({"key": c["key"], "title": display_titles(c, pref)[0], "progress": 0.0, "note": age,
+                             "poster": files.url(poster) if files.has(poster) else ""})
+        if rows != self._recent:
+            self._recent = rows
+            self.recentChanged.emit()
+
+    # -- resume or start over; a random pick
+    @Slot(str, result=str)
+    def resumeLabel(self, key: str) -> str:
+        """"42:10" when this title was stopped part-way and Settings says to ask; "" = just play."""
+        if db.get_setting("resume_prompt", "1") == "0":
+            return ""
+        item = db.get_media(key) if ":" not in key else self._target(key)
+        if not item or item["is_completed"] or (item["last_position"] or 0) <= 10:
+            return ""
+        return clock_label(item["last_position"])
+
+    @Slot(result=str)
+    def surprise(self) -> str:
+        """A random title from what the grid shows now (tab, filters, search); one you have not finished if there is one."""
+        rows = self.library._rows
+        pool = [r for r in rows if not r.get("done")] or rows
+        return random.choice(pool)["key"] if pool else ""
+
+    # -- auto-lock
+    @Slot()
+    def windowMinimized(self):
+        engine = self.app.engine
+        if db.get_setting("lock_on_minimize", "0") == "1" and not getattr(engine, "pip", False) and getattr(engine, "session", None) is None:
+            self._lock_now(quiet=True)
+
+    def idle_check(self, idle_seconds: float):
+        try:
+            minutes = float(db.get_setting("auto_lock_minutes", "0") or 0)
+        except ValueError:
+            minutes = 0
+        if minutes > 0 and idle_seconds >= minutes * 60 and getattr(self.app.engine, "session", None) is None:
+            self._lock_now(quiet=True)             # a film playing is not "away"
+
+    # -- rename files on disk to match their titles
+    @Slot("QVariantList", result="QVariantList")
+    def renamePlan(self, keys):
+        from utils import rename
+        items = [it for k in keys for u in db.uuids_for(str(k)) if (it := db.get_media(u))]
+        return rename.plan(items)
+
+    @Slot("QVariantList")
+    def renameApply(self, rows):
+        from utils import progress, rename
+        rows = [dict(r) for r in rows if not dict(r).get("problem")]
+        if not rows:
+            return
+
+        def work():
+            try:
+                with progress.task(f"Renaming {len(rows)} file{'s' if len(rows) != 1 else ''}", total=len(rows)) as t:
+                    done, errors = rename.apply(rows, lambda name: t.step(detail=name))
+                self.toast.emit(f"Renamed {done} file{'s' if done != 1 else ''}" + (f" \u00B7 {len(errors)} skipped: {errors[0]}" if errors else ""))
+            except Exception as e:
+                log.exception("rename")
+                self.toast.emit(f"Rename stopped: {e}")
+            self.libraryChanged.emit()
+        threading.Thread(target=work, daemon=True, name="rename").start()
+
+    # -- your own order for the films of a box set
+    @Slot(str, str, int)
+    def moveFilm(self, set_key: str, uuid: str, to: int):
+        if not set_key.startswith("set:"):
+            return
+        ids = [f["uuid"] for f in db.films_in_set(set_key[4:])]
+        if uuid not in ids:
+            return
+        ids.remove(uuid)
+        ids.insert(max(0, min(len(ids), to)), uuid)
+        db.set_film_order(set_key[4:], ids)
+        self.reload()
+
+    @Slot(str)
+    def resetFilmOrder(self, set_key: str):
+        if set_key.startswith("set:"):
+            db.set_film_order(set_key[4:], [])
+            self.reload()
 
     @Slot(int, result=str)
     def tabName(self, tab_id: int) -> str:
@@ -963,14 +1126,21 @@ class Dashboard(QObject):
             return
         self._guides.add(key)
         eps = db.episodes_in(key[5:])
-        if not eps or all(e.get("episode_title") and scraper.still_path(e).exists() for e in eps):
+        if not eps:
             return
 
         def work():
             try:
                 seasons = {se[0] for se in (scraper.season_episode(e["title"]) for e in eps) if se}
                 guide = scraper.episode_guide(db.series_title(eps[0]["title"]), eps[0].get("tmdb_id"), seasons, scraper.api_keys())
-                if guide and scraper.save_episode_guide(eps, guide):
+                if not guide:
+                    return
+                have = {se for se in (scraper.season_episode(e["title"]) for e in eps) if se}
+                missing = [(s, n, g.get("name")) for (s, n), g in sorted(guide.items()) if s in seasons and (s, n) not in have]
+                changed = [(m[0], m[1]) for m in missing] != [(g["season"], g["number"]) for g in db.gaps(key[5:])]
+                db.set_gaps(key[5:], missing)
+                todo = [e for e in eps if not (e.get("episode_title") and scraper.still_path(e).exists())]
+                if (todo and scraper.save_episode_guide(todo, guide)) or changed:
                     self.boxArtChanged.emit(key)
             except Exception:
                 log.warning("episode guide for %s", key, exc_info=True)
@@ -996,6 +1166,9 @@ class Dashboard(QObject):
         h, m = divmod(data["total_minutes"], 60)
         insights = {
             "total": f"{h}h {m:02d}m",
+            "streak": data["streak"], "bestStreak": data["best_streak"], "finished": data["finished"],
+            "weeks": [{"label": d[5:].replace("-", "/"), "minutes": mins} for d, mins in data["weeks"]],
+            "topTitles": [{"name": n, "minutes": mins} for n, mins in data["top_titles"]],
             "days": [{"label": d[8:], "minutes": mins} for d, mins in data["days"]],
             "genres": [{"name": n, "minutes": mins, "rating": r or 0} for n, mins, r in data["genres"]],
             "tags": [{"name": t, "hidden": t in excluded} for t in db.user_tags()],
@@ -1116,12 +1289,13 @@ class Dashboard(QObject):
             "boxSet": ({"key": f"set:{item['collection_id']}", "name": item.get("collection_name") or ""}
                        if not films and not eps and item.get("collection_id") is not None else {}),
             "canSet": not films and item["media_type"] == "movie",
-            "episodes": [{"uuid": e["uuid"], "title": e["title"] + (f' \u2014 ({e["release_date"][:4]})' if films and e["release_date"] else "")
+            "episodes": sorted([{"uuid": e["uuid"], "title": e["title"] + (f' \u2014 ({e["release_date"][:4]})' if films and e["release_date"] else "")
                           + (f' \u2014 {e["episode_title"]}' if films and e.get("episode_title") else ""),
                           "done": bool(e["is_completed"]),
                           **(episode_row(e) if eps else {}),
                           "progress": min(1.0, e["last_position"] / e["duration"]) if e["duration"] and not e["is_completed"] else 0}
-                         for e in (eps or films)],
+                         for e in (eps or films)] + (missing_rows(key[5:], eps) if eps else []),
+                        key=lambda r: (r.get("season", 0), r.get("number", 0)) if eps else 0),
         }
 
     # -- fix match: search TMDB by hand, then re-pull details and art for the chosen title
@@ -1980,6 +2154,7 @@ class Dashboard(QObject):
                  "inAll": d["id"] not in set(db.hidden("all_dirs")),
                  "inInsights": d["id"] not in set(db.hidden("insights_dirs")),
                  "continueRow": d["id"] not in set(db.hidden("continue_dirs")),
+                 "recentRow": d["id"] not in set(db.hidden("recent_dirs")),
                  "private": d["id"] in db.private_dirs()} for d in db.list_directories()]
 
     @Slot(result="QVariantList")

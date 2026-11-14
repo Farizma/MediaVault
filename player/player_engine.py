@@ -886,6 +886,12 @@ class PlayerEngine(QObject):
             self._go_next = True
 
     @Slot()
+    def playNext(self):
+        """The Next episode button: go now, wherever this one is. It only counts as watched near its end."""
+        if self.session and self.session.next_path:
+            self._go_next = True
+
+    @Slot()
     def markIntro(self):
         if not self.core:
             return

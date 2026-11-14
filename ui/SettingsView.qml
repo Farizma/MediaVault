@@ -485,6 +485,28 @@ Item {
                         checked: Backend.setting("auto_credits") !== "0"
                         onToggled: Backend.setSetting("auto_credits", checked ? "1" : "0")
                     }
+                    Toggle {
+                        Layout.fillWidth: true
+                        text: "Show episodes you do not have"
+                        hint: "Greyed out in a series' episode list, from the online episode guide."
+                        checked: Backend.setting("show_missing_episodes") !== "0"
+                        onToggled: Backend.setSetting("show_missing_episodes", checked ? "1" : "0")
+                    }
+                    Caption { text: "STARTING A TITLE" }
+                    Toggle {
+                        Layout.fillWidth: true
+                        text: "Ask: resume or start over"
+                        hint: "When a title was stopped part-way. Off: it resumes. The Continue Watching row always resumes."
+                        checked: Backend.setting("resume_prompt") !== "0"
+                        onToggled: Backend.setSetting("resume_prompt", checked ? "1" : "0")
+                    }
+                    Toggle {
+                        Layout.fillWidth: true
+                        text: "Keep the library open during picture in picture"
+                        hint: "A mini player: the video stays in the corner while you browse. Off: Media Vault minimises."
+                        checked: Backend.setting("pip_keep_library") === "1"
+                        onToggled: Backend.setSetting("pip_keep_library", checked ? "1" : "0")
+                    }
                 }
 
                 // Library: the folders (each with its own Configure window), how titles read, box sets, and tags
@@ -622,6 +644,21 @@ Item {
                         text: "Also in the All tab"
                         checked: Backend.hiddenFrom("continue_dirs").indexOf(-1) < 0
                         onToggled: { Backend.toggleHidden("continue_dirs", "-1"); Backend.reload() }
+                    }
+
+                    Caption { text: "RECENTLY ADDED"; Layout.topMargin: 10 }
+                    Toggle {
+                        Layout.fillWidth: true
+                        text: "Show a Recently Added row"
+                        hint: "Titles added in the last 30 days, above the catalog. Each folder can leave it out of its own tab (Configure)."
+                        checked: Backend.setting("recently_added") !== "0"
+                        onToggled: { Backend.setSetting("recently_added", checked ? "1" : "0"); Backend.reload() }
+                    }
+                    Toggle {
+                        Layout.fillWidth: true
+                        text: "Also in the All tab"
+                        checked: Backend.hiddenFrom("recent_dirs").indexOf(-1) < 0
+                        onToggled: { Backend.toggleHidden("recent_dirs", "-1"); Backend.reload() }
                     }
 
                     Caption { text: "STORAGE"; Layout.topMargin: 10 }
@@ -838,6 +875,26 @@ Item {
                         Text { Layout.fillWidth: true; color: Theme.text; font.pixelSize: 13
                             text: root.lock.enabled ? "On: Media Vault asks you to sign in when it starts" : "Off: anyone at this PC can open Media Vault" }
                         GlassButton { small: true; visible: root.lock.enabled === true; label: "Lock now"; onClicked: { root.close(); Backend.lockNow() } }
+                    }
+
+                    Caption { text: "LOCK BY ITSELF"; Layout.topMargin: 8 }
+                    Flow {
+                        Layout.fillWidth: true; spacing: 8
+                        id: idleRow
+                        property string minutes: Backend.setting("auto_lock_minutes") || "0"
+                        Text { text: "After no keyboard or mouse for"; color: Theme.muted; font.pixelSize: 12; height: 26; verticalAlignment: Text.AlignVCenter }
+                        Repeater {
+                            model: [["0", "Never"], ["1", "1 min"], ["5", "5 min"], ["15", "15 min"], ["30", "30 min"], ["60", "1 hour"]]
+                            Pill { label: modelData[1]; selected: idleRow.minutes === modelData[0]; accent: Theme.blue
+                                onClicked: { idleRow.minutes = modelData[0]; Backend.setSetting("auto_lock_minutes", modelData[0]) } }
+                        }
+                    }
+                    Toggle {
+                        Layout.fillWidth: true
+                        text: "Lock when Media Vault is minimised"
+                        hint: "Not while a video plays, and not when picture in picture minimises it."
+                        checked: Backend.setting("lock_on_minimize") === "1"
+                        onToggled: Backend.setSetting("lock_on_minimize", checked ? "1" : "0")
                     }
 
                     Caption { text: "WHAT IS LOCKED"; Layout.topMargin: 8 }

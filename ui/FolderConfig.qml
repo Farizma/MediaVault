@@ -48,6 +48,12 @@ Sheet {
             spacing: 16
             Toggle { Layout.fillWidth: true; text: "Continue Watching row"; hint: "Part-watched titles above this tab's catalog"
                 checked: root.f.continueRow === true; onToggled: { Backend.toggleHidden("continue_dirs", String(root.folderId)); root.after() } }
+            Toggle { Layout.fillWidth: true; text: "Recently Added row"; hint: "Titles added in the last 30 days"
+                checked: root.f.recentRow === true; onToggled: { Backend.toggleHidden("recent_dirs", String(root.folderId)); root.after() } }
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 16
             Toggle { Layout.fillWidth: true; text: "Private tab"; hint: "Hidden everywhere until you sign in (needs a sign-in in Settings \u203A Privacy)"
                 checked: root.f.private === true
                 onToggled: { Backend.toggleHidden("private_dirs", String(root.folderId)); root.after(); checked = Qt.binding(function() { return root.f.private === true }) } }

@@ -39,6 +39,7 @@ Window {
     onWidthChanged: keepNormal()
     onHeightChanged: keepNormal()
     property int restoreTo: Window.Windowed       // minimised for picture in picture: come back as it was
+    onVisibilityChanged: if (win.visibility === Window.Minimized) Backend.windowMinimized()     // Settings > Privacy can lock here
     Connections {
         target: Backend
         function onRaiseWindow() {

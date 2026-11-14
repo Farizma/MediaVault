@@ -82,6 +82,7 @@ Item {
     property bool launching: false
     readonly property real sheetIn: Math.max(0, Math.min(1, (f - 0.35) / 0.65))   // the sheet arrives in the second half
     signal chooseThumbnail(string key, var source)
+    signal resumeAsked(string key, string at)    // stopped part-way: the dashboard asks "resume or start over", then calls play()
     signal playRequested(var start)          // start() begins playback; the dashboard runs the fade to black first
 
     visible: false
@@ -176,8 +177,12 @@ Item {
     // episode: a file's uuid ("" = this card); fromStart: ignore where you stopped last time
     function play(episode, fromStart) {
         if (launching) return
-        launching = true
         var key = episode || itemKey, again = fromStart === true
+        if (fromStart === undefined) {               // not said: ask when there is a place to resume from
+            var at = Backend.resumeLabel(key)
+            if (at !== "") { resumeAsked(key, at); return }
+        }
+        launching = true
         launchYaw.to = Math.floor(box.yaw / 360) * 360 + 20     // face the camera, turned a little to show the hinge
         launchBox.restart()
         playRequested(function() { Backend.playFrom(key, again) })
@@ -859,15 +864,17 @@ Item {
                                 text: "SEASON " + modelData.season; Layout.topMargin: index > 0 ? 10 : 0; Layout.bottomMargin: 2 }
                             Rectangle {
                                 Layout.fillWidth: true; height: 84; radius: 10
-                                color: rowArea.containsMouse ? Theme.fillHover : Theme.slate
+                                readonly property bool missing: modelData.missing === true
+                                color: rowArea.containsMouse && !missing ? Theme.fillHover : missing ? "transparent" : Theme.slate
                                 border.color: Theme.line
+                                opacity: missing ? 0.45 : 1
                                 clip: true
                                 Rectangle { id: epStill; x: 7; y: 7; width: 124; height: 70; radius: 6; color: Theme.graphite; clip: true
                                     Image { anchors.fill: parent; source: modelData.still || ""; fillMode: Image.PreserveAspectCrop; asynchronous: true
                                         sourceSize.width: 248; sourceSize.height: 140 }
                                     Text { anchors.centerIn: parent; visible: !modelData.still; text: modelData.number > 0 ? "E" + modelData.number : "\u25B6"
                                         color: Theme.faint; font.family: Theme.mono; font.pixelSize: 16; font.weight: Font.Bold }
-                                    Rectangle { visible: rowArea.containsMouse; anchors.centerIn: parent; width: 30; height: 30; radius: 15; color: "#CC000000"
+                                    Rectangle { visible: rowArea.containsMouse && modelData.missing !== true; anchors.centerIn: parent; width: 30; height: 30; radius: 15; color: "#CC000000"
                                         Text { anchors.centerIn: parent; anchors.horizontalCenterOffset: 1; text: "\u25B6"; color: "#FFFFFF"; font.pixelSize: 11 } }
                                     Rectangle { visible: modelData.progress > 0; anchors.bottom: parent.bottom; height: 3; width: parent.width * modelData.progress; color: Theme.green }
                                 }
@@ -880,15 +887,16 @@ Item {
                                             anchors.verticalCenter: parent.verticalCenter }
                                         Text { width: Math.min(implicitWidth, parent.width - 110); elide: Text.ElideRight; color: Theme.text; font.pixelSize: 13; font.weight: Font.DemiBold
                                             text: modelData.name || modelData.title }
-                                        Text { text: modelData.length || ""; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10; anchors.verticalCenter: parent.verticalCenter }
+                                        Text { text: modelData.missing === true ? "NOT IN YOUR LIBRARY" : (modelData.length || ""); color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10; anchors.verticalCenter: parent.verticalCenter }
                                     }
                                     Text { width: parent.width; visible: text !== ""; text: modelData.synopsis || ""; color: Theme.faint; font.pixelSize: 11
                                         wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight }
                                 }
                                 Text { visible: modelData.done; anchors { right: parent.right; rightMargin: 14; verticalCenter: parent.verticalCenter }
                                     text: "\u2713"; color: Theme.green; font.pixelSize: 15; font.weight: Font.Bold }
-                                MouseArea { id: rowArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                                    onClicked: root.play(modelData.uuid, false) }
+                                MouseArea { id: rowArea; anchors.fill: parent; hoverEnabled: true
+                                    cursorShape: modelData.missing === true ? Qt.ArrowCursor : Qt.PointingHandCursor
+                                    onClicked: if (modelData.missing !== true) root.play(modelData.uuid) }
                             }
                         }
                     }
@@ -896,12 +904,18 @@ Item {
                         model: root.d.isShow ? [] : (root.d.episodes || [])
                         Rectangle {
                             Layout.fillWidth: true; height: 38; radius: 10
+                            id: filmRow
                             readonly property bool shown: root.count > 0 && root.cur.uuid === modelData.uuid
-                            color: epArea.containsMouse ? Theme.fillHover : Theme.slate
+                            property real dragY: 0           // a box set: drag a film up or down to reorder (rows are 42 apart)
+                            z: grip.pressed ? 5 : 0
+                            transform: Translate { y: filmRow.dragY }
+                            scale: grip.pressed ? 1.02 : 1
+                            Behavior on scale { NumberAnimation { duration: 140 * Theme.motion; easing.type: Easing.OutCubic } }
+                            color: epArea.containsMouse || grip.pressed ? Theme.fillHover : Theme.slate
                             border.color: shown ? Theme.blue : Theme.line
                             Behavior on border.color { ColorAnimation { duration: 160 * Theme.motion } }
                             clip: true
-                            Marquee { x: 14; anchors.verticalCenter: parent.verticalCenter; text: modelData.title; color: Theme.text; font.pixelSize: 13; font.weight: Font.Medium; width: parent.width - 56; active: epArea.containsMouse }
+                            Marquee { x: root.d.isSet ? 30 : 14; anchors.verticalCenter: parent.verticalCenter; text: modelData.title; color: Theme.text; font.pixelSize: 13; font.weight: Font.Medium; width: parent.width - 56 - (root.d.isSet ? 16 : 0); active: epArea.containsMouse }
                             Text { visible: modelData.done && !(root.d.isSet && epArea.containsMouse); anchors { right: parent.right; rightMargin: 14; verticalCenter: parent.verticalCenter } text: "\u2713"; color: Theme.green; font.pixelSize: 15; font.weight: Font.Bold }
                             Rectangle { visible: modelData.progress > 0; anchors.bottom: parent.bottom; height: 3; width: parent.width * modelData.progress; color: Theme.green }
                             Rectangle {     // box set: take this film out of the set
@@ -914,10 +928,28 @@ Item {
                                 MouseArea { id: outArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                                     onClicked: { Backend.removeFromSet(modelData.uuid); root.afterSetChange() } }
                             }
+                            MouseArea {     // the grip: drag to put this film somewhere else in the set
+                                id: grip
+                                z: 3
+                                visible: root.d.isSet === true
+                                width: 28; height: parent.height
+                                hoverEnabled: true; cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+                                property real startY: 0
+                                onPressed: (m) => startY = mapToItem(null, m.x, m.y).y
+                                onPositionChanged: (m) => { if (pressed) filmRow.dragY = mapToItem(null, m.x, m.y).y - startY }
+                                onReleased: {
+                                    var to = index + Math.round(filmRow.dragY / 42)
+                                    filmRow.dragY = 0
+                                    if (to !== index) { Backend.moveFilm(root.itemKey, modelData.uuid, to); root.afterSetChange() }
+                                }
+                                onCanceled: filmRow.dragY = 0
+                                Text { anchors.centerIn: parent; text: "\u2630"; color: grip.containsMouse || grip.pressed ? Theme.text : Theme.faint; font.pixelSize: 11 }
+                                Tip { visible: grip.containsMouse && !grip.pressed; delay: 700; text: "Drag to reorder" }
+                            }
                             MouseArea { id: epArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                                 // a box set: show that film on the carousel (click again to play); a series: play the episode
                                 onClicked: {
-                                    if (root.count === 0 || parent.shown) { root.play(modelData.uuid, false); return }
+                                    if (root.count === 0 || parent.shown) { root.play(modelData.uuid); return }
                                     root.goTo(modelData.uuid)
                                 } }
                         }

@@ -27,7 +27,7 @@ Item {
     Rectangle {
         id: panel
         anchors.centerIn: parent
-        width: Math.min(900, root.width - 48)
+        width: Math.min(1080, root.width - 48)
         height: Math.min(root.height - 48, insRow.implicitHeight + head.height + 66)
         radius: 18
         color: Theme.panel
@@ -69,6 +69,8 @@ Item {
                             spacing: 6
                             Text { text: "WATCH TIME · 7 DAYS"; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 11 }
                             Text { text: root.ins.total || "0h 00m"; color: Theme.text; font.pixelSize: 22; font.weight: Font.ExtraBold; font.letterSpacing: -0.4 }
+                            Text { color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10
+                                text: (root.ins.streak || 0) + "-DAY STREAK \u00B7 BEST " + (root.ins.bestStreak || 0) + " \u00B7 " + (root.ins.finished || 0) + " FINISHED" }
                             Row {
                                 Layout.topMargin: 6
                                 spacing: 10
@@ -86,6 +88,36 @@ Item {
                                         }
                                         Text { text: modelData.label; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10; anchors.horizontalCenter: parent.horizontalCenter }
                                     }
+                                }
+                            }
+                        }
+                        ColumnLayout {
+                            Layout.alignment: Qt.AlignTop
+                            spacing: 6
+                            Text { text: "LAST 12 WEEKS"; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 11 }
+                            Row {
+                                Layout.topMargin: 34
+                                spacing: 5
+                                Repeater {
+                                    model: root.ins.weeks || []
+                                    Item {
+                                        width: 12; height: 72
+                                        Rectangle { anchors.bottom: parent.bottom; width: parent.width; radius: 3
+                                            color: modelData.minutes > 0 ? Theme.blue : Theme.fillHover
+                                            height: Math.max(4, 72 * modelData.minutes / root.maxOf(root.ins.weeks, "minutes")) }
+                                        MouseArea { id: wkArea; anchors.fill: parent; hoverEnabled: true }
+                                        Tip { visible: wkArea.containsMouse; delay: 200
+                                            text: "Week of " + modelData.label + ": " + Math.floor(modelData.minutes / 60) + "h " + (modelData.minutes % 60) + "m" }
+                                    }
+                                }
+                            }
+                            Text { text: "MOST WATCHED"; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 11; Layout.topMargin: 10 }
+                            Repeater {
+                                model: root.ins.topTitles || []
+                                Row {
+                                    spacing: 8
+                                    Text { text: modelData.name; color: Theme.text; font.pixelSize: 12; font.weight: Font.DemiBold; width: 150; elide: Text.ElideRight }
+                                    Text { text: Math.floor(modelData.minutes / 60) + "h " + (modelData.minutes % 60) + "m"; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 11 }
                                 }
                             }
                         }

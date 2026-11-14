@@ -101,7 +101,7 @@ Window {
             case Qt.Key_Up: root.setVol(root.vol + 5); break
             case Qt.Key_M: root.toggleMute(); break
             case Qt.Key_Down: root.setVol(root.vol - 5); break
-            case Qt.Key_N: Player.toggleNight(); break
+            case Qt.Key_N: if (e.modifiers & Qt.ShiftModifier) Player.playNext(); else Player.toggleNight(); break
             case Qt.Key_U: Player.setLevel((win.st.level || 1) % 3 + 1); break
             case Qt.Key_Tab: if (win.st.creditsActive) Player.finishNow(); else Player.skipIntro(); break
             case Qt.Key_O: Player.markCredits(); break
@@ -225,6 +225,7 @@ Window {
                     GlassButton { label: win.st.paused ? "Play" : "Pause"; glyph: win.st.paused ? "\u25B6" : "\u275A\u275A"; primary: true; Layout.preferredWidth: 104; implicitHeight: 48; radius: 14; onClicked: Player.togglePause() }
                     RevealButton { tip: "Shortcut  \u2190"; iconKind: "back"; label: "Back 10s"; onClicked: Player.seekBy(-10) }
                     RevealButton { tip: "Shortcut  \u2192"; iconKind: "forward"; label: "Forward 10s"; onClicked: Player.seekBy(10) }
+                    RevealButton { visible: (win.st.nextTitle || "") !== ""; tip: "Shortcut  Shift+N"; iconKind: "forward"; label: "Next episode"; onClicked: Player.playNext() }
                     // volume, right by the playback buttons: speaker (click = mute), slider, percentage
                     Rectangle {
                         Layout.leftMargin: 6

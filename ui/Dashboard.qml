@@ -58,6 +58,12 @@ Item {
     property string launchKey: ""          // the card whose cover is opening
     property real launchT: 0
     property var pendingStart: null
+    // a card's Play: asks "resume or start over" first when it was stopped part-way (Settings > Playback)
+    function playCard(k) {
+        var at = Backend.resumeLabel(k)
+        if (at === "") { launch(function() { Backend.play(k) }, k); return }
+        resumeAsk.ask(at, function(again) { dash.launch(function() { Backend.playFrom(k, again) }, k) })
+    }
     function launch(start, cardKey, lead) {
         if (phase !== "") return
         phase = "launching"
@@ -492,7 +498,7 @@ Item {
                             RowLayout {
                                 Layout.topMargin: 6
                                 spacing: 12
-                                GlassButton { label: "Watch Now"; glyph: "\u25B6"; primary: true; implicitHeight: 46; onClicked: { var k = modelData.key; dash.launch(function() { Backend.play(k) }, "") } }
+                                GlassButton { label: "Watch Now"; glyph: "\u25B6"; primary: true; implicitHeight: 46; onClicked: dash.playCard(modelData.key) }
                                 GlassButton { id: moreInfo; label: "More Info"; glyph: "\u24D8"; glyphColor: Theme.blue; implicitHeight: 46
                                     onClicked: detail.open(modelData.key, moreInfo.mapToItem(detail, 0, 0, moreInfo.width, moreInfo.height), "button") }
                             }
@@ -526,13 +532,17 @@ Item {
                 }
 
                 // ---- Continue Watching: what you stopped part-way, newest first (Settings > Library, or per tab)
-                Column {
+                // ---- and Recently Added: the newest titles (a click opens View More)
+                Repeater {
+                  model: 2
+                  Column {
                     id: continueRow
-                    readonly property var rows: Backend.continueWatching || []
+                    readonly property bool resumes: index === 0
+                    readonly property var rows: (resumes ? Backend.continueWatching : Backend.recentlyAdded) || []
                     visible: rows.length > 0
                     width: grid.span
                     spacing: 10
-                    Text { text: "Continue Watching"; color: "#FFFFFF"; font.pixelSize: 16; font.weight: Font.ExtraBold; font.letterSpacing: -0.3 }
+                    Text { text: continueRow.resumes ? "Continue Watching" : "Recently Added"; color: "#FFFFFF"; font.pixelSize: 16; font.weight: Font.ExtraBold; font.letterSpacing: -0.3 }
                     ListView {
                         id: continueList
                         width: parent.width; height: 96
@@ -559,23 +569,26 @@ Item {
                                 Text { width: parent.width; text: modelData.note; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10; elide: Text.ElideRight }
                                 Rectangle { width: parent.width; height: 4; radius: 2; color: Theme.fill
                                     Rectangle { width: Math.max(parent.height, parent.width * modelData.progress); height: parent.height; radius: 2; color: Theme.green
-                                        visible: modelData.progress > 0 } }
+                                        visible: modelData.progress > 0 }
+                                    visible: continueRow.resumes }
                             }
                             Rectangle { id: cwPlay; anchors { right: parent.right; rightMargin: 12; verticalCenter: parent.verticalCenter }
                                 width: 34; height: 34; radius: 17; color: cwArea.containsMouse ? Theme.text : Qt.rgba(1, 1, 1, 0.10)
                                 Behavior on color { ColorAnimation { duration: 140 * Theme.motion } }
-                                Text { anchors.centerIn: parent; anchors.horizontalCenterOffset: 1; text: "\u25B6"; font.pixelSize: 12
+                                Text { anchors.centerIn: parent; anchors.horizontalCenterOffset: 1; text: continueRow.resumes ? "\u25B6" : "\u203A"; font.pixelSize: continueRow.resumes ? 12 : 18
                                     color: cwArea.containsMouse ? Theme.black : Theme.text } }
                             MouseArea { id: cwArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                                 acceptedButtons: Qt.LeftButton | Qt.RightButton
                                 onClicked: (m) => {
                                     var k = modelData.key
                                     if (m.button === Qt.RightButton) { cardMenu.show(k, -1, cw, m.x, m.y, { done: false, fav: false, watch: false }); return }
-                                    dash.launch(function() { Backend.play(k) }, k)
+                                    if (continueRow.resumes) dash.launch(function() { Backend.play(k) }, k)      // this row means "resume"
+                                    else detail.open(k, cw.mapToItem(detail, 0, 0, cw.width, cw.height), "button")
                                 } }
                         }
                     }
                     Item { width: 1; height: 6 }
+                  }
                 }
 
                 // ---- catalog title, search, view toggle, sort and filters
@@ -607,6 +620,8 @@ Item {
                                 Pill { height: 32; label: "Unwatched"; selected: dash.unwatched; accent: Theme.blue; onClicked: { dash.unwatched = !dash.unwatched; dash.applyView() } }
                                 Pill { height: 32; label: "\u2665 Favourites"; selected: dash.mark === "favourite"; accent: Theme.red; onClicked: dash.setMark("favourite") }
                                 Pill { height: 32; label: "Watchlist"; selected: dash.mark === "watchlist"; accent: Theme.green; onClicked: dash.setMark("watchlist") }
+                                Pill { id: surprisePill; height: 32; label: "\u2684 Surprise me"; accent: Theme.blue
+                                    onClicked: { var k = Backend.surprise(); if (k !== "") detail.open(k, surprisePill.mapToItem(detail, 0, 0, width, height), "button") } }
                                 // box sets on or off, right here (also in Settings > Library)
                                 Pill { height: 32; label: "Box sets"; selected: dash.boxSets; accent: Theme.amber
                                     onClicked: { dash.boxSets = !dash.boxSets; Backend.setSetting("group_collections", dash.boxSets ? "1" : "0") }
@@ -713,7 +728,7 @@ Item {
                 readonly property bool ringed: dash.keyNav && GridView.isCurrentItem && grid.activeFocus
                 function rowInfo() { return { done: done, fav: favourite, watch: watchlist } }
                 function openBox() { if (dash.shelf) spineHit.openSpine(); else hit.openBox() }
-                function playNow() { if (offline) return; var k = key; dash.launch(function() { Backend.play(k) }, k) }
+                function playNow() { if (!offline) dash.playCard(key) }
                 property real appear: 1
                 // a recycled card may come back half-way through a filter animation (faded, shrunk): start it clean
                 function enter() { scale = 1; appear = 1; if (dash.stagger && Theme.motion > 0) { appear = 0; rise.restart() } }
@@ -960,7 +975,7 @@ Item {
                         visible: opacity > 0
                         Behavior on opacity { NumberAnimation { duration: 160 * Theme.motion; easing.type: Easing.OutCubic } }
                         GlassButton { width: parent.width - 8 - 36; small: true; primary: true; label: offline ? "Offline" : "Play"; glyph: offline ? "" : "\u25B6"; enabled: !offline
-                            onClicked: { var k = key; dash.launch(function() { Backend.play(k) }, k) } }
+                            onClicked: dash.playCard(key) }
                         GlassButton { width: 36; small: true; label: ""; glyph: "\u24D8"; glyphColor: Theme.blue; onClicked: hit.openBox() }
                     }
                 }
@@ -1128,7 +1143,8 @@ Item {
     }
 
     // ---- overlays
-    DetailView { id: detail; anchors.fill: parent; onChooseThumbnail: (key, source) => picker.begin(key, source); onPlayRequested: (start) => dash.launch(start, "", 450) }
+    DetailView { id: detail; anchors.fill: parent; onChooseThumbnail: (key, source) => picker.begin(key, source); onPlayRequested: (start) => dash.launch(start, "", 450)
+        onResumeAsked: (key, at) => resumeAsk.ask(at, function(again) { detail.play(key, again) }) }
     PickerView { id: picker; anchors.fill: parent }
     SettingsView { id: settings; anchors.fill: parent; onThemeChosen: (id) => dash.switchTheme(id)
         onConfigureFolder: (id, source) => folderConfig.show(id, source)
@@ -1137,6 +1153,8 @@ Item {
     TagManager { id: tagManager; anchors.fill: parent }
     FolderSheet { id: folderSheet; anchors.fill: parent }
     InsightsSheet { id: insightsSheet; anchors.fill: parent }
+    RenameSheet { id: renameSheet; anchors.fill: parent; onDone: dash.selClear() }
+    ResumeAsk { id: resumeAsk; anchors.fill: parent }
     Connections { target: Backend; function onFolderPicked(path, name) { folderSheet.open(path, name) } }
 
     // the rounded-corner mask every poster card uses: one shared picture, not one per card
@@ -1221,7 +1239,7 @@ Item {
                 color: Theme.faint; font.family: Theme.mono; font.pixelSize: 9 }
             Repeater {
                 model: [
-                    { t: "Play", show: !cardMenu.many, f: function() { var k = cardMenu.key; dash.launch(function() { Backend.play(k) }, k) } },
+                    { t: "Play", show: !cardMenu.many, f: function() { dash.playCard(cardMenu.key) } },
                     { t: "View More", show: !cardMenu.many, f: function() { detail.open(cardMenu.key, cardMenu.from, "button") } },
                     { line: true, show: !cardMenu.many },
                     { t: cardMenu.row.done && !cardMenu.many ? "Mark unwatched" : "Mark watched", show: true,
@@ -1235,6 +1253,7 @@ Item {
                     { t: "Add a tag\u2026", show: true, f: function() { if (!dash.selection[cardMenu.key]) dash.selToggle(cardMenu.key, -1); selTag.forceActiveFocus() } },
                     { t: dash.selection[cardMenu.key] ? "Deselect" : "Select", show: true, f: function() { dash.selToggle(cardMenu.key, -1) } },
                     { t: "Fetch missing details", show: true, f: function() { Backend.fetchMissingFor(cardMenu.keys) } },
+                    { t: "Rename file" + (cardMenu.many ? "s" : "") + " to match\u2026", show: true, f: function() { renameSheet.begin(cardMenu.keys) } },
                     { t: "Fix Scraped Data\u2026", show: !cardMenu.many,
                       f: function() { detail.open(cardMenu.key, cardMenu.from, "button"); Qt.callLater(detail.fixData) } }
                 ]
@@ -1277,6 +1296,7 @@ Item {
             Field { id: selSet; width: 140; anchors.verticalCenter: parent.verticalCenter; placeholderText: "New box set name"
                 onAccepted: if (Backend.groupIntoSet(dash.selKeys(), text) !== "") { text = ""; dash.selClear() } }
             GlassButton { small: true; label: "Fetch missing"; onClicked: Backend.fetchMissingFor(dash.selKeys()) }
+            GlassButton { small: true; label: "Rename files\u2026"; onClicked: renameSheet.begin(dash.selKeys()) }
             GlassButton { small: true; label: "\u2715"; tip: "Clear the selection (Esc)"; onClicked: dash.selClear() }
         }
     }

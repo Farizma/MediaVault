@@ -120,6 +120,13 @@ CREATE TABLE IF NOT EXISTS marks (
     kind TEXT NOT NULL,                 -- favourite | watchlist
     PRIMARY KEY (key, kind)
 );
+CREATE TABLE IF NOT EXISTS episode_gaps (
+    folder TEXT NOT NULL,               -- a series folder: episodes the guide lists that are not on disk
+    season INTEGER NOT NULL,
+    number INTEGER NOT NULL,
+    name TEXT,
+    PRIMARY KEY (folder, season, number)
+);
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT
@@ -465,6 +472,7 @@ def list_library(dir_id: int | None = None, sets: bool | None = None) -> list[di
     if sets is None:
         sets = get_setting("group_collections", "1") == "1"
     cards, shows, boxes = [], {}, {}
+    orders = set_orders() if sets else {}
     for r in list_media(dir_id):
         if r["media_type"] == "show":
             shows.setdefault(os.path.dirname(r["file_path"]), []).append(r)
@@ -481,7 +489,7 @@ def list_library(dir_id: int | None = None, sets: bool | None = None) -> list[di
         if len(films) < 2 and cid > 0:   # a lone film of a TMDB collection stays a normal card; your own sets always show
             cards.append({**films[0], "key": films[0]["uuid"], "episodes": 0, "watched": 0, "films": 0})
             continue
-        films = _by_release(films)
+        films = _in_set_order(cid, films, orders)
         cards.append({**next_up(films), "key": f"set:{cid}", "title": films[0]["collection_name"] or films[0]["title"],
                       "episodes": 0, "films": len(films), "watched": sum(1 for f in films if f["is_completed"]),
                       "is_completed": all(f["is_completed"] for f in films),
@@ -489,8 +497,35 @@ def list_library(dir_id: int | None = None, sets: bool | None = None) -> list[di
     return sorted(cards, key=lambda c: c["title"].lower())
 
 
+def set_orders() -> dict:
+    """Your own order for the films of a box set (drag to reorder in View More): {set id: [uuid, ...]}."""
+    try:
+        return dict(json.loads(get_setting("set_order", "{}")))
+    except (TypeError, ValueError):
+        return {}
+
+
+def set_film_order(cid, uids) -> None:
+    orders = set_orders()
+    if uids:
+        orders[str(int(cid))] = [str(u) for u in uids]
+    else:
+        orders.pop(str(int(cid)), None)          # back to release order
+    set_setting("set_order", json.dumps(orders))
+
+
+def _in_set_order(cid, films: list[dict], orders: dict | None = None) -> list[dict]:
+    """Release order, unless you dragged them into your own; films added since go to the end."""
+    films = _by_release(films)
+    mine = (set_orders() if orders is None else orders).get(str(cid))
+    if not mine:
+        return films
+    place = {u: i for i, u in enumerate(mine)}
+    return sorted(films, key=lambda f: place.get(f["uuid"], len(place)))     # sorted() is stable: the rest stay by release
+
+
 def films_in_set(cid) -> list[dict]:
-    return _by_release(_rows(conn().execute(_SELECT + "WHERE m.collection_id=? AND m.media_type='movie'", (int(cid),))))
+    return _in_set_order(int(cid), _rows(conn().execute(_SELECT + "WHERE m.collection_id=? AND m.media_type='movie'", (int(cid),))))
 
 
 def uuids_for(key: str) -> list[str]:
@@ -799,6 +834,49 @@ def mark_failed(hashes) -> None:
                       [(h, _now()) for h in hashes])
 
 
+# ---------------------------------------------------------------- episodes the guide lists that you do not have
+
+def set_gaps(folder: str, rows) -> None:
+    """rows: (season, number, name). Replaces what was stored for this series."""
+    with _tx() as c:
+        c.execute("DELETE FROM episode_gaps WHERE folder=?", (folder,))
+        c.executemany("INSERT OR REPLACE INTO episode_gaps (folder, season, number, name) VALUES (?,?,?,?)",
+                      [(folder, int(s), int(n), name or "") for s, n, name in rows])
+
+
+def gaps(folder: str) -> list[dict]:
+    return _rows(conn().execute("SELECT season, number, name FROM episode_gaps WHERE folder=? ORDER BY season, number", (folder,)))
+
+
+# ---------------------------------------------------------------- a file renamed on disk keeps everything attached
+
+def move_item(uid: str, new_path: str) -> str:
+    """The file behind `uid` now lives at new_path: its id follows the path, so tags, notes, history, cast, marks
+    and credits marks move with it. Returns the new id."""
+    old = get_media(uid)
+    new_path = norm(new_path)
+    new = file_id(new_path)
+    if not old:
+        return uid
+    if new == uid:                       # only the letter case changed: same id, new spelling
+        with _tx() as c:
+            c.execute("UPDATE media_items SET file_path=? WHERE uuid=?", (new_path, uid))
+        return uid
+    with _tx() as c:
+        c.execute("BEGIN")                                   # the pragma only lasts for a transaction that is open
+        c.execute("PRAGMA defer_foreign_keys=ON")            # parent and children change inside one transaction
+        c.execute("UPDATE media_items SET uuid=?, file_path=? WHERE uuid=?", (new, new_path, uid))
+        for table in ("tags", "custom_notes", "watch_history", "watch_log"):
+            c.execute(f"UPDATE {table} SET media_uuid=? WHERE media_uuid=?", (new, uid))
+        c.execute("UPDATE OR REPLACE cast_members SET owner=? WHERE owner=?", (new, uid))
+        c.execute("UPDATE OR REPLACE marks SET key=? WHERE key=?", (new, uid))
+        c.execute("UPDATE OR REPLACE credit_marks SET show_key=? WHERE show_key=?", (new_path, old["file_path"]))
+    orders = set_orders()
+    if any(uid in v for v in orders.values()):
+        set_setting("set_order", json.dumps({k: [new if u == uid else u for u in v] for k, v in orders.items()}))
+    return new
+
+
 # ---------------------------------------------------------------- settings
 
 SECRET_SETTINGS = {"tmdb_key", "omdb_key", "fanart_key", "opensubtitles_key"}     # API keys: encrypted with Windows DPAPI at rest
@@ -923,7 +1001,34 @@ def analytics(excluded=(), days: int = 7, excluded_dirs=()) -> dict:
         f"LEFT JOIN tags r ON r.media_uuid=l.media_uuid AND r.tag_name LIKE 'rating:%' "
         f"WHERE 1=1 {skip}GROUP BY name ORDER BY rating IS NULL, rating DESC, secs DESC LIMIT 5", ex)]
     total = conn().execute(f"SELECT COALESCE(SUM(l.seconds),0) s FROM watch_log l WHERE 1=1 {skip}", ex).fetchone()["s"]
-    return {"days": series, "genres": genres, "total_minutes": round(total / 60)}
+    by_day = {r["d"]: r["s"] for r in conn().execute(
+        f"SELECT l.day d, SUM(l.seconds) s FROM watch_log l WHERE 1=1 {skip}GROUP BY d", ex)}
+    watched = {d for d, secs in by_day.items() if secs >= 60}
+    day = today if today.isoformat() in watched else today - timedelta(days=1)     # today not watched yet: still counts
+    streak = 0
+    while day.isoformat() in watched:
+        streak, day = streak + 1, day - timedelta(days=1)
+    best, run, prev = 0, 0, None
+    for d in sorted(watched):
+        cur = datetime.fromisoformat(d).date()
+        run = run + 1 if prev and (cur - prev).days == 1 else 1
+        best, prev = max(best, run), cur
+    monday = today - timedelta(days=today.weekday())
+    weeks = []
+    for i in range(11, -1, -1):                         # the last 12 weeks, oldest first
+        start = monday - timedelta(weeks=i)
+        secs = sum(by_day.get((start + timedelta(days=k)).isoformat(), 0) for k in range(7))
+        weeks.append((start.isoformat(), round(secs / 60)))
+    titles = [(r["title"], r["media_type"], round(r["secs"] / 60)) for r in conn().execute(
+        f"SELECT m.title title, m.media_type media_type, SUM(l.seconds) secs FROM watch_log l "
+        f"JOIN media_items m ON m.uuid=l.media_uuid WHERE 1=1 {skip}GROUP BY l.media_uuid", ex)]
+    top: dict[str, int] = {}
+    for title, kind, mins in titles:                    # a series counts as one title
+        name = series_title(title) if kind == "show" else title
+        top[name] = top.get(name, 0) + mins
+    finished = conn().execute("SELECT COUNT(*) n FROM watch_history WHERE is_completed=1").fetchone()["n"]
+    return {"days": series, "genres": genres, "total_minutes": round(total / 60), "streak": streak, "best_streak": best,
+            "weeks": weeks, "top_titles": sorted(top.items(), key=lambda t: -t[1])[:5], "finished": finished}
 
 
 # ---------------------------------------------------------------- what the All tab and Insights leave out
