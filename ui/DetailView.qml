@@ -679,6 +679,7 @@ Item {
                     Caption { text: root.setSlide || parent.linked ? "BOX SET SYNOPSIS" : "SYNOPSIS" }
                     Area {
                         Layout.fillWidth: true; Layout.preferredHeight: 104
+                        resizable: true; sizeKey: "synopsis_box_height"      // drag the corner; remembered for every title
                         placeholderText: root.setSlide || parent.linked ? "What this box set is: the story across its films" : "Description"
                         text: root.info.synopsis || ""
                         onEditingChanged: if (!editing && text !== (root.info.synopsis || "")) {

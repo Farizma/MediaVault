@@ -27,7 +27,8 @@ SETTINGS = {"tmdb_key", "omdb_key", "night_mode", "reduce_motion", "upscale_leve
             "fanart_key", "animated_theme", "hover_preview", "detail_order", "title_language", "group_collections", "discord", "discord_detail", "discord_app_id",
             "discord_details", "discord_state", "discord_paused", "discord_hide_adult", "discord_image_text",
             "discord_folders", "discord_hide_tags", "image_quality", "gpu_high_performance", "continue_watching", "lock_scope", "opensubtitles_key", "subtitle_language",
-            "recently_added", "resume_prompt", "auto_lock_minutes", "lock_on_minimize", "show_missing_episodes", "pip_keep_library"}
+            "recently_added", "resume_prompt", "auto_lock_minutes", "lock_on_minimize", "show_missing_episodes", "pip_keep_library",
+            "synopsis_box_height"}
 
 
 TITLE_LANGUAGES = [("english", "English"), ("romaji", "Romaji"), ("original", "Original")]

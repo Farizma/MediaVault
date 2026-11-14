@@ -1,5 +1,5 @@
 """1.3.1: DVD box art beside the files is found while scraping; wheel scrolling glides and passes over sideways rows
-and text boxes."""
+and text boxes; the synopsis box resizes from its corner."""
 import os
 import sys
 import tempfile
@@ -210,6 +210,81 @@ Item {
         self.wheel(100, 70, -120); self.settle()
         self.assertGreater(self.area.property("contentItem").property("contentY"), 0)
         self.assertEqual(self.y(), 0)
+
+
+class ResizeTests(unittest.TestCase):
+    """The synopsis box's corner grip: drag to change its height; the height is remembered."""
+
+    PAGE = """
+import QtQuick
+import QtQuick.Layouts
+import "%s"
+Item {
+    width: 500; height: 500
+    ColumnLayout {
+        width: 400
+        Area { objectName: "area"; Layout.fillWidth: true; Layout.preferredHeight: 104; resizable: true; sizeKey: "synopsis_box_height"
+               text: "Some words" }
+        Rectangle { objectName: "below"; Layout.fillWidth: true; Layout.preferredHeight: 20 }
+    }
+}"""
+
+    def make(self):
+        from PySide6.QtCore import QObject, QUrl, Slot
+        from PySide6.QtGui import QGuiApplication
+        from PySide6.QtQuick import QQuickView
+        from PySide6.QtTest import QTest
+        import ui
+        QGuiApplication.instance() or QGuiApplication([])
+
+        class Backend(QObject):
+            store = self.store
+
+            @Slot(str, result=str)
+            def setting(self, k):
+                return self.store.get(k, "")
+
+            @Slot(str, str)
+            def setSetting(self, k, v):
+                self.store[k] = v
+        self.backend = Backend()
+        f = Path(tempfile.mkdtemp()) / "page.qml"
+        f.write_text(self.PAGE % (ROOT / "ui").as_uri())
+        view = QQuickView()
+        view.rootContext().setContextProperty("Theme", ui.THEME)
+        view.rootContext().setContextProperty("Backend", self.backend)
+        view.setSource(QUrl.fromLocalFile(str(f)))
+        self.assertFalse(view.errors(), [e.toString() for e in view.errors()])
+        view.show()
+        QTest.qWait(100)
+        return view, view.rootObject().findChild(QObject, "area"), view.rootObject().findChild(QObject, "below")
+
+    def drag(self, view, area, dy):
+        from PySide6.QtCore import QPoint, QPointF, Qt
+        from PySide6.QtTest import QTest
+        p = area.mapToScene(QPointF(area.property("width") - 8, area.property("height") - 8)).toPoint()
+        QTest.mousePress(view, Qt.LeftButton, Qt.NoModifier, p)
+        for i in range(1, 6):
+            QTest.mouseMove(view, QPoint(p.x(), p.y() + dy * i // 5))
+            QTest.qWait(10)
+        QTest.mouseRelease(view, Qt.LeftButton, Qt.NoModifier, QPoint(p.x(), p.y() + dy))
+        QTest.qWait(50)
+
+    def test_drag_the_corner(self):
+        self.store = {}
+        view, area, below = self.make()
+        self.assertEqual(area.property("height"), 104)
+        self.drag(view, area, 120)
+        self.assertEqual(area.property("height"), 224)
+        self.assertGreaterEqual(below.property("y"), 224)                 # what is under it moves down
+        self.assertEqual(self.store["synopsis_box_height"], "224")
+        self.drag(view, area, -400)
+        self.assertEqual(area.property("height"), 72)                      # never smaller than a few lines
+
+    def test_the_height_is_remembered(self):
+        self.store = {"synopsis_box_height": "300"}
+        view, area, _ = self.make()
+        self.assertEqual(area.property("height"), 300)
 
 
 if __name__ == "__main__":
