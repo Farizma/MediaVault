@@ -130,6 +130,11 @@ Item {
     property string quality: ""
     property bool unwatched: false
     property bool boxSets: Backend.setting("group_collections") !== "0"
+    // a tab shows DVD cases (the grid, or the shelf) or Landscape cards with 16:9 thumbnails: chosen per tab
+    readonly property bool landscape: Backend.landscape
+    readonly property bool shelfView: shelf && !landscape
+    readonly property int cardW: landscape ? 300 : 180
+    readonly property int cardH: landscape ? 169 : 270
     // the two rows above the catalog: on or off from the filter bar (also in Settings > Library, and per tab)
     property bool showContinue: Backend.setting("continue_watching") !== "0"
     property bool showRecent: Backend.setting("recently_added") !== "0"
@@ -256,8 +261,8 @@ Item {
             id: grid
             // columns of 180 px cards whose outer edges line up with the billboard; the gap absorbs the slack
             readonly property real span: dash.width - 2 * dash.gutter
-            readonly property int itemW: dash.shelf ? 30 : 180          // a poster, or a spine on the shelf
-            readonly property int minGap: dash.shelf ? 5 : 20
+            readonly property int itemW: dash.shelfView ? 30 : dash.cardW   // a poster, a spine on the shelf, or a wide card
+            readonly property int minGap: dash.shelfView ? 5 : 20
             readonly property int columns: Math.max(1, Math.floor((span + minGap) / (itemW + minGap)))
             readonly property int gap: columns > 1 ? Math.floor((span - columns * itemW) / (columns - 1)) : Math.floor(span - itemW)
             property bool userScrolled: false
@@ -265,7 +270,7 @@ Item {
             clip: true
             model: Library
             cellWidth: itemW + gap
-            cellHeight: dash.shelf ? 276 : 344
+            cellHeight: dash.shelfView ? 276 : dash.cardH + (dash.landscape ? 92 : 74)
             onMovementStarted: userScrolled = true
             cacheBuffer: 900
             reuseItems: true
@@ -652,7 +657,7 @@ Item {
                         spacing: 10
                         Row {
                             spacing: 12
-                            Text { id: catalogTitle; text: dash.currentTabName + (dash.shelf ? " Shelf" : " Catalog"); color: "#FFFFFF"; font.pixelSize: 20; font.weight: Font.ExtraBold; font.letterSpacing: -0.4
+                            Text { id: catalogTitle; text: dash.currentTabName + (dash.shelfView ? " Shelf" : " Catalog"); color: "#FFFFFF"; font.pixelSize: 20; font.weight: Font.ExtraBold; font.letterSpacing: -0.4
                                 elide: Text.ElideRight; width: Math.min(implicitWidth, catalogCol.width - 140) }
                             Text { anchors.baseline: catalogTitle.baseline; text: grid.count + (grid.count === 1 ? " title" : " titles"); color: "#66FFFFFF"; font.family: Theme.mono; font.pixelSize: 12 }
                         }
@@ -686,23 +691,32 @@ Item {
                                 id: viewTools
                                 anchors { right: parent.right; top: parent.top }
                                 spacing: 12
-                                // Grid | Shelf
+                                // Grid | Shelf (DVD cases) | Landscape (16:9 thumbnails). Landscape is kept per tab; Grid / Shelf put
+                                // this tab back to DVD cases, and the grid-or-shelf choice is shared by every DVD tab
                                 Rectangle {
-                                    implicitWidth: 132; implicitHeight: 32; radius: 10
+                                    id: layoutSwitch
+                                    readonly property int chosen: dash.landscape ? 2 : dash.shelf ? 1 : 0
+                                    implicitWidth: 226; implicitHeight: 32; radius: 10
                                     color: "#99000000"; border.color: Theme.line
-                                    Rectangle { width: (parent.width - 6) / 2; height: parent.height - 6; y: 3; radius: 8; color: "#FFFFFF"
-                                        x: 3 + (dash.shelf ? width : 0)
+                                    Rectangle { width: (parent.width - 6) / 3; height: parent.height - 6; y: 3; radius: 8; color: "#FFFFFF"
+                                        x: 3 + layoutSwitch.chosen * width
                                         Behavior on x { NumberAnimation { duration: 260 * Theme.motion; easing.type: Easing.OutCubic } } }
                                     Row {
                                         anchors { fill: parent; margins: 3 }
                                         Repeater {
-                                            model: ["Grid", "Shelf"]
+                                            model: ["Grid", "Shelf", "Landscape"]
                                             Item {
-                                                width: parent.width / 2; height: parent.height
+                                                width: parent.width / 3; height: parent.height
                                                 Text { anchors.centerIn: parent; text: modelData; font.pixelSize: 12; font.weight: Font.Bold
-                                                    color: (index === 1) === dash.shelf ? "#000000" : "#B3FFFFFF" }
+                                                    color: index === layoutSwitch.chosen ? "#000000" : "#B3FFFFFF" }
                                                 MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                                    onClicked: if ((index === 1) !== dash.shelf) dash.setShelf(index === 1) }
+                                                    onClicked: {
+                                                        if (index === layoutSwitch.chosen) return
+                                                        dash.stagger = true; staggerOff.restart()
+                                                        if (index === 2) { Backend.setTabLandscape(dash.currentTab, true); return }
+                                                        if (dash.landscape) Backend.setTabLandscape(dash.currentTab, false)
+                                                        if ((index === 1) !== dash.shelf) dash.setShelf(index === 1)
+                                                    } }
                                             }
                                         }
                                     }
@@ -780,7 +794,7 @@ Item {
                 readonly property bool picked: dash.selection[key] === true
                 readonly property bool ringed: dash.keyNav && GridView.isCurrentItem && grid.activeFocus
                 function rowInfo() { return { done: done, fav: favourite, watch: watchlist } }
-                function openBox() { if (dash.shelf) spineHit.openSpine(); else hit.openBox() }
+                function openBox() { if (dash.shelfView) spineHit.openSpine(); else hit.openBox() }
                 function playNow() { if (!offline) dash.playCard(key) }
                 property real appear: 1
                 // a recycled card may come back half-way through a filter animation (faded, shrunk): start it clean
@@ -797,7 +811,7 @@ Item {
                 // the open case behind the cover: tray and disc, seen as the cover swings open on Play
                 Rectangle {
                     x: box.x; y: box.y; width: box.width; height: box.height
-                    visible: cell.opening > 0 && !dash.shelf
+                    visible: cell.opening > 0 && !dash.shelfView && !dash.landscape
                     radius: 12
                     color: "#141416"
                     border.color: Theme.line
@@ -806,7 +820,7 @@ Item {
 
                 // box set: two more cases peek out behind the cover, and fan out a little on hover
                 Repeater {
-                    model: (key || "").indexOf("set:") === 0 && !dash.shelf && cell.opening === 0 ? 2 : 0
+                    model: (key || "").indexOf("set:") === 0 && !dash.shelfView && cell.opening === 0 ? 2 : 0     // (a stack of wide cards too)
                     Rectangle {
                         readonly property real fan: cell.pointerIn ? 1 : 0
                         x: box.x + (index + 1) * (7 + 4 * fan); y: box.y - (index + 1) * (5 + 3 * fan)
@@ -824,19 +838,19 @@ Item {
 
                 Rectangle {
                     id: box
-                    x: grid.gap / 2; y: 8; width: 180; height: 270
+                    x: grid.gap / 2; y: 8; width: dash.cardW; height: dash.cardH
                     radius: 12
                     color: Theme.slate
-                    visible: !dash.shelf
+                    visible: !dash.shelfView
                     opacity: cell.lifted ? 0 : offline ? 0.35 : 1
                     scale: cell.opening > 0 ? 1 : cell.previewing ? 1.05 : cell.pointerIn ? 1.02 : 1
                     Behavior on scale { NumberAnimation { duration: 220 * Theme.motion; easing.type: Easing.OutCubic } }
                     transform: [
                         // parallax tilt toward the pointer (up to 9 degrees), around the poster's centre
-                        Rotation { origin.x: 90; origin.y: 135; axis { x: 0; y: 1; z: 0 } angle: 9 * cell.px * Theme.motion },
-                        Rotation { origin.x: 90; origin.y: 135; axis { x: 1; y: 0; z: 0 } angle: -9 * cell.py * Theme.motion },
-                        // Play: the cover swings open on its spine (left edge)
-                        Rotation { origin.x: 0; origin.y: 135; axis { x: 0; y: 1; z: 0 } angle: -105 * cell.opening }
+                        Rotation { origin.x: box.width / 2; origin.y: box.height / 2; axis { x: 0; y: 1; z: 0 } angle: (dash.landscape ? 4 : 9) * cell.px * Theme.motion },
+                        Rotation { origin.x: box.width / 2; origin.y: box.height / 2; axis { x: 1; y: 0; z: 0 } angle: (dash.landscape ? -4 : -9) * cell.py * Theme.motion },
+                        // Play: the cover swings open on its spine (left edge); a Landscape card has no cover to open
+                        Rotation { origin.x: 0; origin.y: box.height / 2; axis { x: 0; y: 1; z: 0 } angle: dash.landscape ? 0 : -105 * cell.opening }
                     ]
                     // shadow
                     Rectangle { z: -1; anchors.fill: parent; anchors.topMargin: 10; anchors.margins: -2; radius: 14; color: "#66000000"; opacity: cell.pointerIn ? 1 : 0.6 }
@@ -846,15 +860,25 @@ Item {
                         anchors.fill: parent
                         visible: false
                         layer.enabled: true
+                        // a Landscape card without a wide picture yet: its poster, dimmed and enlarged, behind the poster itself
+                        readonly property bool wideMissing: dash.landscape && thumb === ""
                         Image {    // a little larger than the card, and shifted against the tilt: depth inside the frame
                             anchors { fill: parent; margins: -10 }
-                            source: poster
+                            source: dash.landscape && thumb !== "" ? thumb : poster
                             asynchronous: true
                             fillMode: Image.PreserveAspectCrop
-                            sourceSize.width: 400; sourceSize.height: 600
+                            opacity: art.wideMissing ? 0.35 : 1
+                            sourceSize.width: dash.landscape ? 640 : 400; sourceSize.height: dash.landscape ? 360 : 600
                             transform: Translate { x: -8 * cell.px * Theme.motion; y: -8 * cell.py * Theme.motion }
                         }
-                        Text { visible: poster === ""; anchors { fill: parent; margins: 16 } text: title; color: Theme.text; font.pixelSize: 15; font.weight: Font.Bold; wrapMode: Text.Wrap; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight }
+                        Image {
+                            visible: art.wideMissing && poster !== ""
+                            anchors { fill: parent; topMargin: 8; bottomMargin: 8 }
+                            source: visible ? poster : ""; asynchronous: true
+                            fillMode: Image.PreserveAspectFit
+                            sourceSize.height: 340
+                        }
+                        Text { visible: poster === "" && (!dash.landscape || thumb === ""); anchors { fill: parent; margins: 16 } text: title; color: Theme.text; font.pixelSize: 15; font.weight: Font.Bold; wrapMode: Text.Wrap; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight }
                         Rectangle {    // bottom gloss so badges and buttons stay legible on any poster
                             anchors.fill: parent
                             opacity: cell.pointerIn ? 1 : 0.55
@@ -924,7 +948,7 @@ Item {
                 }
                 // ---- shelf view: the case's spine, standing on a shelf
                 Rectangle {          // the shelf board under each row (the cells join into one board)
-                    visible: dash.shelf
+                    visible: dash.shelfView
                     x: -1; y: 242; width: cell.width + 2; height: 12
                     gradient: Gradient {
                         GradientStop { position: 0; color: Qt.lighter(Theme.slate, 1.9) }
@@ -936,7 +960,7 @@ Item {
                 }
                 Item {
                     id: spineItem
-                    visible: dash.shelf
+                    visible: dash.shelfView
                     x: grid.gap / 2; y: 16; width: 30; height: 226
                     readonly property bool pulled: spineHit.containsMouse
                     opacity: cell.lifted ? 0 : offline ? 0.35 : 1
@@ -998,7 +1022,7 @@ Item {
                 MouseArea {
                     id: hit
                     x: box.x; y: box.y; width: box.width; height: box.height
-                    visible: !dash.shelf
+                    visible: !dash.shelfView
                     hoverEnabled: true
                     enabled: !dash.launchKey
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
@@ -1035,13 +1059,13 @@ Item {
                     }
                 }
                 Rectangle {          // folder offline (drive unplugged): the title stays, greyed, until it is back
-                    visible: offline && !dash.shelf
+                    visible: offline && !dash.shelfView
                     x: box.x + 8; y: box.y + 8; height: 20; width: offText.implicitWidth + 12; radius: 5; color: "#E6000000"; border.color: Theme.amber
                     Text { id: offText; anchors.centerIn: parent; text: "OFFLINE"; color: Theme.amber; font.family: Theme.mono; font.pixelSize: 9; font.weight: Font.Bold }
                 }
                 Column {
                     x: box.x; y: box.y + box.height + 10; width: box.width; spacing: 3
-                    visible: !dash.shelf
+                    visible: !dash.shelfView
                     opacity: cell.lifted ? 0 : offline ? 0.5 : 1
                     Marquee { text: title; width: parent.width; active: cell.pointerIn; color: cell.pointerIn ? Theme.blue : Theme.text; font.pixelSize: 13; font.weight: Font.Bold; font.letterSpacing: -0.1 }
                     // the original title (Titles setting), small, under the one shown
@@ -1210,7 +1234,7 @@ Item {
     Connections { target: Backend; function onFolderPicked(path, name) { folderSheet.open(path, name) } }
 
     // the rounded-corner mask every poster card uses: one shared picture, not one per card
-    Item { id: posterMask; width: 180; height: 270; visible: false; layer.enabled: true
+    Item { id: posterMask; width: dash.cardW; height: dash.cardH; visible: false; layer.enabled: true
         Rectangle { anchors.fill: parent; radius: 12; color: "black" } }
 
     // long jobs (scraping, artwork, downloads): progress pills under the top bar

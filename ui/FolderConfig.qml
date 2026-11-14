@@ -46,6 +46,14 @@ Sheet {
         RowLayout {
             Layout.fillWidth: true
             spacing: 16
+            // how this tab shows its titles: DVD cases (the grid or the shelf) or wide video cards
+            Toggle { Layout.fillWidth: true; text: "Landscape thumbnails"; hint: "16:9 video cards in this tab instead of DVD cases (pick a frame with Choose thumbnail)"
+                checked: root.f.landscape === true; onToggled: { Backend.setTabLandscape(root.folderId, checked); root.after() } }
+            Item { Layout.fillWidth: true }
+        }
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 16
             Toggle { Layout.fillWidth: true; text: "Continue Watching row"; hint: "Part-watched titles above this tab's catalog"
                 checked: root.f.continueRow === true; onToggled: { Backend.toggleHidden("continue_dirs", String(root.folderId)); root.after() } }
             Toggle { Layout.fillWidth: true; text: "Recently Added row"; hint: "Titles added in the last 30 days"

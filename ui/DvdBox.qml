@@ -19,6 +19,7 @@ Item {
     property real yaw: -28
     property real dim: 0                   // 0..1: greys the whole box (carousel neighbours that are not in focus)
     property real opened: 0                // 0 = closed, 1 = cover open, disc showing
+    property bool discOut: false           // View disc: the disc has been lifted out of the tray (drawn by the view)
     property bool spinning: true           // passive spin while nobody is touching it
     property bool hint: true               // show "Drag to spin" (its row is always reserved, so the box never jumps)
     readonly property bool dragging: drag.pressed || coast.running
@@ -117,7 +118,7 @@ Item {
             Repeater { model: 3; Rectangle { x: 26; y: 120 + index * 150; width: 374; height: 2; color: "#1F1F22" } }
         }
         // the disc, seated in the tray; it spins up as the cover opens
-        Face { g: root.geo.disc; visible: root.opened > 0 && root.geo.disc.show; width: 344; height: 344
+        Face { g: root.geo.disc; visible: root.opened > 0 && root.geo.disc.show && !root.discOut; width: 344; height: 344
             Disc { anchors.fill: parent; source: root.disc; spin: 540 * root.opened }
         }
         Face { g: root.geo.back; width: 426; height: 600

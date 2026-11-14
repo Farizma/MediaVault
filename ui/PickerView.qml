@@ -8,8 +8,11 @@ Item {
     property real shown: 0
     property int count: 0
     property bool busy: false
-    // frames shrink with the window so all four always fit (2:3, at most 200 x 300)
-    readonly property real frameW: Math.min(200, (width - 48 - 64 - 3 * 14) / 4, (height - 48 - 190) * 2 / 3)
+    // a Landscape tab picks the card's 16:9 thumbnail (the whole frame); a DVD tab the front cover (its centre 2:3)
+    readonly property bool wide: Backend.landscape
+    readonly property real ratio: wide ? 9 / 16 : 1.5                   // height per width
+    // frames shrink with the window so all four always fit (at most 200 x 300 tall, or 320 x 180 wide)
+    readonly property real frameW: Math.min(wide ? 320 : 200, (width - 48 - 64 - 3 * 14) / 4, (height - 48 - 190) / ratio)
     visible: false
     focus: visible
     z: 30
@@ -50,7 +53,7 @@ Item {
             Column {
                 Layout.alignment: Qt.AlignHCenter
                 spacing: 4
-                Text { anchors.horizontalCenter: parent.horizontalCenter; text: root.busy ? "Grabbing frames…" : "Pick your favourite frame"; color: "#FFFFFF"; font.pixelSize: 20; font.weight: Font.ExtraBold; font.letterSpacing: -0.3 }
+                Text { anchors.horizontalCenter: parent.horizontalCenter; text: root.busy ? "Grabbing frames…" : root.wide ? "Pick the thumbnail" : "Pick your favourite frame"; color: "#FFFFFF"; font.pixelSize: 20; font.weight: Font.ExtraBold; font.letterSpacing: -0.3 }
                 Text { anchors.horizontalCenter: parent.horizontalCenter; text: "FRAMES AT 10 · 30 · 50 · 70 %  ·  HELD IN RAM UNTIL YOU PICK"; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10 }
             }
             Row {
@@ -60,7 +63,7 @@ Item {
                     model: root.busy ? 4 : root.count
                     Rectangle {
                         id: frameCard
-                        width: root.frameW; height: root.frameW * 1.5; radius: 12
+                        width: root.frameW; height: root.frameW * root.ratio; radius: 12
                         color: Theme.slate; border.color: pick.containsMouse ? "#66FFFFFF" : Theme.line
                         clip: true
                         scale: (pick.containsMouse ? 1.03 : 1) * (0.92 + 0.08 * landed)
@@ -74,7 +77,7 @@ Item {
                             anchors { fill: parent; margins: 1 }
                             visible: !root.busy
                             source: root.busy ? "" : "image://frames/thumb" + index
-                            fillMode: Image.PreserveAspectCrop    // centre 2:3 of the 16:9 frame
+                            fillMode: Image.PreserveAspectCrop    // the whole frame, or the centre 2:3 of it for a cover
                             cache: false
                         }
                         Text { visible: !root.busy; anchors { left: parent.left; bottom: parent.bottom; margins: 8 }

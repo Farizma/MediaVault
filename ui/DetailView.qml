@@ -60,7 +60,7 @@ Item {
     function wrap(i) { return (i % count + count) % count }
     // jump: how many slides to move (the arrows move one; a click in the films list may move several)
     function step(jump) {
-        if (count < 2 || jump === 0 || carousel.running || closing || launching || f < 1) return
+        if (count < 2 || jump === 0 || carousel.running || closing || launching || f < 1 || discMode) return
         // two films: both arrows lead to the same one, so turn toward the side it is waiting on
         var dir = count === 2 ? twoSide : (jump > 0 ? 1 : -1)
         turnDir = dir
@@ -97,6 +97,7 @@ Item {
         itemKey = key
         slide = 0
         renaming = false
+        resetDisc()
         order = Backend.detailSections().map(function(x) { return x.id })
         d = Backend.detail(key)
         if (d.isShow) Backend.fetchEpisodeGuide(key)        // names, synopses and pictures, once (they arrive in a moment)
@@ -149,6 +150,7 @@ Item {
     function close() {
         if (!visible || closing || launching) return
         closeMenus()
+        resetDisc(); box.opened = 0
         closing = true
         flyIn.stop(); carousel.stop(); turnP = 0; pullOut.stop(); box.swipe = 0; root.neighFade = 1
         box.spinning = false
@@ -173,8 +175,55 @@ Item {
         closeMenus()
         flyIn.stop(); flyOut.stop(); launchBox.stop(); carousel.stop(); turnP = 0; box.swipe = 0; root.neighFade = 1
         pullOut.stop(); packUp.stop(); spread = 0
+        resetDisc()
         visible = false; closing = false; launching = false; f = 0; box.opened = 0
     }
+    // ---- View disc: the box turns to you, the cover swings open and the disc lifts out of the tray to the middle
+    // of the pane, where it can be turned over by hand (drag, or left / right); Back puts it away again
+    property bool discMode: false
+    property real discOut: 0                 // 0 in the tray .. 1 out, big, in the middle of the pane
+    property real discYaw: 0                 // turned about its upright axis: 180 shows the shiny side
+    property real discSpin: 0                // the label turning in its own plane, like in a player
+    function viewDisc() {
+        if (discMode || launching || closing || turning || f < 1) return
+        discMode = true
+        discOpen.restart()
+    }
+    function hideDisc() { if (discMode && !discClose.running) discClose.restart() }
+    function resetDisc() {                   // at once: a new title, closing, playing
+        discOpen.stop(); discClose.stop(); discTurn.stop(); discCoast.stop()
+        discMode = false; discOut = 0; discYaw = 0
+    }
+    SequentialAnimation {
+        id: discOpen
+        ScriptAction { script: { discYaw = 0; faceCam.to = Math.round(box.yaw / 360) * 360 } }
+        ParallelAnimation {
+            NumberAnimation { id: faceCam; target: box; property: "yaw"; duration: 420 * Theme.motion; easing.type: Easing.OutCubic }
+            NumberAnimation { target: box; property: "opened"; to: 1; duration: 650 * Theme.motion; easing.type: Easing.InOutCubic }
+        }
+        NumberAnimation { target: root; property: "discOut"; to: 1; duration: 720 * Theme.motion; easing.type: Easing.OutBack; easing.overshoot: 1.1 }
+    }
+    SequentialAnimation {
+        id: discClose
+        ScriptAction { script: { discCoast.stop(); discTurn.stop(); settleYaw.to = Math.round(root.discYaw / 360) * 360 } }
+        NumberAnimation { id: settleYaw; target: root; property: "discYaw"; duration: 260 * Theme.motion; easing.type: Easing.OutCubic }
+        NumberAnimation { target: root; property: "discOut"; to: 0; duration: 520 * Theme.motion; easing.type: Easing.InOutCubic }
+        NumberAnimation { target: box; property: "opened"; to: 0; duration: 520 * Theme.motion; easing.type: Easing.InOutCubic }
+        ScriptAction { script: root.discMode = false }
+    }
+    NumberAnimation { id: discTurn; target: root; property: "discYaw"; duration: 320 * Theme.motion; easing.type: Easing.OutCubic }
+    function turnDisc(by) { discCoast.stop(); discTurn.to = (discTurn.running ? discTurn.to : discYaw) + by; discTurn.restart() }
+    FrameAnimation {                         // out of the case it keeps turning slowly, like in a player
+        running: root.discMode && root.discOut === 1 && Theme.motion > 0 && root.visible
+        onTriggered: root.discSpin += 45 * frameTime
+    }
+    Timer {                                  // after a flick it coasts, slowing down
+        id: discCoast
+        interval: 16; repeat: true
+        property real v: 0
+        onTriggered: { root.discYaw += v; v *= 0.95; if (Math.abs(v) < 0.05) stop() }
+    }
+
     // episode: a file's uuid ("" = this card); fromStart: ignore where you stopped last time
     function play(episode, fromStart) {
         if (launching) return
@@ -183,6 +232,7 @@ Item {
             var at = Backend.resumeLabel(key)
             if (at !== "") { resumeAsked(key, at); return }
         }
+        resetDisc()
         launching = true
         launchYaw.to = Math.floor(box.yaw / 360) * 360 + 20     // face the camera, turned a little to show the hinge
         launchBox.restart()
@@ -192,6 +242,14 @@ Item {
     // Play or View More plays (asking "resume or start over" when it was stopped part-way)
     Keys.onPressed: (e) => {
         var a = Backend.keyAction(e.key, e.modifiers)
+        if (discMode) {                      // the disc is out: turn it, or put it away
+            if (a === "back" || a === "viewMore") hideDisc()
+            else if (a === "left" || a === "right") turnDisc(a === "left" ? -45 : 45)
+            else if (a === "play") play(root.cur.uuid || "")
+            else return
+            e.accepted = true
+            return
+        }
         if (a === "back") close()
         else if (a === "left") step(-1)
         else if (a === "right") step(1)
@@ -334,7 +392,7 @@ Item {
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
                 y: box.restY - sheet.y + box.height - height
-                text: "Drag to spin \u00B7 scroll to zoom"; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10
+                text: root.discMode ? "Drag the disc to turn it over" : "Drag to spin \u00B7 scroll to zoom"; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10
                 opacity: root.f === 1 && !root.launching ? 1 : 0
                 Behavior on opacity { NumberAnimation { duration: 200 * Theme.motion } }
             }
@@ -1117,8 +1175,9 @@ Item {
         property real swipe: 0                 // carousel: sideways slide while turning to the next film
         readonly property real bob: root.spread * 5 * Math.sin(root.wave)   // idle wave, in step with the films beside it
         hint: false                            // the pane draws it, so it stays put while the box turns and slides
-        spinning: root.f === 1 && !root.closing && !root.launching && !root.turning
-        enabled: root.f === 1 && !root.closing && !root.launching && !root.turning
+        spinning: root.f === 1 && !root.closing && !root.launching && !root.turning && !root.discMode
+        enabled: root.f === 1 && !root.closing && !root.launching && !root.turning && !root.discMode
+        discOut: root.discOut > 0
         // resting place: centred in the left pane, above the box-art buttons
         readonly property real restX: sheet.x + (stage.width - width) / 2
         // between the film label at the top and the box-art buttons at the bottom, centred when it is smaller
@@ -1135,12 +1194,77 @@ Item {
         // a carousel turn: it slides out to the side the films move toward and shrinks back to a neighbour's size
         readonly property real turnK: 1 - (1 - root.sideScale) * root.turnP
         z: root.turnP > 0.5 ? 1 : 2
-        dim: 0.5 * root.turnP
+        dim: Math.max(0.5 * root.turnP, 0.5 * root.discOut)
         transform: [
             Scale { origin.x: box.width / 2; origin.y: box.faceCY; xScale: (box.k + (1 - box.k) * root.f) * box.turnK; yScale: xScale },
             Translate { x: (box.startCx - box.restCx) * (1 - root.f) + box.swipe - root.turnDir * root.sideX * root.turnP * root.spread
-                        y: (box.startCy - box.restCy) * (1 - root.f) + box.bob - 28 * Math.sin(Math.PI * Math.min(1, root.spread)) * root.turnP }
+                        y: (box.startCy - box.restCy) * (1 - root.f) + box.bob - 28 * Math.sin(Math.PI * Math.min(1, root.spread)) * root.turnP
+                           + 60 * root.discOut }      // View disc: the open case sinks a little below the disc
         ]
+    }
+
+    // ---- the disc, out of its case (View disc)
+    Item {
+        id: discLayer
+        // from the tray (where the box draws its disc) up and forward to the middle of the pane, much bigger
+        readonly property real d0: box.focal * 172 / (box.camZ + 260 + box.boxD / 2 - 3)
+        readonly property real cx0: box.x + box.width / 2
+        readonly property real cy0: box.y + box.faceCY + box.bob
+        readonly property real d1: Math.max(160, Math.min(stage.width - 96, sheet.height - 250))
+        readonly property real cx1: sheet.x + stage.width / 2
+        readonly property real cy1: sheet.y + 64 + d1 / 2
+        readonly property real t: root.discOut
+        visible: root.visible && t > 0.001
+        z: 8
+        width: d0 + (d1 - d0) * t; height: width
+        x: cx0 + (cx1 - cx0) * t - width / 2
+        y: cy0 + (cy1 - cy0) * t - height / 2 - 50 * Math.sin(Math.PI * Math.min(1, t))
+        // a soft shadow under the disc, flattening as it turns side-on
+        Rectangle {
+            anchors.horizontalCenter: parent.horizontalCenter
+            y: parent.height * 1.04
+            width: parent.width * 0.7 * Math.max(0.15, Math.abs(Math.cos(root.discYaw * Math.PI / 180))); height: parent.height * 0.06
+            radius: height / 2; color: "#000000"; opacity: 0.22 * discLayer.t
+        }
+        Item {
+            id: discFace
+            anchors.fill: parent
+            readonly property bool flipped: Math.cos(root.discYaw * Math.PI / 180) < 0
+            transform: Rotation { origin.x: discFace.width / 2; origin.y: discFace.height / 2; axis { x: 0; y: 1; z: 0 } angle: root.discYaw }
+            Disc { anchors.fill: parent; visible: !discFace.flipped; spin: root.discSpin
+                   source: root.cur.disc || root.cur.cover || "" }
+            Disc { anchors.fill: parent; visible: discFace.flipped; dataSide: true; spin: -root.discSpin
+                   transform: Scale { origin.x: discFace.width / 2; xScale: -1 } }      // seen from behind
+        }
+        // drag sideways to turn it over; it coasts after a flick
+        MouseArea {
+            anchors.fill: parent
+            enabled: root.discOut === 1
+            cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+            property real lastX: 0
+            property real lastT: 0
+            onPressed: (m) => { discCoast.stop(); discTurn.stop(); lastX = m.x; lastT = Date.now(); discCoast.v = 0 }
+            onPositionChanged: (m) => {
+                var dx = (m.x - lastX) * 0.6
+                root.discYaw += dx
+                var now = Date.now()
+                discCoast.v = dx / Math.max(1, now - lastT) * 16
+                lastX = m.x; lastT = now
+            }
+            onReleased: if (Theme.motion > 0 && Math.abs(discCoast.v) > 0.3 && Date.now() - lastT < 80) discCoast.start()
+        }
+    }
+    GlassButton {
+        z: 9
+        visible: root.visible && root.f === 1 && !root.launching && !root.closing
+        x: sheet.x + stage.width - width - 16
+        y: sheet.y + 16
+        small: true
+        glyph: root.discMode ? "\u2190" : "\u25CE"
+        label: root.discMode ? "Back to box" : "View disc"
+        tip: root.discMode ? "Put the disc back and close the case" : "Open the case and take the disc out"
+        enabled: !discOpen.running && !discClose.running && !root.turning
+        onClicked: root.discMode ? root.hideDisc() : root.viewDisc()
     }
 
     // carousel arrows: above the box layer so the box's drag area never swallows the click

@@ -648,6 +648,15 @@ Item {
                         onToggled: { Backend.toggleHidden("continue_dirs", "-1"); Backend.reload() }
                     }
 
+                    Caption { text: "ALL TAB LAYOUT"; Layout.topMargin: 10 }
+                    Toggle {
+                        Layout.fillWidth: true
+                        text: "Landscape thumbnails in the All tab"
+                        hint: "16:9 video cards instead of DVD cases. Each folder chooses for its own tab (Configure), or use Grid / Shelf / Landscape above the catalog."
+                        checked: Backend.hiddenFrom("landscape_dirs").indexOf(-1) >= 0
+                        onToggled: Backend.setTabLandscape(-1, checked)
+                    }
+
                     Caption { text: "RECENTLY ADDED"; Layout.topMargin: 10 }
                     Toggle {
                         Layout.fillWidth: true

@@ -735,6 +735,17 @@ def save_collection_poster(cid, url: str, cache: dict | None = None, force: bool
         logging.getLogger(__name__).warning("collection poster failed for %s", cid, exc_info=True)
 
 
+def thumb_path(item: dict) -> Path:
+    """The 16:9 picture a card shows in a Landscape tab: a frame you picked (Choose thumbnail), or one taken from the
+    video when there is no other wide picture. A series has one for all its episodes."""
+    if item["media_type"] == "show":
+        return Path(item["file_path"]).parent / ASSET_DIR / "_series.thumb.webp"
+    return _assets(item) / f"{_stem(item)}.thumb.webp"
+
+
+THUMB_BOX = (960, 540)
+
+
 def gallery_dir(item: dict) -> Path:
     """A title's Gallery: wide images (scraped stills, or your own) shown in View More and behind the recommended
     carousel. One per film, one per series (every episode shares it), in the app cache for personal clips."""

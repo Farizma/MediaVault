@@ -1,16 +1,20 @@
 // A disc: the art (disc art, else the poster) clipped to a circle, with a clear plastic hub and the centre hole.
 // No art: plain silver with a coloured label band. Canvas, so it draws without a GPU.
+// dataSide: the other face, the one a player reads: mirror silver with a rainbow sheen that turns with the disc.
 import QtQuick
 
 Item {
     id: root
     property url source
     property real spin: 0                 // degrees
+    property bool dataSide: false
     Canvas {
         id: c
         anchors.fill: parent
         rotation: root.spin
-        property url src: root.source
+        property url src: root.dataSide ? "" : root.source
+        property bool readSide: root.dataSide
+        onReadSideChanged: requestPaint()
         onSrcChanged: { if (src != "") loadImage(src); requestPaint() }
         onImageLoaded: requestPaint()
         onWidthChanged: requestPaint()
@@ -19,7 +23,17 @@ Item {
             g.reset()
             g.save()
             g.beginPath(); g.arc(r, r, r, 0, Math.PI * 2); g.clip()
-            if (src != "" && isImageLoaded(src)) {
+            if (readSide) {
+                var m = g.createRadialGradient(r, r, w * 0.16, r, r, r)
+                m.addColorStop(0, "#C9CDD3"); m.addColorStop(0.5, "#E9ECF0"); m.addColorStop(1, "#AEB4BC")
+                g.fillStyle = m; g.fillRect(0, 0, w, w)
+                var rb = g.createConicalGradient(r, r, 0)          // light split by the tracks: a soft rainbow
+                var hues = ["#FF5A5A", "#FFC24A", "#7BE36A", "#4AD6FF", "#6A7BFF", "#E46AFF", "#FF5A5A"]
+                for (var i = 0; i < hues.length; i++) rb.addColorStop(i / (hues.length - 1), hues[i])
+                g.globalAlpha = 0.28; g.fillStyle = rb; g.fillRect(0, 0, w, w); g.globalAlpha = 1
+                g.strokeStyle = "rgba(255,255,255,0.10)"; g.lineWidth = 1        // the tracks
+                for (var t = w * 0.2; t < r; t += Math.max(3, w * 0.012)) { g.beginPath(); g.arc(r, r, t, 0, Math.PI * 2); g.stroke() }
+            } else if (src != "" && isImageLoaded(src)) {
                 g.drawImage(src, 0, 0, w, w)
             } else {
                 var s = g.createLinearGradient(0, 0, w, w)

@@ -99,7 +99,7 @@ def banner_for(card: dict):
 MATCH_FIELDS = ("title", "year", "synopsis", "poster", "banner", "disc", "genres", "score", "rating", "titles", "cast", "boxset")
 MATCH_SOURCES = ("tmdb", "anilist", "omdb", "tvmaze", "mal", "kitsu")
 SET_FIELDS = ("title", "synopsis", "poster", "banner", "disc")     # what a box set's own page can take
-HIDDEN_KINDS = ("all_dirs", "all_tags", "insights_dirs", "continue_dirs", "private_dirs", "recent_dirs")
+HIDDEN_KINDS = ("all_dirs", "all_tags", "insights_dirs", "continue_dirs", "private_dirs", "recent_dirs", "landscape_dirs")
 UPLOAD_FIELDS = ("poster", "banner", "disc", "gallery")      # the "Upload file" tile in the window
 PERCENT_SOURCES = ("anilist", "kitsu")                        # scores shown as a percentage
 GALLERY_PICK_MAX = 40                                         # Gallery images offered per result, to pick one by one
@@ -117,6 +117,21 @@ def episode_row(e: dict) -> dict:
 GALLERY_DROP_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".avif"}
 MATCH_SOURCES_LABEL = {"tmdb": "TMDB", "tmdbset": "TMDB collections", "tvmaze": "TVmaze", "omdb": "IMDb", "anilist": "AniList",
                        "mal": "MyAnimeList", "kitsu": "Kitsu"}
+
+
+def wide_picture(card: dict, art: dict, files: "FolderIndex"):
+    """What a card shows in a Landscape tab: the frame you picked (or one taken from the video), else the banner,
+    else the first Gallery still, else a frame you captured in the player. None: nothing wide yet."""
+    for p in (scraper.thumb_path(art), scraper.banner_path(art)):
+        if files.has(p):
+            return p
+    if not card["key"].startswith("set:"):
+        shots = scraper.gallery_images(card)
+        if shots:
+            return shots[0]
+        if files.has(scraper.fanart_path(card)):
+            return scraper.fanart_path(card)
+    return None
 
 
 def missing_rows(folder: str, eps: list[dict]) -> list[dict]:
@@ -384,21 +399,22 @@ class FolderIndex:
 
 class LibraryModel(QAbstractListModel):
     """One row per card. QML's GridView only creates delegates for what is on screen and recycles them."""
-    KEY, TITLE, META, POSTER, PROGRESS, DONE, BADGE, VIDEO, DURATION, OFFLINE, SPINE, YEAR, DISC, SUBTITLE, FAV, WATCH = \
-        (Qt.UserRole + i for i in range(1, 17))
+    KEY, TITLE, META, POSTER, PROGRESS, DONE, BADGE, VIDEO, DURATION, OFFLINE, SPINE, YEAR, DISC, SUBTITLE, FAV, WATCH, THUMB = \
+        (Qt.UserRole + i for i in range(1, 18))
     NAMES = {KEY: b"key", TITLE: b"title", META: b"meta", POSTER: b"poster", PROGRESS: b"progress",
              DONE: b"done", BADGE: b"badge", VIDEO: b"videoUrl", DURATION: b"durationMs",
              OFFLINE: b"offline", SPINE: b"spine", YEAR: b"year", DISC: b"disc", SUBTITLE: b"subtitle",
-             FAV: b"favourite", WATCH: b"watchlist"}
+             FAV: b"favourite", WATCH: b"watchlist", THUMB: b"thumb"}
     FIELDS = {KEY: "key", TITLE: "title", META: "meta", POSTER: "poster", PROGRESS: "progress", DONE: "done",
               BADGE: "badge", VIDEO: "video", DURATION: "duration_ms", OFFLINE: "offline", SPINE: "spine", YEAR: "year",
-              DISC: "disc", SUBTITLE: "subtitle", FAV: "fav", WATCH: "watch"}
+              DISC: "disc", SUBTITLE: "subtitle", FAV: "fav", WATCH: "watch", THUMB: "thumb"}
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._rows: list[dict] = []
         self.view: dict = {}           # search / sort / filters (Dashboard.setView)
         self.spines = False            # look up spine art only while the shelf view is on (it costs file checks)
+        self.landscape = False         # a Landscape tab: look up each card's 16:9 thumbnail (it costs file checks)
         self.title_pref = "english"    # Settings > Library > Titles (set by reload)
         self.private_closed: set = set()   # private folders not signed in to: their titles are left out everywhere
         self.mark = ""                 # "favourite" / "watchlist": show only those
@@ -450,7 +466,8 @@ class LibraryModel(QAbstractListModel):
                 "done": bool(card["is_completed"]), "badge": f"{shows} episodes" if shows else f"{films} films" if films else "",
                 "video": file_url(card["file_path"], bust=False), "duration_ms": int((card["duration"] or 0) * 1000),
                 "offline": not online, "spine": files.url(spine) if spine else "", "year": (card["release_date"] or "")[:4],
-                "disc": self._disc(art, files) if online else ""}
+                "disc": self._disc(art, files) if online else "",
+                "thumb": files.url(t) if (self.landscape and online and (t := wide_picture(card, art, files))) else ""}
 
     @staticmethod
     def _disc(card, files: "FolderIndex") -> str:
@@ -584,6 +601,7 @@ class Dashboard(QObject):
     raiseWindow = Signal()
     recentChanged = Signal()
     controlsChanged = Signal()         # a binding changed, or a controller came or went
+    layoutChanged = Signal()           # the tab shown now is a DVD tab (grid / shelf) or a Landscape one
     padButton = Signal(str)            # a controller button, while Settings > Controls waits for one
     minimizeWindow = Signal()          # picture in picture: only the small video window stays on screen
     thumbnailsReady = Signal(int)
@@ -904,7 +922,9 @@ class Dashboard(QObject):
         if self._tab in closed:
             self._tab = -1
         self.tabs.reload()
+        self._apply_layout()
         cards = self.library.reload(None if self._tab < 0 else self._tab)
+        self._auto_thumbs()
         self._refresh_billboard(cards)
         self._refresh_continue(cards)
         offline = [d["tab_name"] for d in db.list_directories() if not os.path.isdir(d["folder_path"])]
@@ -919,6 +939,67 @@ class Dashboard(QObject):
         self.library.view = {"query": query[:200], "sort": sort if sort in dict(SORTS) else "title", "genre": genre,
                              "quality": quality if quality in dict(QUALITIES) else "", "unwatched": bool(unwatched)}
         self.library.reload(None if self._tab < 0 else self._tab)
+
+    # -- a tab's layout: DVD cases (the grid or the shelf) or Landscape (16:9 thumbnails). Saved per folder; -1: All
+    @Property(bool, notify=layoutChanged)
+    def landscape(self):
+        return self.library.landscape
+
+    def _apply_layout(self):
+        on = self._tab in set(db.hidden("landscape_dirs"))
+        if on != self.library.landscape:
+            self.library.landscape = on
+            self.layoutChanged.emit()
+
+    @Slot(int, bool)
+    def setTabLandscape(self, tab: int, on: bool):
+        now = set(db.hidden("landscape_dirs"))
+        (now.add if on else now.discard)(int(tab))
+        db.set_hidden("landscape_dirs", now)
+        self.reload()
+
+    def _auto_thumbs(self):
+        """A Landscape tab: titles with no wide picture at all get a frame from their video, once, in the background."""
+        if not self.library.landscape:
+            return
+        tried = self.__dict__.setdefault("_thumb_tried", set())
+        todo = [r["key"] for r in self.library._rows if not r["thumb"] and not r["offline"]
+                and not r["key"].startswith("set:") and r["key"] not in tried]
+        if not todo or getattr(self, "_thumb_job", None):
+            return
+        tried.update(todo)
+        items = [(k, it) for k in todo if (it := self._target(k))]
+
+        def work():
+            from utils import progress
+            made = 0
+            try:
+                hp = media_probe.HeadlessPlayer()
+            except Exception:
+                log.info("no libmpv: Landscape thumbnails are not made from the videos")
+                self._thumb_job = None
+                return
+            try:
+                with progress.task("Making thumbnails", total=len(items)) as t:
+                    for key, it in items:
+                        t.step(detail=it["title"])
+                        try:
+                            if not hp.open(it["file_path"]):
+                                continue
+                            dur = it["duration"] or hp.info().get("duration") or 0
+                            frame = hp.frame_at(min(dur * 0.2, 600) if dur else 30)
+                            if frame is not None:
+                                scraper.save_webp(frame, scraper.thumb_path(art_item({**it, "key": key})), box=scraper.THUMB_BOX)
+                                made += 1
+                        except Exception:
+                            log.warning("thumbnail for %s", it["title"], exc_info=True)
+            finally:
+                hp.close()
+                self._thumb_job = None
+            if made:
+                self.libraryChanged.emit()
+        self._thumb_job = threading.Thread(target=work, daemon=True, name="thumbs")
+        self._thumb_job.start()
 
     @Slot(bool)
     def setShelf(self, on: bool):
@@ -939,7 +1020,9 @@ class Dashboard(QObject):
             return
         self._tab = tab_id
         self._bb_keys = []  # new tab, new random picks
+        self._apply_layout()
         cards = self.library.reload(None if tab_id < 0 else tab_id, fresh=True)
+        self._auto_thumbs()
         self._refresh_billboard(cards)
         self._refresh_continue(cards)
 
@@ -2001,7 +2084,12 @@ class Dashboard(QObject):
     def useThumbnail(self, key: str, index: int):
         item = self._target(key)
         try:
-            if item and 0 <= index < len(self._thumbs):
+            if item and 0 <= index < len(self._thumbs) and self.library.landscape:
+                # a Landscape tab: the whole frame becomes the card's thumbnail
+                scraper.save_webp(self._thumbs[index], scraper.thumb_path(art_item({**item, "key": key})), box=scraper.THUMB_BOX)
+                self.toast.emit("Thumbnail updated")
+                self.libraryChanged.emit()
+            elif item and 0 <= index < len(self._thumbs):
                 img = self._thumbs[index]
                 w, h = img.size
                 tw = int(h * 2 / 3)
@@ -2277,6 +2365,7 @@ class Dashboard(QObject):
                  "inInsights": d["id"] not in set(db.hidden("insights_dirs")),
                  "continueRow": d["id"] not in set(db.hidden("continue_dirs")),
                  "recentRow": d["id"] not in set(db.hidden("recent_dirs")),
+                 "landscape": d["id"] in set(db.hidden("landscape_dirs")),
                  "private": d["id"] in db.private_dirs()} for d in db.list_directories()]
 
     @Slot(result="QVariantList")
