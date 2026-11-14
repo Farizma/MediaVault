@@ -257,4 +257,4 @@ class V104Tests(unittest.TestCase):
             while not done.is_set() and time.time() < end:    # results arrive queued, on this thread
                 QGuiApplication.processEvents()
                 time.sleep(0.02)
-        self.assertEqual(got, [[{"id": "1", "source": "anilist", "title": "A"}]])   # TMDB failing does not hide AniList
+        self.assertEqual(got[0], [{"id": "1", "source": "anilist", "title": "A"}])   # TMDB failing does not hide AniList (results arrive as each site answers)

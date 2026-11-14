@@ -609,6 +609,55 @@ Item {
                             text: "For titles already in your library. Your own box art and Gallery images, and banners, are kept. It takes a while for a large library." }
                     }
 
+                    Caption { text: "STORAGE"; Layout.topMargin: 10 }
+                    ColumnLayout {
+                        id: storage
+                        Layout.fillWidth: true
+                        spacing: 10
+                        property var usage: null
+                        property bool confirmAll: false
+                        function mb(b) { return b >= 1073741824 ? (b / 1073741824).toFixed(1) + " GB" : (b / 1048576).toFixed(b < 10485760 ? 1 : 0) + " MB" }
+                        Connections { target: Backend; function onAssetsScanned(u) { storage.usage = u } }
+                        Connections { target: root; function onSectionNameChanged() { if (root.sectionName === "Library") { storage.usage = null; Backend.assetUsage() } } }
+                        // measured when Settings opens on Library (a walk through your folders: not at start-up)
+                        Connections { target: root; function onVisibleChanged() { if (root.visible && root.sectionName === "Library") Backend.assetUsage() } }
+                        Text {
+                            Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.muted; font.pixelSize: 12
+                            text: !storage.usage ? "Measuring the artwork\u2026"
+                                : "Artwork uses " + storage.mb(storage.usage.total) + " (" + storage.mb(storage.usage.yours) + " of it your own). "
+                                  + (storage.usage.unusedCount > 0 ? storage.usage.unusedCount + (storage.usage.unusedCount === 1 ? " file" : " files") + ", "
+                                     + storage.mb(storage.usage.unused) + ", belong to titles no longer in the library." : "Nothing unused.")
+                        }
+                        RowLayout {
+                            spacing: 8
+                            GlassButton { small: true; label: "Clean up unused"; enabled: !!storage.usage && storage.usage.unusedCount > 0
+                                tip: "Delete artwork for videos that were deleted, renamed or moved, box sets that are gone and actors in no cast"
+                                onClicked: { storage.usage = null; Backend.cleanAssets("unused", true) } }
+                            GlassButton { small: true; label: "Delete all artwork\u2026"; visible: !storage.confirmAll; onClicked: storage.confirmAll = true }
+                        }
+                        // deleting everything asks first, and keeps your own art unless you say otherwise
+                        Rectangle {
+                            visible: storage.confirmAll
+                            Layout.fillWidth: true
+                            implicitHeight: confirmCol.implicitHeight + 28
+                            radius: 12; color: Qt.rgba(1, 0.27, 0.23, 0.08); border.color: Theme.red
+                            ColumnLayout {
+                                id: confirmCol
+                                anchors { left: parent.left; right: parent.right; top: parent.top; margins: 14 }
+                                spacing: 10
+                                Text { Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.text; font.pixelSize: 12
+                                    text: "Delete every cover, banner, disc, Gallery image and actor photo Media Vault saved? Your videos are not touched. Fetch missing (or Download images again) gets them back from the internet; art you made yourself cannot be downloaded again." }
+                                Toggle { id: keepOwn; checked: true; text: "Keep the art I added myself (my box art and Gallery images)"; font.pixelSize: 12 }
+                                RowLayout {
+                                    spacing: 8
+                                    GlassButton { small: true; label: "Cancel"; onClicked: storage.confirmAll = false }
+                                    GlassButton { small: true; label: "Delete all artwork"; glyphColor: Theme.red
+                                        onClicked: { storage.confirmAll = false; storage.usage = null; Backend.cleanAssets("all", keepOwn.checked) } }
+                                }
+                            }
+                        }
+                    }
+
                     Caption { text: "BOX SETS"; Layout.topMargin: 10 }
                     Toggle {
                         Layout.fillWidth: true

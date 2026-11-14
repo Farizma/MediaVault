@@ -507,6 +507,7 @@ class Dashboard(QObject):
     matchApplied = Signal(str, str)              # old key, new key (a film can join or leave a box set)
     matchDetailsReady = Signal(str, "QVariantList")   # key, every picked result's details (Fix Scraped Data, step 2)
     matchFilesPicked = Signal(str, str, "QVariantList")   # key, field, [{url, choice}] from "Upload file"
+    assetsScanned = Signal("QVariantMap")                 # Settings > Storage: {total, unused, unusedCount, yours} in bytes
     _thumbnailsDone = Signal(str, object)
 
     def __init__(self, app, library: LibraryModel, tabs: TabsModel, frames: dvd_box.FrameProvider, parent=None):
@@ -1774,6 +1775,37 @@ class Dashboard(QObject):
     @Slot(int, str)
     def setScrapeParts(self, dir_id: int, parts: str):
         db.set_scrape_opts(dir_id, [p for p in parts.split(",") if p])
+
+    # -- Settings > Library > Storage: artwork nothing uses any more, or all of it (utils/cleanup.py)
+    @Slot()
+    def assetUsage(self):
+        def work():
+            from utils import cleanup
+            try:
+                self.assetsScanned.emit(cleanup.usage())
+            except Exception:
+                log.exception("artwork usage")
+        threading.Thread(target=work, daemon=True, name="asset-usage").start()
+
+    @Slot(str, bool)
+    def cleanAssets(self, mode: str, keep_own: bool):
+        """mode "unused": art for titles that are gone. "all": every piece of artwork (keep_own: not the art you added)."""
+        if mode not in ("unused", "all"):
+            return
+
+        def work():
+            from utils import cleanup, progress
+            label = "Cleaning up unused artwork" if mode == "unused" else "Deleting artwork"
+            with progress.task(label) as t:
+                n, freed = cleanup.run(mode, keep_own, step=lambda i, total: t.update(done=i, total=total))
+            mb = freed / 1048576
+            self.toast.emit(f"Deleted {n} file{'s' if n != 1 else ''}, {mb:.1f} MB freed" if n else "Nothing to clean up")
+            self.libraryChanged.emit()
+            try:
+                self.assetsScanned.emit(cleanup.usage())
+            except Exception:
+                log.exception("artwork usage")
+        threading.Thread(target=work, daemon=True, name="asset-clean").start()
 
     @Slot()
     def redownloadImages(self):
