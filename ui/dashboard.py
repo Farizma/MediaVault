@@ -93,7 +93,18 @@ def banner_for(card: dict):
 
 
 # Fix Scraped Data: what can be taken from which result, in the order the window lists them
-MATCH_FIELDS = ("title", "year", "synopsis", "poster", "banner", "genres", "score", "rating", "titles", "cast", "boxset")
+MATCH_FIELDS = ("title", "year", "synopsis", "poster", "banner", "disc", "genres", "score", "rating", "titles", "cast", "boxset")
+MATCH_SOURCES = ("tmdb", "anilist", "omdb", "tvmaze", "mal", "kitsu")
+UPLOAD_FIELDS = ("poster", "banner", "disc", "gallery")      # the "Upload file" tile in the window
+PERCENT_SOURCES = ("anilist", "kitsu")                        # scores shown as a percentage
+
+
+def _upload_path(choice) -> str | None:
+    """A "file:<path>" choice from the window: the path, if it is an image file that exists, else None."""
+    if not (isinstance(choice, str) and choice.startswith("file:")):
+        return None
+    path = choice[5:]
+    return path if os.path.isfile(path) and os.path.splitext(path)[1].lower() in scraper.IMAGE_EXTS else None
 
 
 def match_preview(h: dict) -> dict:
@@ -109,7 +120,9 @@ def match_preview(h: dict) -> dict:
         "banner": scraper.safe_url(h.get("banner_url")) or "",
         "gallery": gallery[:24], "galleryCount": len(gallery),
         "genres": ", ".join((h.get("genres") or []) + [f"{s} (studio)" for s in h.get("studios") or []]),
-        "score": "" if score is None else (f"{round(score * 10)}%" if h.get("anilist_id") else f"{score:.1f} / 10"),
+        "score": "" if score is None else (f"{round(score * 10)}%" if h.get("anilist_id") or h.get("score_scale") == "percent"
+                                           else f"{score:.1f} / 10"),
+        "disc": scraper.safe_url(h.get("disc_url")) or "",
         "rating": h.get("certification") or "",
         "titles": " \u00B7 ".join(t for t in (h.get("original_title"), h.get("romaji_title")) if t),
         "cast": ", ".join(names[:6]) + (f" and {len(names) - 6} more" if len(names) > 6 else ""),
@@ -492,6 +505,7 @@ class Dashboard(QObject):
     matchFailed = Signal(str, str)               # key, reason
     matchApplied = Signal(str, str)              # old key, new key (a film can join or leave a box set)
     matchDetailsReady = Signal(str, "QVariantList")   # key, every picked result's details (Fix Scraped Data, step 2)
+    matchFilesPicked = Signal(str, str, "QVariantList")   # key, field, [{url, choice}] from "Upload file"
     _thumbnailsDone = Signal(str, object)
 
     def __init__(self, app, library: LibraryModel, tabs: TabsModel, frames: dvd_box.FrameProvider, parent=None):
@@ -913,8 +927,11 @@ class Dashboard(QObject):
             """A pasted TMDB / AniList / MyAnimeList / IMDb page: that exact title, as the only result."""
             from utils import anilist
             try:
-                if link["source"] in ("anilist", "mal"):
-                    aid = int(link["id"]) if link["source"] == "anilist" else anilist.from_mal(int(link["id"]))
+                if link["source"] in ("mal", "tvmaze", "kitsu"):
+                    h = self._fetch_hit(key, link["source"], link["id"])
+                    row = {"id": str(link["id"]), "source": link["source"]}
+                elif link["source"] == "anilist":
+                    aid = int(link["id"])
                     h = anilist.details(aid)
                     row = {"id": str(aid), "source": "anilist"}
                 elif link["source"] == "tmdb":
@@ -936,30 +953,51 @@ class Dashboard(QObject):
         def work():
             from concurrent.futures import ThreadPoolExecutor
             from utils import anilist
-            jobs = {"anilist": lambda: anilist.search(q)}
+            from utils import sources
+            jobs = {"anilist": lambda: anilist.search(q), "mal": lambda: sources.mal_search(q),
+                    "kitsu": lambda: sources.kitsu_search(q)}
+            if kind == "show":                           # TVmaze knows series only
+                jobs["tvmaze"] = lambda: sources.tvmaze_search(q)
             if keys.get("tmdb"):
                 jobs["tmdb"] = lambda: scraper.tmdb_search(kind, q, y, keys["tmdb"])
             if keys.get("omdb"):
                 jobs["omdb"] = lambda: scraper.omdb_search(kind, q, y, keys["omdb"])
-            order = ["anilist", "tmdb", "omdb"] if anime else ["tmdb", "anilist", "omdb"]
+            order = (["anilist", "mal", "kitsu", "tmdb", "tvmaze", "omdb"] if anime
+                     else ["tmdb", "tvmaze", "omdb", "anilist", "mal", "kitsu"])
+            from concurrent.futures import as_completed
+            got, errors = {}, []
             with ThreadPoolExecutor(len(jobs)) as pool:
-                futures = {name: pool.submit(fn) for name, fn in jobs.items()}
-            results, errors = [], []
-            for name in order:
-                if name in futures:
+                futures = {pool.submit(fn): name for name, fn in jobs.items()}
+                # results show as each site answers (a slow one does not hold the rest back), in the folder's order
+                for f in as_completed(futures):
                     try:
-                        results += futures[name].result()
+                        got[futures[f]] = f.result()
                     except Exception as e:   # ScrapeError, AniListError, offline
                         errors.append(str(e))
-            if results or not errors:
-                self.matchResults.emit(key, results)
-            else:
-                self.matchFailed.emit(key, "; ".join(errors))
+                        continue
+                    shown = [r for name in order for r in got.get(name, [])]
+                    if shown:
+                        self.matchResults.emit(key, shown)
+            if not got or not any(got.values()):
+                if errors and not got:
+                    self.matchFailed.emit(key, "; ".join(errors))
+                else:
+                    self.matchResults.emit(key, [])
         if q:
             threading.Thread(target=from_link if link else work, daemon=True, name="match-search").start()
 
     def _fetch_hit(self, key: str, source: str, ident: str) -> dict:
         keys = scraper.api_keys()
+        from utils import sources
+        if source == "tvmaze":
+            return sources.tvmaze_details(int(ident))
+        if source == "mal":
+            return sources.mal_details(int(ident))
+        if source == "kitsu":
+            return sources.kitsu_details(ident)
+        if source == "fanart":                   # "movie:<TMDB id>" / "show:<TheTVDB id>"
+            kind, _, num = ident.partition(":")
+            return sources.fanart_details(kind, num, keys.get("fanart", "")) or {}
         if source == "anilist":
             from utils import anilist
             hit = anilist.details(int(ident))
@@ -976,7 +1014,7 @@ class Dashboard(QObject):
     def matchDetails(self, key: str, picks: list):
         """Fix Scraped Data, step 2: the full details of every result you picked, all at once, so you can choose
         field by field. Emits matchDetailsReady(key, [{pid, source, title, year, fields: {...}}])."""
-        picks = [p for p in picks or [] if p.get("source") in ("tmdb", "anilist", "omdb") and p.get("id")][:6]
+        picks = [p for p in picks or [] if p.get("source") in MATCH_SOURCES and p.get("id")][:6]
 
         def work():
             from concurrent.futures import ThreadPoolExecutor
@@ -989,6 +1027,17 @@ class Dashboard(QObject):
                     hits[pid] = f.result()
                 except Exception as e:
                     errors.append(f"{jobs[pid].get('title') or pid}: {e}")
+            # fanart.tv: textless posters, backgrounds and disc art for the picked films (TMDB id) and series (TheTVDB id)
+            fan_key = scraper.api_keys().get("fanart", "")
+            if fan_key:
+                from utils import sources
+                wanted = {f"fanart|movie:{h['tmdb_id']}" for h in hits.values() if h.get("tmdb_id") and h.get("kind") == "movie"}
+                wanted |= {f"fanart|show:{h['tvdb_id']}" for h in hits.values() if h.get("tvdb_id")}
+                for pid in sorted(wanted):
+                    kind, _, num = pid.split("|")[1].partition(":")
+                    art = sources.fanart_details(kind, num, fan_key)
+                    if art:
+                        hits[pid] = art
             self._match_hits[key] = hits
             for pid, h in hits.items():
                 out.append({"pid": pid, "source": pid.split("|")[0], "title": h.get("title") or "",
@@ -998,6 +1047,22 @@ class Dashboard(QObject):
             else:
                 self.matchFailed.emit(key, "; ".join(errors) or "Nothing came back")
         threading.Thread(target=work, daemon=True, name="match-details").start()
+
+    @Slot(str, str)
+    def pickMatchFiles(self, key: str, field: str):
+        """Fix Scraped Data > "Upload file": choose your own picture for a field (several for the Gallery).
+        Emits matchFilesPicked(key, field, [{url, choice}]); choice is what applyMatchParts takes for it."""
+        if field not in UPLOAD_FIELDS:
+            return
+
+        def run():
+            from . import pick_image, pick_images
+            start = self._media_folder(key)
+            paths = pick_images(start) if field == "gallery" else [p for p in [pick_image(start, f"Choose a {field}")] if p]
+            ok = [p for p in paths if _upload_path("file:" + p)]
+            if ok:
+                self.matchFilesPicked.emit(key, field, [{"url": file_url(p, bust=False), "choice": "file:" + p} for p in ok])
+        QTimer.singleShot(0, run)
 
     @Slot(str, "QVariantMap", str)
     def applyMatchParts(self, key: str, choices: dict, primary: str):
@@ -1020,8 +1085,10 @@ class Dashboard(QObject):
         def pick(field):
             pid = choices.get(field)
             return hits.get(pid) if isinstance(pid, str) else None
-        keys = scraper.api_keys()
-        steps = [f for f in MATCH_FIELDS if pick(f)] + (["gallery"] if choices.get("gallery") else [])
+
+        def upload(field):          # a file you chose with "Upload file" for this field
+            return _upload_path(choices.get(field)) if field in UPLOAD_FIELDS else None
+        steps = [f for f in MATCH_FIELDS if pick(f) or upload(f)] + (["gallery"] if choices.get("gallery") else [])
         with progress.task(f"Applying scraped data \u00B7 {main.get('title') or ''}", total=len(steps) + 1) as t:
             # which title this is linked to: its ids, so later lookups (Fetch missing) ask about the right one
             tmdb_id = next((h.get("tmdb_id") for h in [main, *hits.values()] if h.get("tmdb_id")), None)
@@ -1051,7 +1118,7 @@ class Dashboard(QObject):
             if (h := pick("score")):
                 t.step(detail="Score")
                 db.set_score(uids, h.get("score"))
-                db.set_score_source(uids, "anilist" if h.get("anilist_id") else "")
+                db.set_score_source(uids, "anilist" if h.get("anilist_id") else "kitsu" if h.get("kitsu_id") else "")
             if (h := pick("rating")):
                 t.step(detail="Age rating")
                 with db._tx() as c:
@@ -1074,28 +1141,47 @@ class Dashboard(QObject):
                                       [(h.get("collection_id"), h.get("collection_name"), u) for u in uids])
                     if h.get("collection_id") and h.get("collection_poster_url"):
                         scraper.save_collection_poster(h["collection_id"], h["collection_poster_url"])
-            if (h := pick("poster")):
+            if (f := upload("poster")):
+                t.step(detail="Poster (your file)")
+                save_box_art(Image.open(f), items, "front")              # yours: it shows over any scraped poster
+            elif (h := pick("poster")):
                 t.step(detail="Poster")
                 try:
                     img = scraper.fetch_image(h["poster_url"])
                     for i in items:          # your own front cover (if any) still shows over it, as the window says
                         scraper.save_webp(img, scraper.poster_path(i))
-                    if not show and h.get("tmdb_id"):
-                        url = scraper.disc_url(h["tmdb_id"], keys.get("fanart", ""))
-                        for i in items:
-                            scraper.disc_path(i).unlink(missing_ok=True)       # the old title's disc
-                            if url:
-                                scraper.save_webp(scraper.fetch_image(url), scraper.disc_path(i), box=(500, 500))
                 except Exception:
                     log.warning("fix match poster failed", exc_info=True)
-            if (h := pick("banner")):
+            if (f := upload("disc")):
+                t.step(detail="Disc (your file)")
+                save_box_art(Image.open(f), items, "disc")
+            elif (h := pick("disc")):
+                t.step(detail="Disc")
+                try:
+                    img = scraper.fetch_image(h["disc_url"])
+                    for i in items:
+                        scraper.save_webp(img, scraper.disc_path(i), box=(500, 500))
+                except Exception:
+                    log.warning("fix match disc failed", exc_info=True)
+            if (f := upload("banner")):
+                t.step(detail="Banner (your file)")
+                scraper.save_webp(ImageOps.exif_transpose(Image.open(f)), scraper.banner_path(items[0]), box=scraper.BANNER_BOX)
+            elif (h := pick("banner")):
                 t.step(detail="Banner")
                 scraper.save_banner(items[0], h.get("banner_url"), force=True)
             gallery = [hits[p] for p in choices.get("gallery") or [] if p in hits]
-            if gallery:
+            files = [f for f in (_upload_path(p) for p in choices.get("gallery") or []) if f]
+            if gallery or files:
                 t.step(detail="Gallery")
-                urls = list(dict.fromkeys(u for h in gallery for u in h.get("gallery_urls") or []))
-                scraper.save_gallery(items[0], urls, replace=True)
+                if gallery:
+                    urls = list(dict.fromkeys(u for h in gallery for u in h.get("gallery_urls") or []))
+                    scraper.save_gallery(items[0], urls, replace=True)
+                stamp, d = int(time.time() * 1000), scraper.gallery_dir(items[0])
+                for n, f in enumerate(files):            # your files: kept as yours, through any later scrape
+                    try:
+                        scraper.save_webp(ImageOps.exif_transpose(Image.open(f)), d / f"c-{stamp}-{n:02d}.webp", box=scraper.GALLERY_BOX)
+                    except Exception:
+                        log.warning("gallery upload %s", f, exc_info=True)
         new_key = key
         if show and pick("title") is main and anilist.is_adult_ova(main):   # an adult OVA: its episodes become a box set
             import watcher

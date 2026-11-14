@@ -248,7 +248,9 @@ class V104Tests(unittest.TestCase):
         with unittest.mock.patch.object(d, "_is_anime", return_value=True), \
                 unittest.mock.patch.object(scraper, "api_keys", return_value={"tmdb": "k", "omdb": "", "fanart": ""}), \
                 unittest.mock.patch.object(anilist, "search", return_value=[{"id": "1", "source": "anilist", "title": "A"}]), \
-                unittest.mock.patch.object(scraper, "tmdb_search", side_effect=scraper.ScrapeError("TMDB down")):
+                unittest.mock.patch.object(scraper, "tmdb_search", side_effect=scraper.ScrapeError("TMDB down")), \
+                unittest.mock.patch("utils.sources.mal_search", return_value=[]), \
+                unittest.mock.patch("utils.sources.kitsu_search", side_effect=scraper.ScrapeError("Kitsu down")):
             d.searchMatch("x", "a", "")
             import time
             end = time.time() + 10

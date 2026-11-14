@@ -232,6 +232,8 @@ _LINKS = (
     (re.compile(r"anilist\.co/anime/(\d+)", re.I), "anilist"),
     (re.compile(r"myanimelist\.net/anime/(\d+)", re.I), "mal"),
     (re.compile(r"imdb\.com/(?:[a-z]{2}/)?title/(tt\d{5,10})", re.I), "omdb"),
+    (re.compile(r"tvmaze\.com/shows/(\d+)", re.I), "tvmaze"),
+    (re.compile(r"kitsu\.(?:app|io)/anime/([\w-]+)", re.I), "kitsu"),
 )
 
 
@@ -317,9 +319,10 @@ def tmdb_details(kind: str, tmdb_id: int, key: str) -> dict:
     credits = "aggregate_credits" if kind == "show" else "credits"
     ratings = "content_ratings" if kind == "show" else "release_dates"
     r = _tmdb_json(f"{'tv' if kind == 'show' else 'movie'}/{int(tmdb_id)}", key,
-                   append_to_response=f"{credits},images,{ratings},alternative_titles,translations", include_image_language="null,en")
+                   append_to_response=f"{credits},images,{ratings},alternative_titles,translations,external_ids", include_image_language="null,en")
     poster, coll = r.get("poster_path"), r.get("belongs_to_collection") or {}
-    return {"tmdb_id": r.get("id"), "title": r.get("title") or r.get("name"),
+    return {"tmdb_id": r.get("id"), "kind": kind, "tvdb_id": (r.get("external_ids") or {}).get("tvdb_id"),
+            "title": r.get("title") or r.get("name"),
             "release_date": r.get("release_date") or r.get("first_air_date"),
             "synopsis": r.get("overview"),
             "poster_url": f"{IMG}{image_quality()['tmdb_poster']}{poster}" if poster else None,

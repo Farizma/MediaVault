@@ -176,17 +176,18 @@ class LinkTests(unittest.TestCase):
         self.assertEqual(got[0], [{"id": "tv:90395", "source": "tmdb", "title": "Show", "year": "2019", "overview": "s",
                                    "thumb": "https://image.tmdb.org/p.jpg"}])
 
-    def test_a_mal_link_goes_through_anilist(self):
+    def test_a_mal_link_is_myanimelist_itself(self):
+        # 1.3.0: MyAnimeList is a source of its own (through Jikan), no longer looked up on AniList
         from unittest import mock
-        from utils import anilist
+        from utils import sources
         dash, d = self._dash()
         got, wait = self._wait(d)
-        with mock.patch.object(anilist, "from_mal", return_value=115138) as mal, \
-                mock.patch.object(anilist, "details", return_value={"title": "A", "release_date": None, "synopsis": None, "poster_url": None}):
+        with mock.patch.object(sources, "mal_details", return_value={"title": "A", "release_date": None, "synopsis": None,
+                                                                      "poster_url": None}) as mal:
             d.searchMatch("k", "https://myanimelist.net/anime/41261/x", "")
             wait()
         mal.assert_called_once_with(41261)
-        self.assertEqual((got[0][0]["id"], got[0][0]["source"]), ("115138", "anilist"))
+        self.assertEqual((got[0][0]["id"], got[0][0]["source"]), ("41261", "mal"))
 
     def test_episode_stills_follow_backdrops(self):
         from unittest import mock

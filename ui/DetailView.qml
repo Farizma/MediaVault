@@ -118,7 +118,8 @@ Item {
             title: i.title || "", year: i.year || "", synopsis: i.synopsis || "", poster: i.cover || "", banner: i.banner || "",
             gallery: g, galleryCount: g.length,
             genres: tags.filter(function(t) { return t.genre || t.studio }).map(function(t) { return t.name.substring(t.genre ? 6 : 7) }).join(", "),
-            score: i.score === undefined || i.score === null ? "" : (i.scoreSource === "anilist" ? Math.round(i.score * 10) + "%" : i.score.toFixed(1) + " / 10"),
+            score: i.score === undefined || i.score === null ? "" : (i.scoreSource === "anilist" || i.scoreSource === "kitsu" ? Math.round(i.score * 10) + "%" : i.score.toFixed(1) + " / 10"),
+            disc: i.disc || "",
             rating: (i.facts || []).filter(function(f) { return f.label === "Rated" }).map(function(f) { return f.value }).join(""),
             titles: (i.altTitles || []).map(function(a) { return a.titles.join(" \u00B7 ") }).join(" \u00B7 "),
             cast: (i.cast || []).slice(0, 6).map(function(c) { return c.name }).join(", "),
@@ -586,7 +587,7 @@ Item {
                     spacing: 6
                     // TMDB / IMDb: five stars out of 10
                     RowLayout {
-                        visible: root.info.score !== undefined && root.info.score !== null && root.info.scoreSource !== "anilist"
+                        visible: root.info.score !== undefined && root.info.score !== null && root.info.scoreSource !== "anilist" && root.info.scoreSource !== "kitsu"
                         spacing: 10
                         Caption { text: "AUDIENCE"; Layout.preferredWidth: 84 }
                         Item {
@@ -599,13 +600,13 @@ Item {
                         }
                         Text { text: (root.info.score || 0).toFixed(1) + " / 10"; color: Theme.dim; font.family: Theme.mono; font.pixelSize: 12 }
                     }
-                    // AniList: its average score as a percentage, with AniList's own colours (green 75+, orange 61+, red below)
+                    // AniList / Kitsu: the average score as a percentage, with AniList's colours (green 75+, orange 61+, red below)
                     RowLayout {
                         readonly property int pct: Math.round((root.info.score || 0) * 10)
                         readonly property color tone: pct >= 75 ? "#7BD555" : pct >= 61 ? "#F79A63" : "#E85D75"
-                        visible: root.info.score !== undefined && root.info.score !== null && root.info.scoreSource === "anilist"
+                        visible: root.info.score !== undefined && root.info.score !== null && (root.info.scoreSource === "anilist" || root.info.scoreSource === "kitsu")
                         spacing: 10
-                        Caption { text: "ANILIST"; Layout.preferredWidth: 84 }
+                        Caption { text: root.info.scoreSource === "kitsu" ? "KITSU" : "ANILIST"; Layout.preferredWidth: 84 }
                         Text { text: parent.pct + "%"; color: parent.tone; font.pixelSize: 20; font.weight: Font.ExtraBold }
                         Rectangle {
                             Layout.preferredWidth: 120; Layout.preferredHeight: 6; radius: 3; color: Theme.fill

@@ -7,6 +7,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Effects
 
 Item {
     id: root
@@ -25,16 +26,18 @@ Item {
     property var details: []                   // step 2: [{pid, source, title, year, fields}]
     property var choices: ({})                 // field -> pid ("" = keep yours); gallery -> [pid]
     property string primary: ""
+    property var uploads: ({})                 // field -> [{pid: "file:<path>", source: "file", fields}] from "Upload file"
+    readonly property var uploadable: ["poster", "banner", "disc", "gallery"]
 
     readonly property var fields: [
         ["title", "Title", "text"], ["year", "Year", "text"], ["synopsis", "Synopsis", "long"],
-        ["poster", "Poster", "poster"], ["banner", "Banner", "banner"], ["gallery", "Gallery images", "gallery"],
+        ["poster", "Poster", "poster"], ["banner", "Banner", "banner"], ["disc", "Disc art", "disc"], ["gallery", "Gallery images", "gallery"],
         ["genres", "Genres", "text"], ["score", "Score", "text"], ["rating", "Age rating", "text"],
         ["titles", "Other titles", "text"], ["cast", "Cast", "text"], ["boxset", "Box set", "text"]]
 
     function open(itemKey, title, year, show, now) {
         key = itemKey; isShow = show; current = now || ({})
-        step = "search"; phase = ""; results = []; picks = []; details = []; choices = ({}); primary = ""
+        step = "search"; phase = ""; results = []; picks = []; details = []; choices = ({}); primary = ""; uploads = ({})
         q.text = (title || "").replace(/\s*\(\d{4}\)$/, ""); yr.text = show ? "" : (year || "")
         shown = 1
         q.forceActiveFocus(); q.selectAll()
@@ -67,7 +70,21 @@ Item {
             }
         })
         choices = c
-        primary = details.length ? details[0].pid : ""
+        var linkable = details.filter(function(d) { return d.source !== "fanart" })
+        primary = linkable.length ? linkable[0].pid : ""
+    }
+    // "Upload file": your own picture for a field; it is chosen at once (added to the Gallery's choices)
+    function addUploads(f, files) {
+        var u = Object.assign({}, uploads), list = (u[f] || []).slice()
+        files.forEach(function(x) {
+            var fields = {}; fields[f] = x.url
+            if (f === "gallery") { fields.gallery = [x.url]; fields.galleryCount = 1 }
+            var tile = { pid: x.choice, source: "file", fields: fields }
+            if (f === "gallery") list.push(tile); else list = [tile]
+            if (f === "gallery") { if (!chosen(f, x.choice)) choose(f, x.choice) } else choose(f, x.choice)
+        })
+        u[f] = list
+        uploads = u
     }
     function choose(f, p) {
         var c = Object.assign({}, choices)
@@ -81,8 +98,10 @@ Item {
     }
     function chosen(f, p) { return f === "gallery" ? (p === "" ? (choices.gallery || []).length === 0 : (choices.gallery || []).indexOf(p) >= 0) : choices[f] === p }
     function apply() { phase = "applying"; Backend.applyMatchParts(key, choices, primary) }
-    function srcName(s) { return s === "anilist" ? "AniList" : s === "omdb" ? "IMDb" : "TMDB" }
-    function srcColor(s) { return s === "anilist" ? Theme.blue : s === "omdb" ? Theme.amber : Theme.green }
+    function srcName(s) { return ({ anilist: "AniList", omdb: "IMDb", tvmaze: "TVmaze", mal: "MyAnimeList", kitsu: "Kitsu",
+                                     fanart: "fanart.tv", file: "Your file" })[s] || "TMDB" }
+    function srcColor(s) { return ({ anilist: Theme.blue, omdb: Theme.amber, tvmaze: "#64D2FF", mal: "#7D9BFF", kitsu: "#FF7A66",
+                                     fanart: "#BF5AF2", file: Theme.text })[s] || Theme.green }
 
     Connections {
         target: Backend
@@ -90,6 +109,7 @@ Item {
         function onMatchFailed(k, why) { if (k === root.key) root.phase = why }
         function onMatchDetailsReady(k, list) { if (k === root.key) { root.details = list; root.phase = ""; root.defaults() } }
         function onMatchApplied(k, newKey) { if (k === root.key) { root.phase = ""; root.close() } }
+        function onMatchFilesPicked(k, f, files) { if (k === root.key) root.addUploads(f, files) }
     }
 
     Keys.onEscapePressed: close()
@@ -147,7 +167,7 @@ Item {
             Rectangle {
                 anchors { right: parent.right; rightMargin: 20; verticalCenter: parent.verticalCenter }
                 width: 34; height: 34; radius: 17; color: xArea.containsMouse ? Qt.rgba(1, 1, 1, 0.2) : Theme.fillHover; border.color: Theme.line
-                Text { anchors.centerIn: parent; text: "✕"; color: "#B3FFFFFF"; font.pixelSize: 14 }
+                Text { anchors.centerIn: parent; text: "\u2715"; color: "#B3FFFFFF"; font.pixelSize: 14 }
                 MouseArea { id: xArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: root.close() }
             }
             Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.line }
@@ -177,7 +197,7 @@ Item {
                 id: status
                 anchors { left: parent.left; right: parent.right; top: bar.bottom; margins: 24; topMargin: 12 }
                 wrapMode: Text.Wrap; color: root.phase !== "" && root.phase !== "searching" ? Theme.amber : Theme.faint; font.pixelSize: 12
-                text: root.phase === "searching" ? "Searching TMDB, AniList and IMDb…"
+                text: root.phase === "searching" ? "Searching TMDB, TVmaze, IMDb, AniList, MyAnimeList and Kitsu\u2026"
                       : root.phase !== "" ? root.phase
                       : root.results.length === 0 ? "No results. Try the original title, or leave the year empty."
                       : "Pick one result, or several from different sites to mix their details. Search again to add more; picks stay."
@@ -218,7 +238,7 @@ Item {
                             color: parent.parent.on ? Theme.blue : "#99000000"; border.color: "#66FFFFFF"
                             scale: parent.parent.on ? 1 : 0.85
                             Behavior on scale { NumberAnimation { duration: 180 * Theme.motion; easing.type: Easing.OutBack } }
-                            Text { anchors.centerIn: parent; text: "✓"; color: "#FFFFFF"; font.pixelSize: 13; font.weight: Font.Bold; visible: parent.parent.parent.on }
+                            Text { anchors.centerIn: parent; text: "\u2713"; color: "#FFFFFF"; font.pixelSize: 13; font.weight: Font.Bold; visible: parent.parent.parent.on }
                         }
                         Column {
                             anchors { left: parent.left; right: parent.right; top: thumb.bottom; margins: 10 }
@@ -249,7 +269,7 @@ Item {
             Text {
                 anchors.centerIn: parent
                 visible: root.phase === "loading" || (root.phase !== "" && root.phase !== "applying" && root.details.length === 0)
-                text: root.phase === "loading" ? "Getting the details of " + root.picks.length + (root.picks.length === 1 ? " result…" : " results…") : root.phase
+                text: root.phase === "loading" ? "Getting the details of " + root.picks.length + (root.picks.length === 1 ? " result\u2026" : " results\u2026") : root.phase
                 color: root.phase === "loading" ? Theme.faint : Theme.amber; font.pixelSize: 13
             }
 
@@ -276,8 +296,8 @@ Item {
                         Flow {
                             Layout.fillWidth: true; spacing: 6
                             Repeater {
-                                model: root.details
-                                Pill { label: root.srcName(modelData.source) + " · " + modelData.title; selected: root.primary === modelData.pid
+                                model: root.details.filter(function(d) { return d.source !== "fanart" })    // art only: not a title
+                                Pill { label: root.srcName(modelData.source) + " \u00B7 " + modelData.title; selected: root.primary === modelData.pid
                                     accent: root.srcColor(modelData.source); onClicked: root.primary = modelData.pid }
                             }
                         }
@@ -290,7 +310,9 @@ Item {
                             readonly property string f: modelData[0]
                             readonly property string kind: modelData[2]
                             readonly property var offers: root.details.filter(function(d) { return root.has(d, fieldRow.f) })
-                            visible: offers.length > 0
+                                                          .concat(root.uploads[fieldRow.f] || [])
+                            readonly property bool canUpload: root.uploadable.indexOf(fieldRow.f) >= 0
+                            visible: offers.length > 0 || canUpload
                             Layout.fillWidth: true
                             spacing: 10
                             Text { Layout.preferredWidth: 130; Layout.alignment: Qt.AlignTop; topPadding: 8
@@ -299,45 +321,71 @@ Item {
                             ListView {
                                 id: offerList
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: fieldRow.kind === "poster" ? 214 : fieldRow.kind === "banner" ? 170
+                                Layout.preferredHeight: fieldRow.kind === "poster" ? 214 : fieldRow.kind === "banner" ? 170 : fieldRow.kind === "disc" ? 176
                                                       : fieldRow.kind === "gallery" ? 176 : fieldRow.kind === "long" ? 150 : 74
                                 orientation: ListView.Horizontal
                                 spacing: 10
                                 clip: true
                                 boundsBehavior: Flickable.StopAtBounds
-                                // "keep yours" first, then each result that has this field
+                                // "keep yours" first, then each result that has this field, your files, and "Upload file"
                                 model: [{ pid: "", source: "", fields: root.current }].concat(fieldRow.offers)
+                                       .concat(fieldRow.canUpload ? [{ pid: "__upload", source: "", fields: {} }] : [])
                                 ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AsNeeded }
                                 delegate: Rectangle {
                                     id: tile
+                                    readonly property bool add: modelData.pid === "__upload"
                                     readonly property bool mine: modelData.pid === ""
                                     readonly property bool on: root.chosen(fieldRow.f, modelData.pid)
                                     readonly property var v: modelData.fields || ({})
-                                    width: fieldRow.kind === "poster" ? 132 : fieldRow.kind === "banner" ? 262 : fieldRow.kind === "gallery" ? 262
-                                         : fieldRow.kind === "long" ? 340 : 230
+                                    width: add ? 132 : fieldRow.kind === "poster" ? 132 : fieldRow.kind === "banner" ? 262 : fieldRow.kind === "gallery" ? 262
+                                         : fieldRow.kind === "disc" ? 150 : fieldRow.kind === "long" ? 340 : 230
                                     height: offerList.height - 8
                                     radius: 10
                                     color: tileArea.containsMouse ? Theme.fillHover : Qt.rgba(1, 1, 1, 0.03)
-                                    border.color: on ? Theme.blue : Theme.line
-                                    border.width: on ? 2 : 1
+                                    border.color: on ? Theme.blue : add && tileArea.containsMouse ? "#66FFFFFF" : Theme.line
+                                    border.width: on && !add ? 2 : 1
                                     Behavior on border.color { ColorAnimation { duration: 140 * Theme.motion } }
                                     scale: tileArea.pressed ? 0.97 : 1
                                     Behavior on scale { NumberAnimation { duration: 140 * Theme.motion; easing.type: Easing.OutCubic } }
+                                    // "Upload file": a tile that opens a file chooser
+                                    Column {
+                                        visible: tile.add
+                                        anchors.centerIn: parent
+                                        spacing: 6
+                                        Text { anchors.horizontalCenter: parent.horizontalCenter; text: "+"; color: Theme.muted; font.pixelSize: 26; font.weight: Font.Light }
+                                        Text { anchors.horizontalCenter: parent.horizontalCenter; text: fieldRow.f === "gallery" ? "Upload files\u2026" : "Upload file\u2026"
+                                            color: Theme.muted; font.pixelSize: 12; font.weight: Font.DemiBold }
+                                    }
                                     Row {
                                         id: tileHead
+                                        visible: !tile.add
                                         x: 10; y: 8; spacing: 6
                                         Chip { visible: !tile.mine; source: modelData.source || "tmdb" }
                                         Text { visible: tile.mine; text: fieldRow.f === "gallery" ? "KEEP THE CURRENT IMAGES" : "KEEP YOURS"
                                             color: Theme.muted; font.family: Theme.mono; font.pixelSize: 9; font.weight: Font.Bold }
                                     }
                                     Rectangle {      // chosen
+                                        visible: !tile.add
                                         anchors { top: parent.top; right: parent.right; margins: 7 }
                                         width: 18; height: 18; radius: fieldRow.f === "gallery" ? 5 : 9
                                         color: tile.on ? Theme.blue : "transparent"; border.color: tile.on ? Theme.blue : "#4DFFFFFF"
-                                        Text { anchors.centerIn: parent; text: "✓"; color: "#FFFFFF"; font.pixelSize: 11; visible: tile.on }
+                                        Text { anchors.centerIn: parent; text: "\u2713"; color: "#FFFFFF"; font.pixelSize: 11; visible: tile.on }
                                     }
                                     Item {
+                                        visible: !tile.add
                                         anchors { left: parent.left; right: parent.right; top: tileHead.bottom; bottom: parent.bottom; margins: 10; topMargin: 6 }
+                                        // disc art: round, like the disc in the box
+                                        Item {
+                                            visible: fieldRow.kind === "disc"
+                                            anchors.centerIn: parent
+                                            width: Math.min(parent.width, parent.height); height: width
+                                            Image { id: discImg; anchors.fill: parent; fillMode: Image.PreserveAspectCrop; asynchronous: true; visible: false
+                                                source: parent.visible ? (tile.v.disc || "") : ""; sourceSize.width: 300 }
+                                            Rectangle { id: discMask; anchors.fill: parent; radius: width / 2; visible: false; layer.enabled: true }
+                                            Rectangle { anchors.fill: parent; radius: width / 2; color: Theme.slate }
+                                            MultiEffect { anchors.fill: parent; source: discImg; maskEnabled: true; maskSource: discMask; visible: !!tile.v.disc }
+                                            Text { anchors.centerIn: parent; visible: !tile.v.disc; text: "None"; color: Theme.faint; font.pixelSize: 11 }
+                                        }
                                         // text
                                         Text {
                                             visible: fieldRow.kind === "text" || fieldRow.kind === "long"
@@ -376,7 +424,7 @@ Item {
                                         }
                                     }
                                     MouseArea { id: tileArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                                        onClicked: root.choose(fieldRow.f, modelData.pid) }
+                                        onClicked: tile.add ? Backend.pickMatchFiles(root.key, fieldRow.f) : root.choose(fieldRow.f, modelData.pid) }
                                 }
                             }
                         }
@@ -399,14 +447,14 @@ Item {
                     color: Theme.faint; font.pixelSize: 12 }
                 Repeater {
                     model: root.picks
-                    Pill { label: root.srcName(modelData.source) + " · " + modelData.title + "   ×"; accent: root.srcColor(modelData.source)
+                    Pill { label: root.srcName(modelData.source) + " \u00B7 " + modelData.title + "   \u00D7"; accent: root.srcColor(modelData.source)
                         onClicked: root.toggle(modelData) }
                 }
             }
             Text {
                 visible: root.step === "choose"
                 anchors { left: parent.left; leftMargin: 24; verticalCenter: parent.verticalCenter }
-                text: root.phase === "applying" ? "Applying…" : "Only the fields you choose are changed. Your own box art, images, tags and notes stay."
+                text: root.phase === "applying" ? "Applying\u2026" : "Only the fields you choose change. A file you upload becomes your own art; tags and notes always stay."
                 color: Theme.faint; font.pixelSize: 12
             }
             Row {
@@ -418,7 +466,7 @@ Item {
                     label: "Next"; onClicked: root.next() }
                 GlassButton { small: true; primary: true; visible: root.step === "choose"
                     enabled: root.details.length > 0 && root.phase !== "applying"
-                    label: root.phase === "applying" ? "Applying…" : "Apply"; onClicked: root.apply() }
+                    label: root.phase === "applying" ? "Applying\u2026" : "Apply"; onClicked: root.apply() }
             }
         }
     }
