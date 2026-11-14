@@ -46,6 +46,8 @@ Item {
         standby.source = url
         previewOwner = output
     }
+    // an overlay (View More, Settings...) opened over the grid: a hover preview must not keep decoding behind it
+    onOverlayOpenChanged: if (overlayOpen && previewOwner) { standby.stop(); standby.source = ""; previewOwner = null }
     function stopPreview(output) {
         if (previewOwner === output) { standby.stop(); standby.source = ""; previewOwner = null }
     }
@@ -1022,7 +1024,7 @@ Item {
         color: "#000000"
         opacity: 0
         visible: opacity > 0
-        MouseArea { anchors.fill: parent; hoverEnabled: true }     // nothing underneath reacts while it is dark
+        MouseArea { anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.AllButtons }     // nothing underneath reacts while it is dark
     }
 
     Connections {

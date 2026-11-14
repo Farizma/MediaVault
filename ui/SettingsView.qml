@@ -107,7 +107,7 @@ Item {
     component Caption: Text { color: Theme.faint; font.family: Theme.mono; font.pixelSize: 11; Layout.topMargin: 6; Layout.fillWidth: true; wrapMode: Text.Wrap }
 
     Rectangle { anchors.fill: parent; color: Theme.scrim; opacity: root.shown }
-    MouseArea { anchors.fill: parent; onClicked: root.close(); onWheel: (w) => w.accepted = true }
+    MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onClicked: (m) => { if (m.button === Qt.LeftButton) root.close() }; onWheel: (w) => w.accepted = true }
 
     Rectangle {
         id: sheet
@@ -120,7 +120,7 @@ Item {
         clip: true
         opacity: Math.min(1, root.shown * 1.5)
         transform: Scale { origin.x: root.originX - sheet.x; origin.y: root.originY - sheet.y; xScale: 0.06 + 0.94 * root.shown; yScale: xScale }
-        MouseArea { anchors.fill: parent }
+        MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }
 
         // ---- section list
         Rectangle {

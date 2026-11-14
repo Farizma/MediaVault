@@ -129,7 +129,7 @@ Item {
 
     // dim, and eat every click and scroll meant for View More underneath
     Rectangle { anchors.fill: parent; color: Theme.scrim; opacity: root.shown }
-    MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onWheel: (w) => w.accepted = true; onClicked: root.close() }
+    MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onWheel: (w) => w.accepted = true; onClicked: (m) => { if (m.button === Qt.LeftButton) root.close() } }
 
     component Chip: Rectangle {
         property string source: ""
@@ -149,7 +149,7 @@ Item {
         clip: true
         opacity: root.shown
         scale: 0.96 + 0.04 * root.shown
-        MouseArea { anchors.fill: parent; onWheel: (w) => w.accepted = false }    // clicks inside stay inside
+        MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onWheel: (w) => w.accepted = false }    // clicks inside stay inside
 
         // ---- header
         Item {

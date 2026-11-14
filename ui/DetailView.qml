@@ -54,7 +54,8 @@ Item {
         }
         refresh()
     }
-    function refresh() { var s = slide; d = Backend.detail(itemKey); slide = Math.min(s, Math.max(0, (d.slides || []).length - 1)); if (d.isSet && cur.uuid) fd = Backend.detail(cur.uuid) }
+    // `cur` is a new object after this, so onCurChanged reloads the film in focus (once)
+    function refresh() { var s = slide; d = Backend.detail(itemKey); slide = Math.min(s, Math.max(0, (d.slides || []).length - 1)) }
     function wrap(i) { return (i % count + count) % count }
     // jump: how many slides to move (the arrows move one; a click in the films list may move several)
     function step(jump) {
@@ -257,7 +258,11 @@ Item {
     Rectangle { anchors.fill: parent; color: Theme.scrim; opacity: root.f }
     MouseArea {
         anchors.fill: parent
-        onClicked: root.close()
+        // every button stops here: a right or middle click used to fall through to the poster underneath, which
+        // closed this view and opened that poster's instead
+        acceptedButtons: Qt.AllButtons
+        hoverEnabled: true                    // and no card underneath is hovered (no preview starting behind this view)
+        onClicked: (m) => { if (m.button === Qt.LeftButton) root.close() }
         onWheel: (w) => w.accepted = true     // the grid must not scroll away under the box: it flies back to its card
     }
 
@@ -275,7 +280,7 @@ Item {
         // grows out of whatever opened it (the card or the button) and shrinks back into it
         transform: Scale { origin.x: root.from.x + root.from.width / 2 - sheet.x; origin.y: root.from.y + root.from.height / 2 - sheet.y
                            xScale: 0.06 + 0.94 * root.sheetIn; yScale: xScale }
-        MouseArea { anchors.fill: parent }            // clicks on the sheet must not close the view
+        MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }            // clicks on the sheet must not close the view
 
         // left pane: the box lands here (the box itself lives above the sheet, see DvdBox below)
         Rectangle {
@@ -1081,7 +1086,7 @@ Item {
         Keys.onLeftPressed: index = (index - 1 + shots.length) % Math.max(1, shots.length)
         Keys.onRightPressed: index = (index + 1) % Math.max(1, shots.length)
         Rectangle { anchors.fill: parent; color: "#F0000000" }
-        MouseArea { anchors.fill: parent; onClicked: lightbox.close(); onWheel: (w) => w.accepted = true }
+        MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onClicked: (m) => { if (m.button === Qt.LeftButton) lightbox.close() }; onWheel: (w) => w.accepted = true }
         Image {
             anchors { fill: parent; margins: 64 }
             source: lightbox.shots.length ? lightbox.shots[Math.min(lightbox.index, lightbox.shots.length - 1)].url : ""

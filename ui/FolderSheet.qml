@@ -29,7 +29,7 @@ Item {
     }
 
     Rectangle { anchors.fill: parent; color: Theme.scrim; opacity: root.shown
-        MouseArea { anchors.fill: parent; onClicked: root.close() } }
+        MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onClicked: (m) => { if (m.button === Qt.LeftButton) root.close() } } }
 
     Rectangle {
         id: panel
@@ -41,7 +41,7 @@ Item {
         border.color: Theme.lineStrong
         opacity: root.shown
         scale: 0.92 + 0.08 * root.shown
-        MouseArea { anchors.fill: parent }
+        MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }
         Keys.onEscapePressed: root.close()
 
         ColumnLayout {

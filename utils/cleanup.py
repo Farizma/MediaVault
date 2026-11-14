@@ -33,20 +33,13 @@ def _owners(name: str) -> list[tuple[str, str]]:
 
 def _size(p: Path) -> int:
     try:
-        if p.is_dir():
-            return sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
         return p.stat().st_size
     except OSError:
         return 0
 
 
-def _yours(p: Path, suffix: str) -> bool:
-    return suffix in YOURS
-
-
-def _entries(folder: Path, keep_own: bool):
-    """Each artwork file (or Gallery folder) in an asset folder, with what it belongs to. With keep_own, a Gallery
-    folder is split into its files so your own images (c-*) can stay."""
+def _entries(folder: Path):
+    """Each artwork file in an asset folder (a Gallery folder file by file), with the videos it could belong to."""
     try:
         items = list(folder.iterdir())
     except OSError:
@@ -56,21 +49,19 @@ def _entries(folder: Path, keep_own: bool):
         if not owners:
             continue
         stems, suffix = {o[0] for o in owners}, owners[0][1]
-        if suffix == "gallery" and p.is_dir() and keep_own:
-            for f in p.iterdir():
-                yield f, stems, "gallery-c" if f.name.startswith("c-") else "gallery"
+        if suffix == "gallery" and p.is_dir():
+            try:
+                for f in p.iterdir():
+                    yield f, stems, f.name.startswith("c-")
+            except OSError:
+                pass
         else:
-            yield p, stems, suffix
+            yield p, stems, suffix in YOURS
 
 
-def plan(mode: str = "unused", keep_own: bool = True) -> list[tuple[Path, int]]:
-    """What would be deleted: [(path, bytes)]. mode "unused" or "all"."""
-    assert mode in ("unused", "all")
-    out: list[tuple[Path, int]] = []
-
-    def take(p: Path):
-        out.append((p, _size(p)))
-
+def scan() -> list[tuple[Path, int, bool, bool]]:
+    """Every piece of artwork, in one pass over the folders: [(path, bytes, used, yours)]."""
+    out = []
     # 1. the .vault-assets folders next to your videos
     for d in db.list_directories():
         root = d["folder_path"]
@@ -89,38 +80,32 @@ def plan(mode: str = "unused", keep_own: bool = True) -> list[tuple[Path, int]]:
             if scraper.ASSET_DIR not in dirs:
                 continue
             dirs.remove(scraper.ASSET_DIR)    # never walk into it as a library folder
-            folder = Path(here) / scraper.ASSET_DIR
             live, is_series = by_folder.get(os.path.normcase(here), set()), os.path.normcase(here) in series
-            for p, stems, suffix in _entries(folder, keep_own):
-                own = suffix == "gallery-c" or _yours(p, suffix)
-                if mode == "all":
-                    if not (keep_own and own):
-                        take(p)
-                elif not (stems & live or (SERIES in stems and is_series)):
-                    take(p)
-
+            for p, stems, own in _entries(Path(here) / scraper.ASSET_DIR):
+                out.append((p, _size(p), bool(stems & live or (SERIES in stems and is_series)), own))
     # 2. the app cache: box sets, home videos, actor photos, 3D box cards
     cache = db.data_dir() / "cache"
     if cache.is_dir():
-        uuids = {it["uuid"] for it in db.list_media()}
-        clips = {it["uuid"] for it in db.list_media() if it["media_type"] == "clip"}
-        sets = {f"set-{b['id']}" for b in db.box_sets()}
+        media = db.list_media()
+        uuids = {it["uuid"] for it in media}
+        owners = {it["uuid"] for it in media if it["media_type"] == "clip"} | {f"set-{b['id']}" for b in db.box_sets()}
         people = {str(r[0]) for r in db.conn().execute("SELECT DISTINCT person_id FROM cast_members WHERE person_id IS NOT NULL")}
-        for p, stems, suffix in _entries(cache, keep_own):
-            own = suffix == "gallery-c" or _yours(p, suffix)
-            if mode == "all":
-                if not (keep_own and own):
-                    take(p)
-            elif not stems & (sets | clips):
-                take(p)
+        for p, stems, own in _entries(cache):
+            out.append((p, _size(p), bool(stems & owners), own))
         for p in (cache / "people").glob("*.webp") if (cache / "people").is_dir() else ():
-            if mode == "all" or p.stem not in people:
-                take(p)
+            out.append((p, _size(p), p.stem in people, False))
         for p in (cache / "box").glob("*.png") if (cache / "box").is_dir() else ():
-            owner = p.name.split("-front")[0].split("-back")[0]
-            if mode == "all" or owner not in uuids:
-                take(p)
+            out.append((p, _size(p), p.name.split("-front")[0].split("-back")[0] in uuids, False))
     return out
+
+
+def plan(mode: str = "unused", keep_own: bool = True, found=None) -> list[tuple[Path, int]]:
+    """What would be deleted: [(path, bytes)]. mode "unused" or "all"."""
+    assert mode in ("unused", "all")
+    found = scan() if found is None else found
+    if mode == "unused":
+        return [(p, size) for p, size, used, _own in found if not used]
+    return [(p, size) for p, size, _used, own in found if not (keep_own and own)]
 
 
 def _allowed(p: Path) -> bool:
@@ -135,7 +120,6 @@ def _allowed(p: Path) -> bool:
 
 def run(mode: str = "unused", keep_own: bool = True, step=lambda n, total: None) -> tuple[int, int]:
     """Delete what plan() lists. Returns (items deleted, bytes freed). Empty Gallery and asset folders go too."""
-    import shutil
     todo = plan(mode, keep_own)
     done = freed = 0
     parents = set()
@@ -143,10 +127,7 @@ def run(mode: str = "unused", keep_own: bool = True, step=lambda n, total: None)
         if not _allowed(p):
             continue
         try:
-            if p.is_dir():
-                shutil.rmtree(p)
-            else:
-                p.unlink()
+            p.unlink()
             done, freed = done + 1, freed + size
             parents.add(p.parent)
         except OSError:
@@ -163,8 +144,8 @@ def run(mode: str = "unused", keep_own: bool = True, step=lambda n, total: None)
 
 
 def usage() -> dict:
-    """Settings: how much artwork there is, how much of it is unused, how much is yours."""
-    every, unused, others = plan("all", keep_own=False), plan("unused"), plan("all", keep_own=True)
-    total = sum(s for _, s in every)
-    return {"total": total, "unused": sum(s for _, s in unused), "unusedCount": len(unused),
-            "yours": total - sum(s for _, s in others)}
+    """Settings: how much artwork there is, how much of it is unused, how much is yours (one pass over the disk)."""
+    found = scan()
+    unused = [size for _p, size, used, _own in found if not used]
+    return {"total": sum(f[1] for f in found), "unused": sum(unused), "unusedCount": len(unused),
+            "yours": sum(size for _p, size, _used, own in found if own)}

@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 os.environ.setdefault("LOCALAPPDATA", tempfile.mkdtemp())
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import database as db  # noqa: E402
 from utils import cleanup, scraper  # noqa: E402
@@ -91,3 +92,42 @@ class CleanupTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OverlayClickTests(unittest.TestCase):
+    def test_no_overlay_lets_a_right_click_through(self):
+        """A right click on View More fell through to the poster underneath, which opened that poster instead."""
+        import re
+        ui = ROOT / "ui"
+        for f in list(ui.glob("*.qml")):
+            for m in re.finditer(r"MouseArea \{ anchors\.fill: parent(?:; hoverEnabled: true)?(?:; onWheel[^}]*)? \}", f.read_text(encoding="utf-8")):
+                self.fail(f"{f.name}: a blocker without acceptedButtons: {m.group(0)}")
+        dv = (ui / "DetailView.qml").read_text(encoding="utf-8")
+        scrim = dv[dv.index("// dim + click-outside-to-close"):dv.index("id: sheet")]
+        self.assertIn("acceptedButtons: Qt.AllButtons", scrim)
+        self.assertIn("if (m.button === Qt.LeftButton) root.close()", scrim)
+        self.assertIn("hoverEnabled: true", scrim)
+
+    def test_right_click_stays_on_the_overlay(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtCore import QPoint, Qt
+        from PySide6.QtGui import QGuiApplication
+        from PySide6.QtQuick import QQuickView
+        from PySide6.QtTest import QTest
+        QGuiApplication.instance() or QGuiApplication([])
+        qml = Path(tempfile.mkdtemp()) / "t.qml"
+        qml.write_text("""
+import QtQuick
+Item { width: 300; height: 200; property int under: 0; property int closed: 0
+    MouseArea { anchors.fill: parent; acceptedButtons: Qt.LeftButton | Qt.RightButton; onClicked: parent.under++ }
+    MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons
+        onClicked: (m) => { if (m.button === Qt.LeftButton) parent.closed++ } } }
+""", encoding="utf-8")
+        view = QQuickView()
+        view.setSource(qml.as_uri())
+        view.show()
+        for button in (Qt.MouseButton.RightButton, Qt.MouseButton.MiddleButton, Qt.MouseButton.LeftButton):
+            QTest.mouseClick(view, button, Qt.KeyboardModifier.NoModifier, QPoint(100, 100))
+        QTest.qWait(30)
+        root = view.rootObject()
+        self.assertEqual((root.property("under"), root.property("closed")), (0, 1))

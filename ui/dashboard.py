@@ -523,7 +523,12 @@ class Dashboard(QObject):
         self._devices: list = []
         self._insights_visible = False
         self._thumbs: list = []
-        self.libraryChanged.connect(self.reload)
+        # a burst of changes (a scan adding files, the folder watcher) becomes one refresh, not one per event
+        self._reload_soon = QTimer(self)
+        self._reload_soon.setSingleShot(True)
+        self._reload_soon.setInterval(80)
+        self._reload_soon.timeout.connect(self.reload)
+        self.libraryChanged.connect(self._reload_soon.start)
         self._thumbnailsDone.connect(self._store_thumbnails)
         self._update_count = 0
         self._startup_ready = False
@@ -861,13 +866,14 @@ class Dashboard(QObject):
             facts = [{"label": "Films", "value": str(len(films))},
                      {"label": "Length", "value": duration_label(sum(f["duration"] or 0 for f in films))}]
         resume = item["last_position"] > 10 and not item["is_completed"]
+        shown, disc = display_titles({**item, "key": key}), scraper.disc_art(art)
         # a film in a box set shows (and edits) the set's synopsis
         in_set = set_synopsis(item["collection_id"], db.films_in_set(item["collection_id"])) \
             if not films and not eps and item.get("collection_id") is not None else None
         return {
             "key": key, "isShow": bool(eps), "isSet": bool(films), "kind": "show" if eps or item["media_type"] == "show" else "movie",
-            "canMatch": not films and item["media_type"] != "clip", "title": display_titles({**item, "key": key})[0] if not films else item["title"],
-            "subtitle": display_titles({**item, "key": key})[1] if not films else "",
+            "canMatch": not films and item["media_type"] != "clip", "title": shown[0] if not films else item["title"],
+            "subtitle": shown[1] if not films else "",
             "synopsis": (own if films else in_set if in_set is not None else item["synopsis"]) or "",
             # a film in a box set: its own episode name and synopsis (an OVA's "#2" is an episode of a series)
             "inSet": not films and not eps and item.get("collection_id") is not None,
@@ -875,12 +881,12 @@ class Dashboard(QObject):
             # until you write one: the film's own synopsis, when it is not the set's (a film of a TMDB collection)
             "episodeSynopsis": item.get("episode_synopsis") or ((item["synopsis"] or "") if in_set is not None and item["synopsis"] != in_set else ""),
             # every other title, grouped English / Romanized / Native / Other languages (not the ones shown above)
-            "altTitles": [] if films else alttitles.for_display(item.get("alt_titles"), display_titles({**item, "key": key})),
+            "altTitles": [] if films else alttitles.for_display(item.get("alt_titles"), shown),
             "banner": file_url(b) if (b := banner_for({**item, "key": key})) else "",
             "year": (item["release_date"] or "")[:4], "facts": facts, "cover": tex["front"], "back": tex["back"],
             "customFront": tex["customFront"], "customBack": tex["customBack"],
             "spine": tex["spine"], "customSpine": tex["customSpine"],
-            "disc": file_url(scraper.disc_art(art)) if scraper.disc_art(art) else "",
+            "disc": file_url(disc) if disc else "",
             "customDisc": scraper.custom_disc_path(art).exists(),
             "rating": db.get_rating(item["uuid"]), "note": db.get_note(item["uuid"]),
             "tags": [{"name": t, "genre": t.startswith("genre:"), "auto": t.startswith("auto:"), "studio": t.startswith("studio:")}

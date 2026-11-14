@@ -14,7 +14,6 @@ import hmac
 import html
 import ipaddress
 import logging
-import mimetypes
 import os
 import re
 import secrets

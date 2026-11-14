@@ -30,7 +30,7 @@ Item {
         if (Theme.motion > 0) openUp.start(); else quick.start()
     }
 
-    MouseArea { anchors.fill: parent; hoverEnabled: true }       // nothing underneath is clickable until it is open
+    MouseArea { anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.AllButtons }       // nothing underneath is clickable until it is open
 
     // everything outside the opening is the page colour: a ring whose hole is the opening (works on any renderer)
     Rectangle {

@@ -405,7 +405,7 @@ Window {
             border.color: Theme.edge
             opacity: Math.min(1, shown * 1.6)
             transform: Scale { origin.x: root.originX - panel.x; origin.y: root.originY - panel.y; xScale: 0.08 + 0.92 * panel.shown; yScale: xScale }
-            MouseArea { anchors.fill: parent; onWheel: (w) => w.accepted = true }   // scrolling here never changes the volume
+            MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onWheel: (w) => w.accepted = true }   // scrolling here never changes the volume
             Behavior on height { NumberAnimation { duration: 220 * Theme.motion; easing.type: Easing.OutCubic } }
             onVisibleChanged: if (!visible) { audioDrop.popup.close(); videoDrop.popup.close(); subDrop.popup.close() }
 
@@ -609,7 +609,7 @@ Window {
             border.color: Theme.edge
             opacity: Math.min(1, shown * 1.6)
             transform: Scale { origin.x: root.originX - snapMenu.x; origin.y: root.originY - snapMenu.y; xScale: 0.08 + 0.92 * snapMenu.shown; yScale: xScale }
-            MouseArea { anchors.fill: parent; onWheel: (w) => w.accepted = true }
+            MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onWheel: (w) => w.accepted = true }
             ColumnLayout {
                 id: snapCol
                 x: 10; y: 10; width: parent.width - 20
@@ -713,7 +713,7 @@ Window {
             border.color: Theme.edge
             opacity: Math.min(1, shown * 1.6)
             transform: Scale { origin.x: root.originX - castMenu.x; origin.y: root.originY - castMenu.y; xScale: 0.08 + 0.92 * castMenu.shown; yScale: xScale }
-            MouseArea { anchors.fill: parent; onWheel: (w) => w.accepted = true }
+            MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onWheel: (w) => w.accepted = true }
             ColumnLayout {
                 id: castCol
                 x: 10; y: 10; width: parent.width - 20
@@ -848,7 +848,7 @@ Window {
             anchors.fill: parent
             color: "#EE000000"
             visible: root.cropping
-            MouseArea { anchors.fill: parent }   // swallow clicks
+            MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }   // swallow clicks
             Item {
                 id: stage
                 anchors { fill: parent; topMargin: 70; bottomMargin: 120; leftMargin: 80; rightMargin: 80 }

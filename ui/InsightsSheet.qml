@@ -22,7 +22,7 @@ Item {
     Behavior on shown { NumberAnimation { duration: (root.shown < 0.5 ? 380 : 220) * Theme.motion; easing.type: root.shown < 0.5 ? Easing.OutQuint : Easing.InCubic } }
 
     Rectangle { anchors.fill: parent; color: Theme.scrim; opacity: root.shown
-        MouseArea { anchors.fill: parent; onClicked: root.close(); onWheel: (w) => w.accepted = true } }
+        MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onClicked: (m) => { if (m.button === Qt.LeftButton) root.close() }; onWheel: (w) => w.accepted = true } }
 
     Rectangle {
         id: panel
@@ -38,7 +38,7 @@ Item {
         transform: Scale { origin.x: root.from.x + root.from.width / 2 - panel.x; origin.y: root.from.y + root.from.height / 2 - panel.y
                            xScale: 0.05 + 0.95 * root.shown; yScale: 0.05 + 0.95 * root.shown }
         Keys.onEscapePressed: root.close()
-        MouseArea { anchors.fill: parent }
+        MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }
 
         Item {
             id: head

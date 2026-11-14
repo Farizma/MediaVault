@@ -28,7 +28,7 @@ Item {
         onFinished: root.visible = false }
 
     Rectangle { anchors.fill: parent; color: Theme.scrim; opacity: root.shown }
-    MouseArea { anchors.fill: parent; onClicked: root.close(); onWheel: (w) => w.accepted = true }
+    MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onClicked: (m) => { if (m.button === Qt.LeftButton) root.close() }; onWheel: (w) => w.accepted = true }
 
     Rectangle {
         anchors.centerIn: parent
@@ -40,7 +40,7 @@ Item {
         id: card
         opacity: Math.min(1, root.shown * 1.5)
         transform: Scale { origin.x: root.originX - card.x; origin.y: root.originY - card.y; xScale: 0.06 + 0.94 * root.shown; yScale: xScale }
-        MouseArea { anchors.fill: parent }
+        MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }
         ColumnLayout {
             id: col
             anchors.centerIn: parent

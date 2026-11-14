@@ -3,7 +3,6 @@
 FrameProvider serves `image://frames/<name>` straight from memory: the 4 thumbnail candidates and
 the live snapshot never touch the disk until the user picks one.
 """
-from pathlib import Path
 
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QImage, QPainter

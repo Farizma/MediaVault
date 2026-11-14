@@ -34,7 +34,7 @@ Item {
     }
 
     Rectangle { anchors.fill: parent; color: Theme.scrim; opacity: crop.shown
-        MouseArea { anchors.fill: parent; onClicked: crop.close(); onWheel: (w) => w.accepted = true } }
+        MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onClicked: (m) => { if (m.button === Qt.LeftButton) crop.close() }; onWheel: (w) => w.accepted = true } }
 
     Rectangle {
         id: panel
@@ -45,7 +45,7 @@ Item {
         focus: true
         Keys.onEscapePressed: crop.close()
         Keys.onReturnPressed: crop.use()
-        MouseArea { anchors.fill: parent }
+        MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }
 
         ColumnLayout {
             anchors { fill: parent; margins: 22 }
