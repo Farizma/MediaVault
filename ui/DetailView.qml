@@ -117,6 +117,7 @@ Item {
         fixMatch.open(infoKey, i.title || "", i.year || "", i.isShow === true, {
             title: i.title || "", year: i.year || "", synopsis: i.synopsis || "", poster: i.cover || "", banner: i.banner || "",
             gallery: g, galleryCount: g.length,
+            galleryItems: (i.gallery || []).map(function(x) { return { url: x.url, name: x.name, custom: x.custom } }),
             genres: tags.filter(function(t) { return t.genre || t.studio }).map(function(t) { return t.name.substring(t.genre ? 6 : 7) }).join(", "),
             score: i.score === undefined || i.score === null ? "" : (i.scoreSource === "anilist" || i.scoreSource === "kitsu" ? Math.round(i.score * 10) + "%" : i.score.toFixed(1) + " / 10"),
             disc: i.disc || "",

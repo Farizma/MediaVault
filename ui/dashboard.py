@@ -97,6 +97,7 @@ MATCH_FIELDS = ("title", "year", "synopsis", "poster", "banner", "disc", "genres
 MATCH_SOURCES = ("tmdb", "anilist", "omdb", "tvmaze", "mal", "kitsu")
 UPLOAD_FIELDS = ("poster", "banner", "disc", "gallery")      # the "Upload file" tile in the window
 PERCENT_SOURCES = ("anilist", "kitsu")                        # scores shown as a percentage
+GALLERY_PICK_MAX = 40                                         # Gallery images offered per result, to pick one by one
 
 
 def _upload_path(choice) -> str | None:
@@ -118,7 +119,7 @@ def match_preview(h: dict) -> dict:
         "synopsis": scraper.untag(h.get("synopsis") or ""),
         "poster": scraper.safe_url(h.get("poster_url")) or "",
         "banner": scraper.safe_url(h.get("banner_url")) or "",
-        "gallery": gallery[:24], "galleryCount": len(gallery),
+        "gallery": gallery[:GALLERY_PICK_MAX], "galleryCount": len(gallery[:GALLERY_PICK_MAX]),
         "genres": ", ".join((h.get("genres") or []) + [f"{s} (studio)" for s in h.get("studios") or []]),
         "score": "" if score is None else (f"{round(score * 10)}%" if h.get("anilist_id") or h.get("score_scale") == "percent"
                                            else f"{score:.1f} / 10"),
@@ -1088,7 +1089,7 @@ class Dashboard(QObject):
 
         def upload(field):          # a file you chose with "Upload file" for this field
             return _upload_path(choices.get(field)) if field in UPLOAD_FIELDS else None
-        steps = [f for f in MATCH_FIELDS if pick(f) or upload(f)] + (["gallery"] if choices.get("gallery") else [])
+        steps = [f for f in MATCH_FIELDS if pick(f) or upload(f)] + (["gallery"] if choices.get("gallery") or "galleryKeep" in choices else [])
         with progress.task(f"Applying scraped data \u00B7 {main.get('title') or ''}", total=len(steps) + 1) as t:
             # which title this is linked to: its ids, so later lookups (Fetch missing) ask about the right one
             tmdb_id = next((h.get("tmdb_id") for h in [main, *hits.values()] if h.get("tmdb_id")), None)
@@ -1169,14 +1170,22 @@ class Dashboard(QObject):
             elif (h := pick("banner")):
                 t.step(detail="Banner")
                 scraper.save_banner(items[0], h.get("banner_url"), force=True)
-            gallery = [hits[p] for p in choices.get("gallery") or [] if p in hits]
-            files = [f for f in (_upload_path(p) for p in choices.get("gallery") or []) if f]
-            if gallery or files:
+            # the Gallery, image by image: the current ones you kept, and each image you chose from any result
+            picked = choices.get("gallery") or []
+            offered = {u for h in hits.values() for u in h.get("gallery_urls") or []}
+            urls = list(dict.fromkeys(u for u in picked if u in offered))          # only images a result offered
+            files = [f for f in (_upload_path(p) for p in picked) if f]
+            keep = choices.get("galleryKeep")
+            if urls or files or keep is not None:
                 t.step(detail="Gallery")
-                if gallery:
-                    urls = list(dict.fromkeys(u for h in gallery for u in h.get("gallery_urls") or []))
-                    scraper.save_gallery(items[0], urls, replace=True)
-                stamp, d = int(time.time() * 1000), scraper.gallery_dir(items[0])
+                d = scraper.gallery_dir(items[0])
+                if keep is not None and d.is_dir():                  # the current images you left out go
+                    for p in scraper.gallery_images(items[0]):
+                        if p.name not in set(keep):
+                            p.unlink(missing_ok=True)
+                if urls:
+                    scraper.add_gallery(items[0], urls)
+                stamp = int(time.time() * 1000)
                 for n, f in enumerate(files):            # your files: kept as yours, through any later scrape
                     try:
                         scraper.save_webp(ImageOps.exif_transpose(Image.open(f)), d / f"c-{stamp}-{n:02d}.webp", box=scraper.GALLERY_BOX)

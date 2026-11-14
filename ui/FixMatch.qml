@@ -24,7 +24,8 @@ Item {
     property var results: []
     property var picks: []                     // [{pid, source, id, title, year, thumb, overview}] in the order picked
     property var details: []                   // step 2: [{pid, source, title, year, fields}]
-    property var choices: ({})                 // field -> pid ("" = keep yours); gallery -> [pid]
+    property var choices: ({})                 // field -> pid ("" = keep yours)
+    property var gallerySel: ({})              // Gallery, image by image: url / "file:<path>" (add) and "keep:<name>" (current)
     property string primary: ""
     property var uploads: ({})                 // field -> [{pid: "file:<path>", source: "file", fields}] from "Upload file"
     readonly property var uploadable: ["poster", "banner", "disc", "gallery"]
@@ -37,7 +38,7 @@ Item {
 
     function open(itemKey, title, year, show, now) {
         key = itemKey; isShow = show; current = now || ({})
-        step = "search"; phase = ""; results = []; picks = []; details = []; choices = ({}); primary = ""; uploads = ({})
+        step = "search"; phase = ""; results = []; picks = []; details = []; choices = ({}); primary = ""; uploads = ({}); gallerySel = ({})
         q.text = (title || "").replace(/\s*\(\d{4}\)$/, ""); yr.text = show ? "" : (year || "")
         shown = 1
         q.forceActiveFocus(); q.selectAll()
@@ -62,8 +63,12 @@ Item {
         var c = {}
         fields.forEach(function(f) {
             if (f[0] === "gallery") {
+                // every current image kept, plus all of the first result that has images
+                var sel = {}
+                ;(current.galleryItems || []).forEach(function(x) { sel["keep:" + x.name] = true })
                 var g = details.filter(function(d) { return root.has(d, "gallery") })
-                c.gallery = g.length ? [g[0].pid] : []
+                if (g.length) g[0].fields.gallery.forEach(function(u) { sel[u] = true })
+                gallerySel = sel
             } else {
                 var d = details.find(function(d) { return root.has(d, f[0]) })
                 c[f[0]] = d ? d.pid : ""
@@ -78,26 +83,34 @@ Item {
         var u = Object.assign({}, uploads), list = (u[f] || []).slice()
         files.forEach(function(x) {
             var fields = {}; fields[f] = x.url
-            if (f === "gallery") { fields.gallery = [x.url]; fields.galleryCount = 1 }
-            var tile = { pid: x.choice, source: "file", fields: fields }
-            if (f === "gallery") list.push(tile); else list = [tile]
-            if (f === "gallery") { if (!chosen(f, x.choice)) choose(f, x.choice) } else choose(f, x.choice)
+            var tile = { pid: x.choice, source: "file", fields: fields, url: x.url }
+            if (f === "gallery") { list.push(tile); gSet([x.choice], true) } else { list = [tile]; choose(f, x.choice) }
         })
         u[f] = list
         uploads = u
     }
-    function choose(f, p) {
-        var c = Object.assign({}, choices)
-        if (f === "gallery") {
-            var g = (c.gallery || []).slice(), i = g.indexOf(p)
-            if (p === "") g = []
-            else if (i >= 0) g.splice(i, 1); else g.push(p)
-            c.gallery = g
-        } else c[f] = p
-        choices = c
+    function choose(f, p) { var c = Object.assign({}, choices); c[f] = p; choices = c }
+    function chosen(f, p) { return choices[f] === p }
+    // Gallery: include or leave out each image, from any source (and the ones the title has now)
+    function gSet(keys, on) { var g = Object.assign({}, gallerySel); keys.forEach(function(k) { if (on) g[k] = true; else delete g[k] }); gallerySel = g }
+    function gToggle(k) { gSet([k], !gallerySel[k]) }
+    // the groups of images to pick from: what the title has now, each result with images, your files
+    readonly property var galleryGroups: {
+        var out = [{ label: "Now", source: "", items: (current.galleryItems || []).map(function(x) {
+            return { key: "keep:" + x.name, url: x.url, mine: x.custom } }) }]
+        details.forEach(function(d) {
+            if (root.has(d, "gallery")) out.push({ label: "", source: d.source, items: d.fields.gallery.map(function(u) { return { key: u, url: u } }) })
+        })
+        out.push({ label: "Your files", source: "file", upload: true,
+                   items: (uploads.gallery || []).map(function(t) { return { key: t.pid, url: t.url } }) })
+        return out
     }
-    function chosen(f, p) { return f === "gallery" ? (p === "" ? (choices.gallery || []).length === 0 : (choices.gallery || []).indexOf(p) >= 0) : choices[f] === p }
-    function apply() { phase = "applying"; Backend.applyMatchParts(key, choices, primary) }
+    function apply() {
+        var c = Object.assign({}, choices), add = [], keep = []
+        Object.keys(gallerySel).forEach(function(k) { if (k.indexOf("keep:") === 0) keep.push(k.substring(5)); else add.push(k) })
+        c.gallery = add; c.galleryKeep = keep
+        phase = "applying"; Backend.applyMatchParts(key, c, primary)
+    }
     function srcName(s) { return ({ anilist: "AniList", omdb: "IMDb", tvmaze: "TVmaze", mal: "MyAnimeList", kitsu: "Kitsu",
                                      fanart: "fanart.tv", file: "Your file" })[s] || "TMDB" }
     function srcColor(s) { return ({ anilist: Theme.blue, omdb: Theme.amber, tvmaze: "#64D2FF", mal: "#7D9BFF", kitsu: "#FF7A66",
@@ -318,11 +331,77 @@ Item {
                             Text { Layout.preferredWidth: 130; Layout.alignment: Qt.AlignTop; topPadding: 8
                                 text: modelData[1].toUpperCase(); color: Theme.faint; font.family: Theme.mono; font.pixelSize: 11
                                 wrapMode: Text.Wrap }
+                            // the Gallery: every image of every source, each one in or out
+                            ColumnLayout {
+                                visible: fieldRow.kind === "gallery"
+                                Layout.fillWidth: true
+                                spacing: 14
+                                Repeater {
+                                    model: fieldRow.kind === "gallery" ? root.galleryGroups : []
+                                    ColumnLayout {
+                                        id: group
+                                        readonly property var keys: modelData.items.map(function(x) { return x.key })
+                                        readonly property int picked: keys.filter(function(k) { return root.gallerySel[k] }).length
+                                        visible: modelData.items.length > 0 || modelData.upload === true
+                                        Layout.fillWidth: true
+                                        spacing: 8
+                                        RowLayout {
+                                            spacing: 8
+                                            Chip { visible: modelData.source !== "" && modelData.source !== "file"; source: modelData.source || "tmdb" }
+                                            Text { visible: modelData.label !== ""; text: modelData.label.toUpperCase(); color: Theme.muted
+                                                font.family: Theme.mono; font.pixelSize: 9; font.weight: Font.Bold }
+                                            Text { visible: modelData.items.length > 0; color: Theme.faint; font.pixelSize: 11
+                                                text: group.picked + " of " + modelData.items.length + (modelData.source === "" ? " kept" : " chosen") }
+                                            Text { visible: modelData.items.length > 1; text: "All"; color: Theme.blue; font.pixelSize: 11; font.weight: Font.DemiBold
+                                                MouseArea { anchors.fill: parent; anchors.margins: -4; cursorShape: Qt.PointingHandCursor; onClicked: root.gSet(group.keys, true) } }
+                                            Text { visible: modelData.items.length > 1; text: "None"; color: Theme.blue; font.pixelSize: 11; font.weight: Font.DemiBold
+                                                MouseArea { anchors.fill: parent; anchors.margins: -4; cursorShape: Qt.PointingHandCursor; onClicked: root.gSet(group.keys, false) } }
+                                        }
+                                        Flow {
+                                            Layout.fillWidth: true
+                                            spacing: 8
+                                            Repeater {
+                                                model: modelData.items
+                                                Rectangle {
+                                                    id: shot
+                                                    readonly property bool on: !!root.gallerySel[modelData.key]
+                                                    width: 136; height: 77; radius: 7; color: Theme.slate; clip: true
+                                                    border.color: on ? Theme.blue : Theme.line; border.width: on ? 2 : 1
+                                                    Behavior on border.color { ColorAnimation { duration: 120 * Theme.motion } }
+                                                    scale: shotArea.pressed ? 0.95 : 1
+                                                    Behavior on scale { NumberAnimation { duration: 120 * Theme.motion; easing.type: Easing.OutCubic } }
+                                                    Image { anchors.fill: parent; anchors.margins: shot.border.width; source: modelData.url
+                                                        fillMode: Image.PreserveAspectCrop; asynchronous: true; sourceSize.width: 280
+                                                        opacity: shot.on ? 1 : 0.35
+                                                        Behavior on opacity { NumberAnimation { duration: 140 * Theme.motion } } }
+                                                    Rectangle { anchors { top: parent.top; right: parent.right; margins: 5 }
+                                                        width: 18; height: 18; radius: 9; color: shot.on ? Theme.blue : "#99000000"; border.color: "#80FFFFFF"
+                                                        Text { anchors.centerIn: parent; text: "\u2713"; color: "#FFFFFF"; font.pixelSize: 11; visible: shot.on } }
+                                                    Rectangle { visible: modelData.mine === true; anchors { left: parent.left; bottom: parent.bottom; margins: 5 }
+                                                        width: 34; height: 15; radius: 4; color: "#CC000000"
+                                                        Text { anchors.centerIn: parent; text: "YOURS"; color: "#FFFFFF"; font.family: Theme.mono; font.pixelSize: 8 } }
+                                                    MouseArea { id: shotArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                                        onClicked: root.gToggle(modelData.key) }
+                                                }
+                                            }
+                                            Rectangle {      // add your own
+                                                visible: modelData.upload === true
+                                                width: 136; height: 77; radius: 7; color: upArea.containsMouse ? Theme.fillHover : "transparent"
+                                                border.color: upArea.containsMouse ? "#66FFFFFF" : Theme.line
+                                                Text { anchors.centerIn: parent; text: "+  Upload files\u2026"; color: Theme.muted; font.pixelSize: 12; font.weight: Font.DemiBold }
+                                                MouseArea { id: upArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                                    onClicked: Backend.pickMatchFiles(root.key, "gallery") }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             ListView {
                                 id: offerList
+                                visible: fieldRow.kind !== "gallery"
                                 Layout.fillWidth: true
                                 Layout.preferredHeight: fieldRow.kind === "poster" ? 214 : fieldRow.kind === "banner" ? 170 : fieldRow.kind === "disc" ? 176
-                                                      : fieldRow.kind === "gallery" ? 176 : fieldRow.kind === "long" ? 150 : 74
+                                                      : fieldRow.kind === "gallery" ? 0 : fieldRow.kind === "long" ? 150 : 74
                                 orientation: ListView.Horizontal
                                 spacing: 10
                                 clip: true

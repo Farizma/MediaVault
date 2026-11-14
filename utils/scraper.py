@@ -762,6 +762,29 @@ def save_gallery(item: dict, urls: list[str], replace: bool = False) -> int:
     return sum(_parallel(one, enumerate(urls[:limit], 1)))
 
 
+def add_gallery(item: dict, urls: list[str]) -> int:
+    """Fix Scraped Data: add these scraped images to the Gallery after the ones there (s-NN, next free numbers),
+    several at a time. No limit beyond what you chose. Returns how many were saved."""
+    d = gallery_dir(item)
+    taken = {p.name for p in d.glob("s-*.webp")} if d.is_dir() else set()
+    names, n = [], 1
+    for _ in urls:
+        while f"s-{n:02d}.webp" in taken:
+            n += 1
+        taken.add(f"s-{n:02d}.webp")
+        names.append(f"s-{n:02d}.webp")
+
+    def one(job) -> int:
+        name, url = job
+        try:
+            save_webp(fetch_image(url), d / name, box=GALLERY_BOX)
+            return 1
+        except Exception:
+            logging.getLogger(__name__).warning("gallery image failed: %s", url, exc_info=True)
+            return 0
+    return sum(_parallel(one, zip(names, urls)))
+
+
 def cover_path(item: dict, exists=os.path.isfile) -> Path:
     """The front cover to show: the user's own art if set, else the scraped / captured poster."""
     custom = custom_front_path(item)

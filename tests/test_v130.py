@@ -54,10 +54,19 @@ class FixTests(unittest.TestCase):
     def test_each_field_from_the_result_you_chose(self):
         from utils import scraper
         self.d._match_hits[self.uid] = {"tmdb|movie:949": TMDB, "anilist|77": ANI}
+        from PIL import Image
+        item = db.get_media(self.uid)
+        gdir = scraper.gallery_dir(item)
+        gdir.mkdir(parents=True, exist_ok=True)
+        for name in ("s-01.webp", "s-02.webp", "c-1-00.webp"):
+            Image.new("RGB", (16, 9)).save(gdir / name)
         choices = {"title": "tmdb|movie:949", "year": "", "synopsis": "anilist|77", "genres": "anilist|77",
-                   "score": "tmdb|movie:949", "poster": "", "gallery": ["tmdb|movie:949", "anilist|77"]}
+                   "score": "tmdb|movie:949", "poster": "",
+                   # one image from each site (and one no site offered), keeping one scraped and your own image
+                   "gallery": ["https://s4.anilist.co/g2.jpg", "https://image.tmdb.org/g1.jpg", "https://evil.example/x.jpg"],
+                   "galleryKeep": ["s-02.webp", "c-1-00.webp"]}
         saved = []
-        with mock.patch.object(scraper, "save_gallery", side_effect=lambda item, urls, replace=False: saved.append((urls, replace))), \
+        with mock.patch.object(scraper, "add_gallery", side_effect=lambda item, urls: saved.append(urls)), \
                 mock.patch.object(scraper, "fetch_image") as fetch, mock.patch.object(scraper, "save_person_photos"):
             self.d._apply_parts(self.uid, choices, "tmdb|movie:949")
             fetch.assert_not_called()                                    # no poster chosen: nothing downloaded
@@ -71,7 +80,19 @@ class FixTests(unittest.TestCase):
         tags = db.tags_for(self.uid)
         self.assertIn("genre:Action", tags)
         self.assertIn("studio:Madhouse", tags)
-        self.assertEqual(saved, [(["https://image.tmdb.org/g1.jpg", "https://s4.anilist.co/g2.jpg"], True)])   # both, merged
+        self.assertEqual(saved, [["https://s4.anilist.co/g2.jpg", "https://image.tmdb.org/g1.jpg"]])   # from both sites, in your order
+        self.assertEqual(sorted(p.name for p in gdir.iterdir()), ["c-1-00.webp", "s-02.webp"])     # s-01 left out: gone
+
+    def test_added_images_take_the_next_free_numbers(self):
+        from PIL import Image
+        from utils import scraper
+        item = {"media_type": "movie", "file_path": str(Path(tempfile.mkdtemp()) / "F.mkv"), "uuid": "g"}
+        d = scraper.gallery_dir(item)
+        d.mkdir(parents=True)
+        Image.new("RGB", (16, 9)).save(d / "s-01.webp")
+        with mock.patch.object(scraper, "fetch_image", return_value=Image.new("RGB", (16, 9))):
+            self.assertEqual(scraper.add_gallery(item, ["https://a/1.jpg", "https://a/2.jpg"]), 2)
+        self.assertEqual(sorted(p.name for p in d.iterdir()), ["s-01.webp", "s-02.webp", "s-03.webp"])
 
     def test_expired_results_say_so(self):
         failed = []
@@ -86,7 +107,7 @@ class FixTests(unittest.TestCase):
         self.assertNotIn("id: matchMenu", dv)
         fm = (ROOT / "ui" / "FixMatch.qml").read_text(encoding="utf-8")
         self.assertIn("Backend.matchDetails(key", fm)
-        self.assertIn("Backend.applyMatchParts(key, choices, primary)", fm)
+        self.assertIn("Backend.applyMatchParts(key, c, primary)", fm)
         wf = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
         self.assertIn("tests.test_v130", wf)
 
