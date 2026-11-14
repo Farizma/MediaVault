@@ -153,7 +153,8 @@ class WiringTests(unittest.TestCase):
         self.assertEqual(next(r for r in d.controlRows if r["id"] == "play")["key"], "P")
         d.resetControls()
         self.assertEqual(d.tabOrder()[0], {"id": -1, "name": "All", "locked": False})
-        self.assertIn("XInput", d.padStatus)                # no controllers off Windows
+        # off Windows there is no XInput; on Windows (the release build) there is, with no controller plugged in
+        self.assertTrue("XInput" in d.padStatus or d.padStatus.startswith("No controller connected"), d.padStatus)
 
 
 if __name__ == "__main__":
