@@ -9,6 +9,11 @@ ScrollView {
     readonly property bool editing: field.activeFocus     // false again once you click away: save then
     clip: true
     ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
+    // the wheel scrolls the page around this box, not the text, unless you are typing in it (then the text scrolls).
+    // Its scroll bar always works.
+    Binding { target: root.contentItem; property: "interactive"; value: root.editing }
+    wheelEnabled: root.editing
+    SmoothWheel { view: root.contentItem; step: 90; enabled: root.editing }
     background: Rectangle {
         radius: 10
         color: Theme.slate

@@ -38,6 +38,7 @@ Rectangle {
             contentHeight: col.implicitHeight
             clip: true
             boundsBehavior: Flickable.StopAtBounds
+            SmoothWheel { view: flick; step: 160 }
             ScrollBar.vertical: ScrollBar {}
             ColumnLayout {
                 id: col

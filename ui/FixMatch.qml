@@ -451,6 +451,9 @@ Item {
                                 Layout.preferredHeight: fieldRow.kind === "poster" ? 214 : fieldRow.kind === "banner" ? 170 : fieldRow.kind === "disc" ? 176
                                                       : fieldRow.kind === "gallery" ? 0 : fieldRow.kind === "long" ? 150 : 74
                                 orientation: ListView.Horizontal
+                                interactive: false
+                                SideWheel { view: offerList }
+                                SideWheel { view: offerList; shift: true }
                                 spacing: 10
                                 clip: true
                                 boundsBehavior: Flickable.StopAtBounds

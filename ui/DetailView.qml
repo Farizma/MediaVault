@@ -716,7 +716,11 @@ Item {
                     ListView {
                         Layout.fillWidth: true
                         Layout.preferredHeight: 132
+                        id: castList
                         orientation: ListView.Horizontal
+                        interactive: false                      // the page's wheel passes over it (SideWheel scrolls it)
+                        SideWheel { view: castList }
+                        SideWheel { view: castList; shift: true }
                         spacing: 12
                         clip: true
                         boundsBehavior: Flickable.StopAtBounds
@@ -780,6 +784,9 @@ Item {
                         Layout.fillWidth: true
                         Layout.preferredHeight: 122
                         orientation: ListView.Horizontal
+                        interactive: false
+                        SideWheel { view: galleryList }
+                        SideWheel { view: galleryList; shift: true }
                         spacing: 10
                         clip: true
                         boundsBehavior: Flickable.StopAtBounds
@@ -1236,7 +1243,7 @@ Item {
         id: titleMenu
         function begin(btn) { parent = btn; open() }
         focus: true
-        x: -width + parent.width + 8
+        x: parent ? -width + parent.width + 8 : 0
         y: parent ? parent.height + 8 : 0
         width: 320
         padding: 8

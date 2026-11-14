@@ -67,7 +67,7 @@ jobs:
 
       - name: Tests
         if: steps.plan.outputs.build == 'true'
-        run: python -m unittest tests.test_core tests.test_qml_static tests.test_round8 tests.test_round9 tests.test_round10 tests.test_round11 tests.test_release tests.test_detail tests.test_v102 tests.test_v103 tests.test_v105 tests.test_v106 tests.test_v107 tests.test_v109 tests.test_v111 tests.test_v120 tests.test_v121 tests.test_v122 tests.test_v130 tests.test_v131 tests.test_v132 tests.test_v133 tests.test_v134 tests.test_v135 tests.test_qt tests.test_security -v
+        run: python -m unittest tests.test_core tests.test_qml_static tests.test_round8 tests.test_round9 tests.test_round10 tests.test_round11 tests.test_release tests.test_detail tests.test_v102 tests.test_v103 tests.test_v105 tests.test_v106 tests.test_v107 tests.test_v109 tests.test_v111 tests.test_v120 tests.test_v121 tests.test_v122 tests.test_v130 tests.test_v131 tests.test_v132 tests.test_v133 tests.test_v134 tests.test_v135 tests.test_v136 tests.test_qt tests.test_security -v
 
       - name: Install Inno Setup
         if: steps.plan.outputs.build == 'true'

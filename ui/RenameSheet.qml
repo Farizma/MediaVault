@@ -21,8 +21,10 @@ Sheet {
         Text { visible: root.rows.length === 0; Layout.fillWidth: true; Layout.topMargin: 30; horizontalAlignment: Text.AlignHCenter
             text: "These files already match their titles."; color: Theme.faint; font.pixelSize: 13 }
         ListView {
+            id: renameList
             Layout.fillWidth: true; Layout.fillHeight: true
             visible: root.rows.length > 0
+            SmoothWheel { view: renameList; step: 160 }
             clip: true
             spacing: 6
             boundsBehavior: Flickable.StopAtBounds

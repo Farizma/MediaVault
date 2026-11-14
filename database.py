@@ -257,7 +257,7 @@ def _one(cursor) -> dict | None:
 # what a folder can scrape; a folder with scraping on gets all of them unless the user unticked some
 SCRAPE_PARTS = (("titles", "Titles and years"), ("synopsis", "Synopsis"), ("genres", "Genres"), ("score", "Star rating"),
                 ("certification", "Age rating"),
-                ("poster", "Box art (front cover)"), ("disc", "Disc art"), ("sets", "Box sets"),
+                ("poster", "Box art (front cover, or a DVD scan beside the file)"), ("disc", "Disc art"), ("sets", "Box sets"),
                 ("cast", "Actors"), ("photos", "Actor photos"), ("gallery", "Gallery images"))
 
 

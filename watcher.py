@@ -14,7 +14,7 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 import database as db
-from utils import autotag, media_probe, progress, scraper, tagrules
+from utils import autotag, boxart, media_probe, progress, scraper, tagrules
 
 log = logging.getLogger(__name__)
 
@@ -89,6 +89,11 @@ def _index(directory: dict, new: list, t) -> int:
         tags.extend((row["uuid"], autotag.PREFIX + t)
                     for t in tagrules.computed_tags(row, info, directory["folder_path"], rules, auto))
     db.add_items([r for r, _ in rows], tags)  # the one collective write
+    if scrape and "poster" in db.scrape_opts(directory):      # a DVD / Blu-ray scan kept beside the new files
+        try:
+            boxart.scan(directory, only={r["uuid"] for r, _ in rows})
+        except Exception:
+            log.warning("box art scan", exc_info=True)
     return len(rows)
 
 
@@ -303,8 +308,14 @@ def fetch_missing(directory: dict, redo_images: bool = False, only: set | None =
     opts = db.scrape_opts(directory)
     keys = scraper.api_keys()
     anime = (directory.get("source") or "tmdb") == "anilist"
+    found = 0
+    if "poster" in opts and not redo_images:         # box art beside the files: needs no key and no network
+        try:
+            found = boxart.scan(directory, only)
+        except Exception:
+            log.warning("box art scan", exc_info=True)
     if not opts or (not anime and not keys["tmdb"]):
-        return 0
+        return found
     groups: dict[str, list[dict]] = {}          # one lookup per film, and per series
     for it in db.list_media(directory["id"]):
         if it["media_type"] != "clip" and (only is None or it["uuid"] in only):     # only: just the selected titles
@@ -321,7 +332,7 @@ def fetch_missing(directory: dict, redo_images: bool = False, only: set | None =
     t.finish()
     if updated:
         tagrules.retag_all([directory])     # new age ratings and titles can change computed tags
-    return updated
+    return updated + found
 
 
 def _fetch_groups(directory, groups, opts, keys, anime, redo_images, t) -> int:

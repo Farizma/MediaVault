@@ -416,6 +416,7 @@ Window {
                 contentHeight: panelCol.implicitHeight
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
+                SmoothWheel { view: panelFlick; step: 140 }
                 ScrollBar.vertical: ScrollBar {}
             ColumnLayout {
                 id: panelCol

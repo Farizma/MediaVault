@@ -260,7 +260,9 @@ Item {
             }
             boundsBehavior: Flickable.StopAtBounds
             ScrollBar.vertical: ScrollBar { parent: content; x: content.width - width; y: grid.y; height: grid.height }
-            SmoothWheel { view: grid; onScrolled: grid.userScrolled = true }
+            SmoothWheel { id: gridWheel; view: grid; onScrolled: grid.userScrolled = true }
+            // while the page moves, cards sliding under a still pointer do not light up, tilt or start a preview
+            readonly property bool scrolling: gridWheel.gliding || moving
             // filters: cards that go fade out, then the rest slide together; cards that come back first open their
             // gaps, then fade in rising, one after another. Fast; nothing at all with reduced motion.
             remove: Transition {
@@ -564,6 +566,10 @@ Item {
                         id: continueList
                         width: parent.width; height: 96
                         orientation: ListView.Horizontal
+                        interactive: false                      // the grid's wheel passes over the row
+                        SideWheel { view: continueList }
+                        SideWheel { view: continueList; shift: true }
+                        ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AsNeeded }
                         spacing: 12
                         clip: true
                         boundsBehavior: Flickable.StopAtBounds
@@ -970,8 +976,10 @@ Item {
                     acceptedButtons: Qt.LeftButton | Qt.RightButton
                     cursorShape: Qt.PointingHandCursor
                     function openBox() { detail.open(key, cell.mapToItem(detail, box.x, box.y, box.width, box.height), "card") }
-                    onEntered: { cell.pointerIn = true; linger.restart() }
+                    onEntered: if (!grid.scrolling) { cell.pointerIn = true; linger.restart() }
                     onPositionChanged: (m) => {
+                        if (grid.scrolling) return
+                        if (!cell.pointerIn) { cell.pointerIn = true; linger.restart() }      // the page stopped under the pointer
                         dash.keyNav = false
                         cell.tx = Math.max(-1, Math.min(1, (m.x / width - 0.5) * 2))
                         cell.ty = Math.max(-1, Math.min(1, (m.y / height - 0.5) * 2))
