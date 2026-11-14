@@ -71,9 +71,11 @@ Item {
 
             Rectangle { z: -1; anchors.fill: parent; anchors.topMargin: 6; anchors.margins: -2; radius: 16; color: "#59000000" }   // shadow
 
+            Spinner { id: pillSpin; anchors { left: parent.left; leftMargin: 14; verticalCenter: title.verticalCenter }
+                size: 12; color: Theme.blue; running: !pill.finished }
             Text {
                 id: title
-                anchors { left: parent.left; leftMargin: 14; right: count.left; rightMargin: 10; top: parent.top; topMargin: 10 }
+                anchors { left: pillSpin.running ? pillSpin.right : parent.left; leftMargin: pillSpin.running ? 8 : 14; right: count.left; rightMargin: 10; top: parent.top; topMargin: 10 }
                 text: model.label; elide: Text.ElideRight
                 color: Theme.text; font.pixelSize: 12; font.weight: Font.Bold
             }

@@ -22,6 +22,7 @@ Item {
     property string step: "search"             // search -> choose (-> applying)
     property string phase: ""                  // "", "searching", "loading", "applying", or an error
     property var results: []
+    property var waiting: []                   // sites still answering the search (names); [] = it is over
     property var picks: []                     // [{pid, source, id, title, year, thumb, overview}] in the order picked
     property var details: []                   // step 2: [{pid, source, title, year, fields}]
     property var choices: ({})                 // field -> pid ("" = keep yours)
@@ -40,14 +41,15 @@ Item {
 
     function open(itemKey, title, year, show, now) {
         key = itemKey; isShow = show; current = now || ({})
-        step = "search"; phase = ""; results = []; picks = []; details = []; choices = ({}); primary = ""; uploads = ({}); gallerySel = ({})
+        step = "search"; phase = ""; waiting = []; results = []; picks = []; details = []; choices = ({}); primary = ""; uploads = ({}); gallerySel = ({})
         q.text = (title || "").replace(/\s*\(\d{4}\)$/, ""); yr.text = show ? "" : (year || "")
         shown = 1
         q.forceActiveFocus(); q.selectAll()
         search()
     }
     function close() { shown = 0; parent.forceActiveFocus() }
-    function search() { if (q.text.trim() === "") return; phase = "searching"; Backend.searchMatch(key, q.text, yr.text) }
+    function search() { if (q.text.trim() === "") return; phase = "searching"; waiting = ["\u2026"]; Backend.searchMatch(key, q.text, yr.text) }
+    readonly property bool busy: phase === "searching" || waiting.length > 0
     function pid(r) { return r.source + "|" + r.id }
     function picked(r) { var p = pid(r); return picks.some(function(x) { return x.pid === p }) }
     function toggle(r) {
@@ -125,6 +127,7 @@ Item {
         target: Backend
         function onMatchResults(k, list) { if (k === root.key && root.step === "search") { root.results = list; root.phase = "" } }
         function onMatchFailed(k, why) { if (k === root.key) root.phase = why }
+        function onMatchWaiting(k, sites) { if (k === root.key) { root.waiting = sites; if (sites.length === 0 && root.phase === "searching") root.phase = "" } }
         function onMatchDetailsReady(k, list) { if (k === root.key) { root.details = list; root.phase = ""; root.defaults() } }
         function onMatchApplied(k, newKey) { if (k === root.key) { root.phase = ""; root.close() } }
         function onMatchFilesPicked(k, f, files) { if (k === root.key) root.addUploads(f, files) }
@@ -211,14 +214,51 @@ Item {
                     onAccepted: root.search() }
                 GlassButton { small: true; primary: true; label: "Search"; onClicked: root.search() }
             }
+            Spinner { id: searchSpin; anchors { left: parent.left; leftMargin: 24; verticalCenter: status.verticalCenter }
+                size: 14; color: Theme.blue; running: root.busy && root.step === "search" }
             Text {
                 id: status
-                anchors { left: parent.left; right: parent.right; top: bar.bottom; margins: 24; topMargin: 12 }
+                anchors { left: searchSpin.running ? searchSpin.right : parent.left; right: parent.right; top: bar.bottom
+                          leftMargin: searchSpin.running ? 10 : 24; rightMargin: 24; topMargin: 12 }
                 wrapMode: Text.Wrap; color: root.phase !== "" && root.phase !== "searching" ? Theme.amber : Theme.faint; font.pixelSize: 12
-                text: root.phase === "searching" ? "Searching TMDB, TVmaze, IMDb, AniList, MyAnimeList and Kitsu\u2026"
+                text: root.busy && root.waiting.length > 0 && root.waiting[0] !== "\u2026"
+                        ? (root.results.length ? "Still searching " : "Searching ") + root.waiting.join(", ") + "\u2026"
+                      : root.phase === "searching" ? "Searching every site\u2026"
                       : root.phase !== "" ? root.phase
                       : root.results.length === 0 ? "No results. Try the original title, or leave the year empty."
                       : "Pick one result, or several from different sites to mix their details. Search again to add more; picks stay."
+            }
+            // while nothing has come back yet: placeholder cards with light passing over them
+            Flow {
+                id: skeletons
+                anchors { left: parent.left; right: parent.right; top: status.bottom; bottom: parent.bottom; leftMargin: 24; rightMargin: 24; topMargin: 18 }
+                spacing: 12
+                clip: true
+                visible: root.busy && root.results.length === 0
+                property real sweep: 0
+                NumberAnimation on sweep { from: -0.6; to: 1.6; duration: 1300; loops: Animation.Infinite; running: skeletons.visible && Theme.motion > 0 }
+                Repeater {
+                    model: Math.max(1, Math.floor(skeletons.width / 186)) * 2
+                    Rectangle {
+                        width: 174; height: 306; radius: 12; color: Qt.rgba(1, 1, 1, 0.03); border.color: Theme.line; clip: true
+                        opacity: 1 - Math.floor(index / Math.max(1, Math.floor(skeletons.width / 186))) * 0.45    // the second row fainter
+                        Column {
+                            x: 10; y: 10; spacing: 8
+                            Rectangle { width: 154; height: 190; radius: 8; color: Theme.slate }
+                            Rectangle { width: 54; height: 12; radius: 6; color: Theme.slate }
+                            Rectangle { width: 130; height: 12; radius: 6; color: Theme.slate }
+                            Rectangle { width: 100; height: 10; radius: 5; color: Theme.slate }
+                        }
+                        Rectangle {      // the sheen
+                            width: parent.width * 0.6; height: parent.height * 2; y: -parent.height / 2; rotation: 18
+                            x: skeletons.sweep * parent.width - width / 2
+                            gradient: Gradient { orientation: Gradient.Horizontal
+                                GradientStop { position: 0; color: "#00FFFFFF" }
+                                GradientStop { position: 0.5; color: "#12FFFFFF" }
+                                GradientStop { position: 1; color: "#00FFFFFF" } }
+                        }
+                    }
+                }
             }
             GridView {
                 id: resultGrid
@@ -284,7 +324,10 @@ Item {
             transform: Translate { x: root.step === "choose" ? 0 : 28
                 Behavior on x { NumberAnimation { duration: 260 * Theme.motion; easing.type: Easing.OutCubic } } }
 
+            Spinner { anchors { horizontalCenter: parent.horizontalCenter; bottom: loadText.top; bottomMargin: 14 }
+                size: 30; color: Theme.blue; running: root.phase === "loading" }
             Text {
+                id: loadText
                 anchors.centerIn: parent
                 visible: root.phase === "loading" || (root.phase !== "" && root.phase !== "applying" && root.details.length === 0)
                 text: root.phase === "loading" ? "Getting the details of " + root.picks.length + (root.picks.length === 1 ? " result\u2026" : " results\u2026") : root.phase
@@ -535,9 +578,11 @@ Item {
                         onClicked: root.toggle(modelData) }
                 }
             }
+            Spinner { id: applySpin; anchors { left: parent.left; leftMargin: 24; verticalCenter: parent.verticalCenter }
+                size: 14; color: Theme.blue; running: root.phase === "applying" }
             Text {
                 visible: root.step === "choose"
-                anchors { left: parent.left; leftMargin: 24; verticalCenter: parent.verticalCenter }
+                anchors { left: applySpin.running ? applySpin.right : parent.left; leftMargin: applySpin.running ? 10 : 24; verticalCenter: parent.verticalCenter }
                 text: root.phase === "applying" ? "Applying\u2026" : "Only the fields you choose change. A file you upload becomes your own art; tags and notes always stay."
                 color: Theme.faint; font.pixelSize: 12
             }

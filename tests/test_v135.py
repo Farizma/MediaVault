@@ -1,4 +1,4 @@
-"""1.3.1: tag suggestions come from every tag in the library; Gallery tiles show each image's resolution."""
+"""1.3.1: tag suggestions from every tag in the library; Gallery resolution; drop images on the Gallery; search spinner."""
 import os
 import sys
 import tempfile
@@ -52,6 +52,60 @@ class TagSuggestionTests(unittest.TestCase):
         qml = (ROOT / "ui" / "TagField.qml").read_text(encoding="utf-8")
         self.assertIn("t.label.toLowerCase()", qml)
         self.assertIn("take(modelData.name)", qml)
+
+
+class GalleryDropTests(unittest.TestCase):
+    def setUp(self):
+        db.init_db()
+        with db._tx() as c:
+            for t in ("media_items", "scanned_directories"):
+                c.execute(f"DELETE FROM {t}")
+        self.root = tempfile.mkdtemp()
+        did = db.add_directory(self.root, "Films", True)
+        p = os.path.join(self.root, "film.mkv")
+        open(p, "w").close()
+        self.uid = db.file_id(p)
+        db.add_items([{"uuid": self.uid, "file_path": db.norm(p), "parent_directory_id": did, "title": "Film", "media_type": "movie"}])
+        self.d = make_dashboard()
+
+    def test_dropped_files_and_links(self):
+        from unittest import mock
+        from PIL import Image
+        from PySide6.QtCore import QUrl
+        from utils import scraper
+        img = os.path.join(self.root, "still.PNG")
+        Image.new("RGB", (2400, 1000)).save(img, "PNG")
+        notes = os.path.join(self.root, "notes.txt")
+        open(notes, "w").close()
+        linked = []
+        with mock.patch("threading.Thread", side_effect=lambda target, **k: mock.Mock(start=target)), \
+                mock.patch.object(self.d, "importGalleryImages", side_effect=lambda k, l, r: linked.append((l, r))):
+            self.d.dropGalleryImages(self.uid, [QUrl.fromLocalFile(img).toString(), QUrl.fromLocalFile(notes).toString(),
+                                                "https://image.tmdb.org/t/p/original/x.jpg"])
+        saved = [p.name for p in scraper.gallery_images(db.get_media(self.uid))]
+        self.assertEqual(len(saved), 1)
+        self.assertTrue(saved[0].startswith("c-"))                        # your own: a later scrape keeps it
+        self.assertEqual(linked, [("https://image.tmdb.org/t/p/original/x.jpg", False)])   # a web picture: imported, scraped ones stay
+        toasts = []
+        self.d.toast.connect(toasts.append)
+        self.d.dropGalleryImages(self.uid, [QUrl.fromLocalFile(notes).toString()])
+        self.assertEqual(toasts, ["Only image files can go in the Gallery"])
+
+    def test_search_reports_sites_still_answering(self):
+        from unittest import mock
+        from utils import anilist, scraper, sources
+        import threading
+        waits, real = [], threading.Thread
+        self.d.matchWaiting.connect(lambda k, sites: waits.append(list(sites)))
+        inline = lambda *a, target=None, name="", **k: mock.Mock(start=target) if name == "match-search" else real(*a, target=target, name=name, **k)  # noqa: E731
+        with mock.patch("threading.Thread", side_effect=inline), \
+                mock.patch.object(scraper, "api_keys", return_value={"tmdb": "", "omdb": "", "fanart": ""}), \
+                mock.patch.object(anilist, "search", return_value=[]), mock.patch.object(sources, "mal_search", return_value=[]), \
+                mock.patch.object(sources, "kitsu_search", side_effect=RuntimeError("down")):
+            self.d.searchMatch(self.uid, "Film", "")
+        self.assertEqual(sorted(waits[0]), ["AniList", "Kitsu", "MyAnimeList"])
+        self.assertEqual(waits[-1], [])                                   # the spinner always stops
+        self.assertEqual([len(w) for w in waits[:-1]], [3, 2, 1, 0])
 
 
 class GallerySizeTests(unittest.TestCase):

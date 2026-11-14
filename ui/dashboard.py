@@ -11,7 +11,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from PySide6.QtCore import Property, QAbstractListModel, QModelIndex, QObject, Qt, QTimer, Signal, Slot
+from PySide6.QtCore import Property, QAbstractListModel, QModelIndex, QObject, Qt, QTimer, QUrl, Signal, Slot
 
 import database as db
 from utils import alttitles, backup_manager, health, hw_accelerator, media_probe, scraper, streaming
@@ -111,6 +111,11 @@ def episode_row(e: dict) -> dict:
     return {"season": se[0] if se else 0, "number": se[1] if se else 0, "name": e.get("episode_title") or "",
             "synopsis": e.get("episode_synopsis") or "", "length": duration_label(e["duration"]),
             "still": file_url(still) if still.exists() else ""}
+
+
+GALLERY_DROP_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".avif"}
+MATCH_SOURCES_LABEL = {"tmdb": "TMDB", "tmdbset": "TMDB collections", "tvmaze": "TVmaze", "omdb": "IMDb", "anilist": "AniList",
+                       "mal": "MyAnimeList", "kitsu": "Kitsu"}
 
 
 def missing_rows(folder: str, eps: list[dict]) -> list[dict]:
@@ -600,6 +605,7 @@ class Dashboard(QObject):
     _quitForUpdate = Signal()                    # from a worker thread: close Media Vault so setup can replace it
     appUpdateProgress = Signal(float)            # 0..1 while the new setup.exe downloads; -1 = failed              # path, suggested tab name
     matchResults = Signal(str, "QVariantList")   # key, candidates
+    matchWaiting = Signal(str, "QVariantList")   # key, the sites still answering ([] = the search is over)
     matchFailed = Signal(str, str)               # key, reason
     matchApplied = Signal(str, str)              # old key, new key (a film can join or leave a box set)
     matchDetailsReady = Signal(str, "QVariantList")   # key, every picked result's details (Fix Scraped Data, step 2)
@@ -1350,6 +1356,8 @@ class Dashboard(QObject):
                 self.matchResults.emit(key, [row])
             except Exception as e:
                 self.matchFailed.emit(key, str(e))
+            finally:
+                self.matchWaiting.emit(key, [])
 
         def work():
             from concurrent.futures import ThreadPoolExecutor
@@ -1370,10 +1378,14 @@ class Dashboard(QObject):
                 order.insert(0, "tmdbset")
             from concurrent.futures import as_completed
             got, errors = {}, []
+            waiting = [n for n in order if n in jobs]
+            self.matchWaiting.emit(key, [MATCH_SOURCES_LABEL.get(n, n) for n in waiting])
             with ThreadPoolExecutor(len(jobs)) as pool:
                 futures = {pool.submit(fn): name for name, fn in jobs.items()}
                 # results show as each site answers (a slow one does not hold the rest back), in the folder's order
                 for f in as_completed(futures):
+                    waiting.remove(futures[f])
+                    self.matchWaiting.emit(key, [MATCH_SOURCES_LABEL.get(n, n) for n in waiting])
                     try:
                         got[futures[f]] = f.result()
                     except Exception as e:   # ScrapeError, AniListError, offline
@@ -1382,6 +1394,7 @@ class Dashboard(QObject):
                     shown = [r for name in order for r in got.get(name, [])]
                     if shown:
                         self.matchResults.emit(key, shown)
+            self.matchWaiting.emit(key, [])
             if not got or not any(got.values()):
                 if errors and not got:
                     self.matchFailed.emit(key, "; ".join(errors))
@@ -2012,20 +2025,52 @@ class Dashboard(QObject):
         def run():
             from . import pick_images
             paths = pick_images(self._media_folder(key))
-            item = self._target(key)
-            if not (paths and item):
-                return
-            d = scraper.gallery_dir(item)
-            n = 0
-            for p in paths:
-                try:
-                    scraper.save_webp(Image.open(p), d / f"c-{int(time.time() * 1000)}-{n}.webp", box=scraper.GALLERY_BOX)
-                    n += 1
-                except Exception:
-                    log.warning("gallery image %s", p, exc_info=True)
-            self.toast.emit(f"Added {n} image{'s' if n != 1 else ''} to the Gallery")
-            self.boxArtChanged.emit(key)
+            if paths:
+                self._add_gallery_files(key, paths)
         QTimer.singleShot(0, run)
+
+    @Slot(str, "QVariantList")
+    def dropGalleryImages(self, key: str, urls):
+        """Images dragged onto the Gallery: files from this PC are added; a picture dragged from a web page is
+        imported like a pasted image link."""
+        files, links = [], []
+        for u in urls:
+            u = QUrl(u) if not isinstance(u, QUrl) else u
+            if u.isLocalFile():
+                path = u.toLocalFile()
+                if os.path.isfile(path) and os.path.splitext(path)[1].lower() in GALLERY_DROP_EXTS:
+                    files.append(path)
+            elif u.scheme() in ("http", "https"):
+                links.append(u.toString())
+        if files:
+            self._add_gallery_files(key, files)
+        for link in links[:10]:
+            self.importGalleryImages(key, link, False)
+        if not files and not links:
+            self.toast.emit("Only image files can go in the Gallery")
+
+    def _add_gallery_files(self, key: str, paths: list[str]):
+        """Image files into a title's Gallery as your own (c-...), resized and kept as WebP like the rest."""
+        item = self._target(key)
+        if not item or key.startswith("set:"):          # a box set's page has no Gallery of its own
+            return
+
+        def work():
+            from utils import progress
+            d = scraper.gallery_dir(item)
+            n, stamp = 0, int(time.time() * 1000)
+            with progress.task("Adding Gallery images", total=len(paths)) as t:
+                for i, p in enumerate(paths):
+                    t.step(detail=os.path.basename(p))
+                    try:
+                        with Image.open(p) as im:
+                            scraper.save_webp(im, d / f"c-{stamp}-{i:02d}.webp", box=scraper.GALLERY_BOX)
+                        n += 1
+                    except Exception:
+                        log.warning("gallery image %s", p, exc_info=True)
+            self.toast.emit(f"Added {n} image{'s' if n != 1 else ''} to the Gallery" if n else "Those files could not be read as images")
+            self.boxArtChanged.emit(key)
+        threading.Thread(target=work, daemon=True, name="gallery-add").start()
 
     @Slot(str, str, bool)
     def importGalleryImages(self, key: str, link: str, replace: bool):

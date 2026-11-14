@@ -746,7 +746,28 @@ Item {
             // ---- Gallery: wide stills (scraped, or your own); they also play behind the recommended carousel
             Component {
                 id: secGallery
+              Item {
+                implicitHeight: galleryCol.implicitHeight
+                // drag image files (or a picture from a web page) anywhere onto the Gallery to add them
+                DropArea {
+                    id: galleryDrop
+                    anchors.fill: parent; anchors.margins: -8
+                    z: 5
+                        keys: ["text/uri-list"]
+                        onDropped: (drop) => { if (drop.hasUrls) { Backend.dropGalleryImages(root.infoKey, drop.urls); drop.acceptProposedAction() } }
+                        Rectangle {
+                            anchors.fill: parent; radius: 12
+                            color: Qt.rgba(Qt.color(Theme.blue).r, Qt.color(Theme.blue).g, Qt.color(Theme.blue).b, 0.14)
+                            border.color: Theme.blue; border.width: 2
+                            opacity: galleryDrop.containsDrag ? 1 : 0
+                            Behavior on opacity { NumberAnimation { duration: 140 * Theme.motion } }
+                            Rectangle { anchors.centerIn: parent; width: dropLabel.implicitWidth + 32; height: 36; radius: 18; color: Theme.blue
+                                Text { id: dropLabel; anchors.centerIn: parent; text: "Drop to add to the Gallery"; color: "#FFFFFF"; font.pixelSize: 13; font.weight: Font.Bold } }
+                        }
+                }
                 ColumnLayout {
+                    id: galleryCol
+                    width: parent.width
                     spacing: 8
                     RowLayout {
                         Layout.fillWidth: true
@@ -787,8 +808,9 @@ Item {
                         }
                     }
                     Text { visible: (root.info.gallery || []).length === 0; Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 12
-                        text: "No images yet. Stills from TMDB or AniList arrive with scraping (Gallery images in the folder's scrape options, or Fetch missing), or add or import your own." }
+                        text: "No images yet. Stills from TMDB or AniList arrive with scraping (Gallery images in the folder's scrape options, or Fetch missing), or add or import your own. You can also drag image files here." }
                 }
+              }
             }
 
             Component {
@@ -1305,6 +1327,29 @@ Item {
                 Text { x: 10; anchors.verticalCenter: parent.verticalCenter; text: "+  Add image files from this PC\u2026"; color: "#E6FFFFFF"; font.pixelSize: 13 }
                 MouseArea { id: fileArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                     onClicked: { galleryMenu.close(); Backend.addGalleryImages(root.infoKey) } }
+            }
+            Rectangle {      // or drop them here
+                Layout.fillWidth: true; height: 64; radius: 10
+                color: popDrop.containsDrag ? Qt.rgba(Qt.color(Theme.blue).r, Qt.color(Theme.blue).g, Qt.color(Theme.blue).b, 0.16) : "transparent"
+                border.color: popDrop.containsDrag ? Theme.blue : "#40FFFFFF"; border.width: popDrop.containsDrag ? 2 : 1
+                Behavior on color { ColorAnimation { duration: 120 * Theme.motion } }
+                Canvas {      // dashed edge while waiting
+                    anchors.fill: parent; visible: !popDrop.containsDrag
+                    onPaint: { var c = getContext("2d"); c.reset(); c.strokeStyle = "#59FFFFFF"; c.setLineDash([5, 4]); c.lineWidth = 1
+                        c.beginPath(); c.roundedRect(0.5, 0.5, width - 1, height - 1, 10, 10); c.stroke() }
+                }
+                Column {
+                    anchors.centerIn: parent; spacing: 3
+                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: popDrop.containsDrag ? "Let go to add them" : "Or drag images here"
+                        color: popDrop.containsDrag ? Theme.text : "#CCFFFFFF"; font.pixelSize: 13; font.weight: Font.DemiBold }
+                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: "Files from this PC, or a picture from a web page"; color: Theme.faint; font.pixelSize: 11 }
+                }
+                DropArea {
+                    id: popDrop
+                    anchors.fill: parent
+                    keys: ["text/uri-list"]
+                    onDropped: (drop) => { if (drop.hasUrls) { Backend.dropGalleryImages(root.infoKey, drop.urls); drop.acceptProposedAction(); galleryMenu.close() } }
+                }
             }
         }
     }
