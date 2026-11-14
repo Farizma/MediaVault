@@ -1,7 +1,8 @@
-// The opening: the Media Vault logo, drawn here from the same shapes as the icon, with its dial spinning while
-// the library loads (it keeps spinning until everything is in, however long that takes). Then the dial clicks into
-// place, the door swings open on its hinge and shows the dashboard inside, and the view zooms in through the
-// opening until the dashboard fills the window. Reduced motion: a short fade instead.
+// The opening: the Media Vault icon itself (ui/brand/intro-*.png, cut from icon.svg by tools/make_intro_art.py),
+// with its dial spinning while the library loads (it keeps spinning until everything is in, however long that takes).
+// Then the dial clicks into place, the door swings open on its hinge and the dashboard shows through the opening, and
+// the view flies in through the opening until the dashboard fills the window. Everything outside the opening stays
+// fully opaque the whole way. Reduced motion: a short fade instead.
 //
 //   VaultIntro { ready: ...; onZoomChanged: ... }      `zoom` (0.86 -> 1) is for the content underneath
 import QtQuick
@@ -12,13 +13,17 @@ Item {
     property real zoom: 0.86                // what the content underneath should scale to (1 when the vault is open)
     readonly property bool done: phase === "done"
     property string phase: "spin"           // spin -> open -> zoom -> done
-    property real holeR: 0                  // the round opening the dashboard shows through
     property real dialAngle: 0
     property real doorAngle: 0              // 0 closed .. 105 open
-    property real tileFade: 1               // the logo's square background, gone once the door opens
-    property real ringScale: 1
+    property real opening: 0                // 0 shut .. 1: the hole behind the door reaches the rim
+    property real ringScale: 1              // the whole logo, growing as the view flies in
     readonly property real s: Math.min(width, height) * 0.30          // the logo's size
     readonly property real diag: Math.sqrt(width * width + height * height)
+    readonly property real rimR: s * 58.5 / 256                        // the inside edge of the blue-to-green rim
+    // the hole the dashboard shows through: the rim's inside, growing with the logo, never wider
+    readonly property real holeR: rimR * opening * ringScale
+    // how far the logo grows: until the opening is wider than the window
+    readonly property real flyScale: (diag / 2 + 40) / Math.max(1, rimR)
     visible: phase !== "done"
     z: 1000
 
@@ -32,9 +37,9 @@ Item {
 
     MouseArea { anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.AllButtons }       // nothing underneath is clickable until it is open
 
-    // everything outside the opening is the page colour: a ring whose hole is the opening (works on any renderer)
+    // the page colour everywhere but the opening: a ring whose hole is the opening (works on any renderer)
     Rectangle {
-        readonly property real b: root.diag
+        readonly property real b: root.diag * 2
         anchors.centerIn: parent
         width: 2 * (root.holeR + b); height: width; radius: width / 2
         color: "transparent"
@@ -47,70 +52,25 @@ Item {
         anchors.centerIn: parent
         width: root.s; height: root.s
         scale: root.ringScale
-
-        // the icon's rounded square
-        Rectangle {
+        component Layer: Image {
             anchors.fill: parent
-            radius: width * 0.22
-            opacity: root.tileFade
-            gradient: Gradient {
-                GradientStop { position: 0; color: "#26262A" }
-                GradientStop { position: 1; color: "#121214" }
-            }
+            sourceSize: Qt.size(1024, 1024)
+            smooth: true; mipmap: true
         }
+        // the icon's rounded square, the opening cut out of it: around the opening it stays solid. Until the door
+        // swings, the door covers the opening; behind it the page colour fills the hole, then the dashboard does.
+        Layer { source: "brand/intro-tile.png" }
         // the dial: ring and eight ticks, turning like a combination lock
-        Item {
-            anchors.fill: parent
-            rotation: root.dialAngle
-            Rectangle {
-                anchors.centerIn: parent
-                width: parent.width * 0.656; height: width; radius: width / 2
-                color: "transparent"; border.color: "#EBFFFFFF"; border.width: parent.width * 0.035
-            }
-            Repeater {
-                model: 8
-                Rectangle {
-                    width: logo.width * 0.035; height: logo.width * 0.04; radius: width / 2
-                    color: "#FFFFFF"
-                    x: logo.width / 2 - width / 2; y: logo.width * 0.117
-                    transform: Rotation { origin.x: width / 2; origin.y: logo.width / 2 - logo.width * 0.117; angle: index * 45 }
-                }
-            }
-        }
-        // the door: the dark disc with the bars, hinged on its left edge
-        Item {
-            id: door
-            readonly property real r: logo.width * 0.242
-            x: logo.width / 2 - r; y: logo.height / 2 - r
-            width: 2 * r; height: 2 * r
+        Layer { source: "brand/intro-dial.png"; rotation: root.dialAngle }
+        // the door: the dark disc with the shelf, hinged on its left edge
+        Layer {
+            source: "brand/intro-door.png"
             opacity: 1 - Math.max(0, (root.doorAngle - 70) / 35)
-            transform: Rotation { origin.x: 0; origin.y: door.r; axis { x: 0; y: 1; z: 0 } angle: -root.doorAngle }
-            Rectangle {
-                anchors.fill: parent; radius: width / 2
-                color: "#0E0E10"
-                border.width: logo.width * 0.027
-                border.color: "#0A84FF"
-                Rectangle {        // the green half of the icon's blue-to-green ring
-                    anchors.fill: parent; anchors.margins: parent.border.width * 0.45; radius: width / 2
-                    color: "transparent"; border.width: parent.border.width * 0.45; border.color: "#5530D158"
-                }
-            }
-            Row {                  // the bars of the icon (a shelf of cases)
-                anchors.horizontalCenter: parent.horizontalCenter
-                y: door.r * 0.72
-                spacing: door.r * 0.06
-                Repeater {
-                    model: [["#0A84FF", 0.53], ["#FFFFFF", 0.63], ["#30D158", 0.48], ["#FF9F0A", 0.58]]
-                    Rectangle {
-                        width: door.r * 0.27; height: door.r * modelData[1] * 1.6; radius: width * 0.24
-                        color: modelData[0]
-                        anchors.bottom: parent.bottom
-                        rotation: index === 3 ? 14 : 0
-                    }
-                }
-            }
-            Rectangle { x: door.r * 0.35; y: door.r * 1.42; width: door.r * 1.3; height: door.r * 0.11; radius: height / 2; color: "#E6FFFFFF" }
+            transform: Rotation { origin.x: logo.width * (128 - 62) / 256; origin.y: logo.height / 2
+                                  axis { x: 0; y: 1; z: 0 } angle: -root.doorAngle }
         }
+        // the rim of the opening, in front of the door's edge
+        Layer { source: "brand/intro-rim.png" }
     }
 
     // while loading: the dial turns steadily, a turn every 1.2 s
@@ -127,17 +87,15 @@ Item {
         NumberAnimation { id: settle; target: root; property: "dialAngle"; duration: 380; easing.type: Easing.OutBack; easing.overshoot: 1.6 }
         // the door swings open on its hinge; the dashboard shows through the opening behind it
         ParallelAnimation {
-            NumberAnimation { target: root; property: "tileFade"; to: 0; duration: 260; easing.type: Easing.OutCubic }
-            NumberAnimation { target: root; property: "holeR"; to: logo.width * 0.242; duration: 300; easing.type: Easing.OutCubic }
+            NumberAnimation { target: root; property: "opening"; to: 1; duration: 300; easing.type: Easing.OutCubic }
             NumberAnimation { target: root; property: "doorAngle"; to: 105; duration: 520; easing.type: Easing.InOutCubic }
         }
         ScriptAction { script: root.phase = "zoom" }
-        // through the opening: it widens past the edges while the dashboard comes up to full size
+        // through the opening: the whole logo grows (the solid frame with it) until the opening is wider than the
+        // window, while the dashboard comes up to full size
         ParallelAnimation {
-            NumberAnimation { target: root; property: "holeR"; to: root.diag * 0.6; duration: 650; easing.type: Easing.InOutCubic }
-            NumberAnimation { target: root; property: "ringScale"; to: 6; duration: 650; easing.type: Easing.InCubic }
-            NumberAnimation { target: logo; property: "opacity"; to: 0; duration: 420; easing.type: Easing.InCubic }
-            NumberAnimation { target: root; property: "zoom"; to: 1; duration: 650; easing.type: Easing.InOutCubic }
+            NumberAnimation { target: root; property: "ringScale"; to: root.flyScale; duration: 700; easing.type: Easing.InCubic }
+            NumberAnimation { target: root; property: "zoom"; to: 1; duration: 700; easing.type: Easing.InOutCubic }
         }
         ScriptAction { script: root.phase = "done" }
     }

@@ -319,5 +319,31 @@ Item {
         self.assertEqual(area.property("height"), 300)
 
 
+class IntroLogoTests(unittest.TestCase):
+    """The opening animation is the app icon itself, and only the inside of the vault shows the dashboard."""
+
+    def test_layers_stack_into_the_icon(self):
+        from PIL import ImageChops
+        brand = ROOT / "ui" / "brand"
+        im = Image.new("RGBA", (1024, 1024), (0, 0, 0, 255))
+        for n in ("tile", "dial", "door", "rim"):
+            im.alpha_composite(Image.open(brand / f"intro-{n}.png").convert("RGBA"))
+        icon = Image.new("RGBA", (512, 512), (0, 0, 0, 255))
+        icon.alpha_composite(Image.open(brand / "icon-512.png").convert("RGBA"))
+        diff = ImageChops.difference(im.resize((512, 512), Image.Resampling.LANCZOS).convert("RGB"), icon.convert("RGB")).convert("L")
+        self.assertLess(sum(diff.histogram()[41:]), 2000)           # a few hundred edge pixels at most, of 262 144
+        tile = Image.open(brand / "intro-tile.png")
+        self.assertEqual(tile.getpixel((512, 512))[3], 0)            # the opening is cut out of the tile
+        self.assertEqual(tile.getpixel((512, 120))[3], 255)          # ... the rest of it is solid
+
+    def test_only_the_opening_is_see_through(self):
+        qml = (ROOT / "ui" / "VaultIntro.qml").read_text(encoding="utf-8")
+        self.assertIn("readonly property real holeR: rimR * opening * ringScale", qml)   # the hole grows with the logo
+        self.assertNotIn("tileFade", qml)
+        self.assertNotIn('target: logo; property: "opacity"', qml)                       # the frame never fades
+        for n in ("tile", "dial", "door", "rim"):
+            self.assertIn(f'"brand/intro-{n}.png"', qml)
+
+
 if __name__ == "__main__":
     unittest.main()
