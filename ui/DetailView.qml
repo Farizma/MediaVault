@@ -674,22 +674,25 @@ Item {
                 id: secSynopsis
                 ColumnLayout {
                     spacing: 8
-                    // a film in a box set shows the set's synopsis: one text, edited from either page
+                    // a film in a box set: only its own episode name and synopsis here (the set's synopsis is on the set's
+                    // own page). Until you write one, the episode synopsis starts as a copy of the set's.
                     readonly property bool linked: root.info.inSet === true && !!(root.info.boxSet && root.info.boxSet.key)
-                    Caption { text: root.setSlide || parent.linked ? "BOX SET SYNOPSIS" : "SYNOPSIS" }
+                    readonly property bool episodeOnly: linked && !root.setSlide
+                    Caption { visible: !parent.episodeOnly; text: root.setSlide ? "BOX SET SYNOPSIS" : "SYNOPSIS" }
                     Area {
+                        visible: !parent.episodeOnly
                         Layout.fillWidth: true; Layout.preferredHeight: 104
                         resizable: true; sizeKey: "synopsis_box_height"      // drag the corner; remembered for every title
-                        placeholderText: root.setSlide || parent.linked ? "What this box set is: the story across its films" : "Description"
+                        placeholderText: root.setSlide ? "What this box set is: the story across its films" : "Description"
                         text: root.info.synopsis || ""
                         onEditingChanged: if (!editing && text !== (root.info.synopsis || "")) {
-                            Backend.setSynopsis(parent.linked ? root.info.boxSet.key : root.infoKey, text)
+                            Backend.setSynopsis(root.infoKey, text)
                             root.info.synopsis = text
                             if (root.d.isSet) root.d.synopsis = text      // the set's own page, if it is the one open
                         }
                     }
                     // a film in a box set (an OVA's "#2"): its own episode name and what happens in it
-                    Caption { visible: root.info.inSet === true; text: "EPISODE"; Layout.topMargin: 6 }
+                    Caption { visible: root.info.inSet === true; text: "EPISODE"; Layout.topMargin: parent.episodeOnly ? 0 : 6 }
                     Field {
                         visible: root.info.inSet === true
                         Layout.fillWidth: true
@@ -700,9 +703,11 @@ Item {
                     }
                     Area {
                         visible: root.info.inSet === true
-                        Layout.fillWidth: true; Layout.preferredHeight: 84
+                        Layout.fillWidth: true; Layout.preferredHeight: 104
+                        resizable: true; sizeKey: "synopsis_box_height"
                         placeholderText: "What happens in this episode"
                         text: root.info.episodeSynopsis || ""
+                        // saved only once you change it: until then it follows the box set's synopsis
                         onEditingChanged: if (!editing && text !== (root.info.episodeSynopsis || "")) { Backend.setEpisodeSynopsis(root.infoKey, text); root.info.episodeSynopsis = text }
                     }
                 }

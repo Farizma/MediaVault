@@ -85,9 +85,9 @@ class DataTests(unittest.TestCase):
         self.d.setSynopsis("set:9109", "Two sisters, two episodes.")
         self.assertEqual(self.d.detail("set:9109")["synopsis"], "Two sisters, two episodes.")
         self.assertEqual(db.get_media(self.a)["synopsis"], "Series synopsis")      # the films' own rows untouched
-        self.assertEqual(self.d.detail(self.a)["synopsis"], "Two sisters, two episodes.")   # a film shows the set's
-        self.assertEqual(self.d.detail(self.a)["episodeSynopsis"] if not db.get_media(self.a)["episode_synopsis"] else "",
-                         "Series synopsis")   # its own text is not lost: it shows as the episode's until you write one
+        self.assertEqual(self.d.detail(self.a)["synopsis"], "Two sisters, two episodes.")   # the set's, for its page
+        # 1.3.1: a film's page shows only its episode synopsis; one every episode shares starts as a copy of the set's
+        self.assertEqual(self.d.detail(self.a)["episodeSynopsis"], "Two sisters, two episodes.")
 
     def test_episode_name_and_synopsis(self):
         r = self.d.detail(self.a)
@@ -178,7 +178,7 @@ class DetailViewTests(unittest.TestCase):
         self.assertIn("ScrollView {", area)
         self.assertNotIn("maximumLength", area)
         qml = (ROOT / "ui" / "DetailView.qml").read_text(encoding="utf-8")
-        self.assertIn("Backend.setSynopsis(parent.linked ? root.info.boxSet.key : root.infoKey, text)", qml)
+        self.assertIn("readonly property bool episodeOnly: linked && !root.setSlide", qml)   # 1.3.1: the set's text on its own page
         self.assertNotIn("onActiveFocusChanged: if (!activeFocus) Backend.setNote", qml)
 
     def test_pencil_rename_and_gallery_menu(self):

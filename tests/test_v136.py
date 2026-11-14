@@ -212,6 +212,38 @@ Item {
         self.assertEqual(self.y(), 0)
 
 
+class EpisodeSynopsisTests(unittest.TestCase):
+    """A film in a box set shows only its episode synopsis; until you write one it is a copy of the set's."""
+
+    def setUp(self):
+        from tests.test_v133 import make_dashboard
+        db.init_db()
+        with db._tx() as c:
+            for t in ("media_items", "scanned_directories", "collection_info"):
+                c.execute(f"DELETE FROM {t}")
+        root = Path(tempfile.mkdtemp())
+        did = db.add_directory(str(root), "Films", True)
+        rows = []
+        for name, cid, syn in (("ova1", 7, "Series text"), ("ova2", 7, "Series text"),
+                               ("dune1", 8, "Paul goes to Arrakis."), ("dune2", 8, "Paul joins the Fremen.")):
+            p = root / f"{name}.mkv"
+            rows.append({"uuid": db.file_id(p), "file_path": db.norm(p), "parent_directory_id": did, "title": name,
+                         "media_type": "movie", "collection_id": cid, "collection_name": f"Set {cid}", "synopsis": syn})
+        db.add_items(rows)
+        self.ova1, self.ova2, self.dune1, _ = (r["uuid"] for r in rows)
+        self.d = make_dashboard()
+
+    def test_defaults_and_your_own_text(self):
+        self.d.setSynopsis("set:7", "Two sisters, two episodes.")
+        self.assertEqual(self.d.detail(self.ova1)["episodeSynopsis"], "Two sisters, two episodes.")    # a copy of the set's
+        self.d.setSynopsis("set:7", "Edited later.")
+        self.assertEqual(self.d.detail(self.ova1)["episodeSynopsis"], "Edited later.")                 # untouched: follows it
+        self.d.setEpisodeSynopsis(self.ova2, "At the pool.")
+        self.assertEqual(self.d.detail(self.ova2)["episodeSynopsis"], "At the pool.")                  # yours stays yours
+        self.assertEqual(self.d.detail("set:7")["synopsis"], "Edited later.")                          # the set keeps its own
+        self.assertEqual(self.d.detail(self.dune1)["episodeSynopsis"], "Paul goes to Arrakis.")       # a film's own description stays
+
+
 class ResizeTests(unittest.TestCase):
     """The synopsis box's corner grip: drag to change its height; the height is remembered."""
 

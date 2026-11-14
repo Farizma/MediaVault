@@ -1265,9 +1265,16 @@ class Dashboard(QObject):
                      {"label": "Length", "value": duration_label(sum(f["duration"] or 0 for f in films))}]
         resume = item["last_position"] > 10 and not item["is_completed"]
         shown, disc = display_titles({**item, "key": key}), scraper.disc_art(art)
-        # a film in a box set shows (and edits) the set's synopsis
-        in_set = set_synopsis(item["collection_id"], db.films_in_set(item["collection_id"])) \
-            if not films and not eps and item.get("collection_id") is not None else None
+        # a film in a box set: the set's synopsis, and what its episode synopsis starts as until you write one
+        in_set, episode_text = None, ""
+        if not films and not eps and item.get("collection_id") is not None:
+            mates = db.films_in_set(item["collection_id"])
+            in_set = set_synopsis(item["collection_id"], mates)
+            own = (item["synopsis"] or "").strip()
+            others = {(f["synopsis"] or "").strip() for f in mates if f["uuid"] != item["uuid"]}
+            # a film's own description (a TMDB collection: each film has its own) stays; a text every episode shares
+            # (an OVA's series synopsis) gives way to a copy of the set's
+            episode_text = own if own and own not in others and own != in_set else in_set
         return {
             "key": key, "isShow": bool(eps), "isSet": bool(films), "kind": "show" if eps or item["media_type"] == "show" else "movie",
             "canMatch": item["media_type"] != "clip", "title": shown[0] if not films else item["title"],
@@ -1276,8 +1283,8 @@ class Dashboard(QObject):
             # a film in a box set: its own episode name and synopsis (an OVA's "#2" is an episode of a series)
             "inSet": not films and not eps and item.get("collection_id") is not None,
             "episodeTitle": item.get("episode_title") or "",
-            # until you write one: the film's own synopsis, when it is not the set's (a film of a TMDB collection)
-            "episodeSynopsis": item.get("episode_synopsis") or ((item["synopsis"] or "") if in_set is not None and item["synopsis"] != in_set else ""),
+            # only what you type is saved: an untouched one follows the set's synopsis
+            "episodeSynopsis": item.get("episode_synopsis") or episode_text or "",
             # every other title, grouped English / Romanized / Native / Other languages (not the ones shown above)
             "altTitles": [] if films else alttitles.for_display(item.get("alt_titles"), shown),
             "banner": file_url(b) if (b := banner_for({**item, "key": key})) else "",
