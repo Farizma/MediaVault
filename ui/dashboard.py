@@ -123,6 +123,15 @@ def missing_rows(folder: str, eps: list[dict]) -> list[dict]:
             for g in db.gaps(folder) if (g["season"], g["number"]) not in have]
 
 
+def image_size(path) -> str:
+    """"1920 \u00D7 1080" for a Gallery tile. Only the file's header is read."""
+    try:
+        with Image.open(path) as im:
+            return f"{im.width} \u00D7 {im.height}"
+    except (OSError, ValueError):
+        return ""
+
+
 def clock_label(seconds) -> str:
     s = int(seconds or 0)
     return f"{s // 3600}:{s % 3600 // 60:02d}:{s % 60:02d}" if s >= 3600 else f"{s // 60}:{s % 60:02d}"
@@ -1284,7 +1293,7 @@ class Dashboard(QObject):
             "order": db.detail_order(),
             "slides": self._slides(key, art, films) if films else [],
             "cast": [] if films else self._cast_list(item),
-            "gallery": [] if films else [{"url": file_url(p), "name": p.name, "custom": p.name.startswith("c-")}
+            "gallery": [] if films else [{"url": file_url(p), "name": p.name, "custom": p.name.startswith("c-"), "size": image_size(p)}
                                          for p in scraper.gallery_images(item)],
             "boxSet": ({"key": f"set:{item['collection_id']}", "name": item.get("collection_name") or ""}
                        if not films and not eps and item.get("collection_id") is not None else {}),
@@ -1745,7 +1754,7 @@ class Dashboard(QObject):
     @Slot("QVariantList", str, bool)
     def bulkTag(self, keys, tag: str, add: bool):
         tag = tag.strip()
-        if not tag or tag.startswith(("auto:", "rating:", "studio:")):
+        if not tag or tag.startswith(("auto:", "rating:")):
             return
         uids = [u for k in keys for u in db.uuids_for(str(k))]
         if add:
@@ -2197,10 +2206,24 @@ class Dashboard(QObject):
 
     @Slot(result="QVariantList")
     def tagNames(self):
-        """Tags you have typed before, for suggestions while typing a new one (most used first)."""
-        counts = {t["name"]: t["n"] for t in db.tag_counts()}
-        names = [t for t in db.user_tags() if not t.startswith("auto:")]
-        return sorted(names, key=lambda t: (-counts.get(t, 0), t.casefold()))
+        """Every tag in the library, for suggestions while typing: yours first, then genres, studios and the automatic
+        ones, each most used first. name: what is added; label: what is shown and matched; kind: shown beside it.
+        A genre or studio is added as that genre or studio; an automatic tag ("Rated PG") as your own tag of that name."""
+        order = {"": 0, "genre:": 1, "studio:": 2, "auto:": 3}
+        kinds = {"": "", "genre:": "Genre", "studio:": "Studio", "auto:": "Automatic"}
+        out, seen = [], set()
+        tags = sorted(db.tag_counts(), key=lambda t: next((order[p] for p in ("genre:", "studio:", "auto:") if t["name"].startswith(p)), 0))
+        for t in tags:                       # yours first, so a name you typed wins over the same automatic one
+            name = t["name"]
+            prefix = next((p for p in ("genre:", "studio:", "auto:") if name.startswith(p)), "")
+            label = name[len(prefix):]
+            add = label if prefix == "auto:" else name
+            if not label or add.casefold() in seen:
+                continue
+            seen.add(add.casefold())
+            out.append({"name": add, "label": label, "kind": kinds[prefix], "rank": order[prefix], "n": t["n"]})
+        out.sort(key=lambda r: (r["rank"], -r["n"], r["label"].casefold()))
+        return [{k: r[k] for k in ("name", "label", "kind")} for r in out]
 
     @Slot(result="QVariantList")
     def allTags(self):

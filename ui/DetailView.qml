@@ -757,7 +757,7 @@ Item {
                         id: galleryList
                         visible: (root.info.gallery || []).length > 0
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 104
+                        Layout.preferredHeight: 122
                         orientation: ListView.Horizontal
                         spacing: 10
                         clip: true
@@ -766,7 +766,10 @@ Item {
                         ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AsNeeded }
                         delegate: Rectangle {
                             width: 160; height: 90; radius: 8; color: Theme.slate; border.color: shotArea.containsMouse ? "#66FFFFFF" : Theme.line
-                            clip: true
+                            Text {      // its resolution, small and light, under the picture
+                                anchors { top: parent.bottom; topMargin: 4; left: parent.left }
+                                text: modelData.size || ""; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10 }
+                            Item { anchors.fill: parent; clip: true
                             Image { anchors.fill: parent; source: modelData.url; fillMode: Image.PreserveAspectCrop; asynchronous: true
                                 sourceSize.width: 320; sourceSize.height: 180 }
                             MouseArea { id: shotArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: lightbox.open(index) }
@@ -780,6 +783,7 @@ Item {
                             }
                             Rectangle { visible: modelData.custom; anchors { left: parent.left; bottom: parent.bottom; margins: 5 } width: 34; height: 16; radius: 4
                                 color: "#CC000000"; Text { anchors.centerIn: parent; text: "YOURS"; color: "#FFFFFF"; font.family: Theme.mono; font.pixelSize: 8 } }
+                            }
                         }
                     }
                     Text { visible: (root.info.gallery || []).length === 0; Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 12

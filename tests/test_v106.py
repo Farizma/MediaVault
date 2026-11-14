@@ -150,10 +150,11 @@ class TagNameTests(unittest.TestCase):
             db.add_tag(uid[u], t)
         d = Dashboard(types.SimpleNamespace(engine=types.SimpleNamespace(hw=None), presence=None, play=lambda *a: None),
                       LibraryModel(), TabsModel(), FrameProvider())
-        names = d.tagNames()
+        names = [t["name"] for t in d.tagNames()]
         self.assertLess(names.index("Rewatch"), names.index("Kids"))        # more used first (other tests share the db)
-        self.assertNotIn("auto:4K", names)
-        self.assertNotIn("genre:Drama", names)
+        self.assertNotIn("auto:4K", names)                                  # 1.3.1: an automatic tag is offered as a plain one
+        self.assertIn("4K", names)
+        self.assertLess(names.index("Kids"), names.index("genre:Drama"))     # your own tags before genres
 
 
 if __name__ == "__main__":
