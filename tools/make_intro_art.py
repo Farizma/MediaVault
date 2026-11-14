@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, QPointF, Qt
-from PySide6.QtGui import QGuiApplication, QImage, QPainter
+from PySide6.QtGui import QGuiApplication, QImage, QPainter, QPainterPath
 from PySide6.QtSvg import QSvgRenderer
 
 BRAND = Path(__file__).resolve().parent.parent / "ui" / "brand"
@@ -33,9 +33,13 @@ def main():
         k = SIZE / 256
         p.setPen(Qt.NoPen)
         p.setBrush(Qt.black)
-        if name == "door":                # Qt's SVG renderer skips clip-path: keep the shelf inside the disc by hand
-            p.setCompositionMode(QPainter.CompositionMode_DestinationIn)
-            p.drawEllipse(QPointF(128 * k, 128 * k), 62 * k, 62 * k)
+        if name == "door":                # Qt's SVG renderer skips clip-path: erase whatever is outside the disc by hand
+            outside = QPainterPath()
+            outside.setFillRule(Qt.OddEvenFill)
+            outside.addRect(0, 0, SIZE, SIZE)
+            outside.addEllipse(QPointF(128 * k, 128 * k), 62 * k, 62 * k)
+            p.setCompositionMode(QPainter.CompositionMode_DestinationOut)
+            p.drawPath(outside)
         if name == "tile":                # the opening (inside the rim): the dashboard shows through it once the door swings
             p.setCompositionMode(QPainter.CompositionMode_DestinationOut)
             p.drawEllipse(QPointF(128 * k, 128 * k), 59 * k, 59 * k)

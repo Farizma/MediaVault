@@ -331,10 +331,12 @@ class IntroLogoTests(unittest.TestCase):
         icon = Image.new("RGBA", (512, 512), (0, 0, 0, 255))
         icon.alpha_composite(Image.open(brand / "icon-512.png").convert("RGBA"))
         diff = ImageChops.difference(im.resize((512, 512), Image.Resampling.LANCZOS).convert("RGB"), icon.convert("RGB")).convert("L")
-        self.assertLess(sum(diff.histogram()[41:]), 2000)           # a few hundred edge pixels at most, of 262 144
+        self.assertLess(sum(diff.histogram()[41:]), 800)           # a few hundred edge pixels at most, of 262 144
         tile = Image.open(brand / "intro-tile.png")
         self.assertEqual(tile.getpixel((512, 512))[3], 0)            # the opening is cut out of the tile
         self.assertEqual(tile.getpixel((512, 120))[3], 255)          # ... the rest of it is solid
+        door = Image.open(brand / "intro-door.png")
+        self.assertEqual(door.getpixel((712, 332))[3], 0)            # the orange case is cut at the disc's edge
 
     def test_only_the_opening_is_see_through(self):
         qml = (ROOT / "ui" / "VaultIntro.qml").read_text(encoding="utf-8")
