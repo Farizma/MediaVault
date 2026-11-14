@@ -18,6 +18,7 @@ Item {
     readonly property var cur: count > 0 ? slides[Math.min(slide, count - 1)] : d
     // what the right pane describes: the set's own page on its first slide, else the film shown (full details)
     readonly property bool setSlide: d.isSet === true && !cur.uuid
+    readonly property int cardInset: 12        // text inside the title and score cards, from the card's edge
     property var fd: ({})
     readonly property var info: d.isSet && cur.uuid ? fd : d
     readonly property string infoKey: info.key || itemKey
@@ -399,8 +400,7 @@ Item {
                 ScrollBar.vertical: ScrollBar {}
                 ColumnLayout {
                     id: col
-                    // inset inside the (clipped) scroll area, so the bubbles behind the title and scores, which reach
-                    // a little left of the text, keep their rounded left edge
+                    // inset inside the (clipped) scroll area, so the cards' rounded edges show
                     x: 12
                     width: flick.width - 26
                     spacing: 14
@@ -429,15 +429,20 @@ Item {
                     Repeater {
                         model: root.order
                         Loader {
+                            id: section
                             Layout.fillWidth: true
                             Layout.topMargin: modelData === "title" ? -8 : 0
+                            // the title and score cards are as wide as the synopsis box; their text sits inset inside
+                            readonly property bool carded: root.hasBanner && (modelData === "title" || modelData === "rating")
+                            Layout.leftMargin: carded ? root.cardInset : 0
+                            Layout.rightMargin: carded ? root.cardInset : 0
                             active: root.showSection(modelData)
                             visible: active
                             sourceComponent: ({ title: secTitle, rating: secRating, meta: secMeta, synopsis: secSynopsis, cast: secCast, gallery: secGallery,
                                                 tags: secTags, boxset: secBoxSet, notes: secNotes, list: secList })[modelData] || null
                             // the title and score blocks sit on the banner: a soft bubble behind each keeps them readable
-                            Bubble { z: -1; visible: root.hasBanner && (modelData === "title" || modelData === "rating") && parent.active
-                                     width: parent.width - 32; x: -10; y: -6; height: parent.height + 12; radius: 12 }
+                            Bubble { z: -1; visible: section.carded && parent.active
+                                     x: -root.cardInset; width: parent.width + 2 * root.cardInset; y: -5; height: parent.height + 10; radius: 12 }
                         }
                     }
                 }
@@ -472,8 +477,10 @@ Item {
                         readonly property bool picker: !root.renaming
                         // sized from the scroll column's fixed width, never from this layout's own width: a width
                         // that depends on itself made Qt re-lay it out every frame (the dashboard slowed down)
-                        Layout.preferredWidth: root.renaming ? col.width - 84
-                                             : Math.min(tm.advanceWidth + 6, col.width - (root.d.isSet === true ? 84 : 48))
+                        // the room left inside the card after the arrow (box sets) and the pencil: a long title is cut
+                        // short (it scrolls on hover) so the pencil always stays in the card
+                        readonly property real room: col.width - (root.hasBanner ? 2 * root.cardInset : 0) - (root.d.isSet === true ? 84 : 48)
+                        Layout.preferredWidth: root.renaming ? room : Math.min(tm.advanceWidth + 6, room)
                         text: root.info.title || ""
                         font.pixelSize: 28; font.weight: Font.ExtraBold; font.letterSpacing: -0.6
                         leftPadding: 0; rightPadding: 0

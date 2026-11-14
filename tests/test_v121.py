@@ -90,4 +90,6 @@ class PolishLoopTests(unittest.TestCase):
     def test_title_width_does_not_depend_on_its_own_layout(self):
         qml = (ROOT / "ui" / "DetailView.qml").read_text(encoding="utf-8")
         self.assertNotIn("titleCol.width", qml)        # 1.1.1: re-laid out every frame, the dashboard lagged
-        self.assertIn("Math.min(tm.advanceWidth + 6, col.width - (root.d.isSet === true ? 84 : 48))", qml)
+        # 1.3.2: from the scroll column's fixed width, less the card's inset and the arrow and pencil
+        self.assertIn("readonly property real room: col.width - (root.hasBanner ? 2 * root.cardInset : 0) - (root.d.isSet === true ? 84 : 48)", qml)
+        self.assertIn("Math.min(tm.advanceWidth + 6, room)", qml)
