@@ -49,18 +49,6 @@ class BoxSetTests(unittest.TestCase):
         names = [os.path.basename(db.get_media(u)["file_path"]) for u in db.uuids_for("set:726871")]
         self.assertEqual(names, ["Dune.mkv", "Dune Part Two.mkv"])
 
-    def test_set_match_rewrites_details_and_genres_only(self):
-        uid = db.file_id(os.path.join(self.root, "Heat.mkv"))
-        db.add_tag(uid, "favourites")
-        db.add_tag(uid, "genre:Comedy")
-        db.set_match([uid], "1995-12-15", "A crew of thieves.", 949, 999, "Heat Collection", ["Crime", "Thriller"])
-        item = db.get_media(uid)
-        self.assertEqual((item["release_date"], item["tmdb_id"], item["collection_id"]), ("1995-12-15", 949, 999))
-        tags = db.tags_for(uid)
-        self.assertIn("favourites", tags)
-        self.assertNotIn("genre:Comedy", tags)
-        self.assertIn("genre:Crime", tags)
-
     def test_collection_art_lives_in_cache(self):
         item = scraper.collection_item(726871, "Dune Collection")
         self.assertEqual(scraper.poster_path(item).name, "set-726871.webp")

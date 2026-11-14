@@ -92,6 +92,32 @@ def banner_for(card: dict):
     return next((p for p in gallery if p.name.startswith("s-")), None) or (gallery[0] if gallery else None)
 
 
+# Fix Scraped Data: what can be taken from which result, in the order the window lists them
+MATCH_FIELDS = ("title", "year", "synopsis", "poster", "banner", "genres", "score", "rating", "titles", "cast", "boxset")
+
+
+def match_preview(h: dict) -> dict:
+    """What one result offers for each field, for the Fix Scraped Data window (short: no full cast, no raw data)."""
+    gallery = [u for u in h.get("gallery_urls") or [] if scraper.safe_url(u)]
+    names = [c.get("name") for c in h.get("cast") or [] if c.get("name")]
+    score = h.get("score")
+    out = {
+        "title": h.get("title") or "",
+        "year": (h.get("release_date") or "")[:4],
+        "synopsis": scraper.untag(h.get("synopsis") or ""),
+        "poster": scraper.safe_url(h.get("poster_url")) or "",
+        "banner": scraper.safe_url(h.get("banner_url")) or "",
+        "gallery": gallery[:24], "galleryCount": len(gallery),
+        "genres": ", ".join((h.get("genres") or []) + [f"{s} (studio)" for s in h.get("studios") or []]),
+        "score": "" if score is None else (f"{round(score * 10)}%" if h.get("anilist_id") else f"{score:.1f} / 10"),
+        "rating": h.get("certification") or "",
+        "titles": " \u00B7 ".join(t for t in (h.get("original_title"), h.get("romaji_title")) if t),
+        "cast": ", ".join(names[:6]) + (f" and {len(names) - 6} more" if len(names) > 6 else ""),
+        "boxset": h.get("collection_name") or "",
+    }
+    return out
+
+
 def art_item(card: dict) -> dict:
     """What a card's box art belongs to: a box set has its own (keyed by collection), everything else its file."""
     key = card.get("key", "")
@@ -465,6 +491,7 @@ class Dashboard(QObject):
     matchResults = Signal(str, "QVariantList")   # key, candidates
     matchFailed = Signal(str, str)               # key, reason
     matchApplied = Signal(str, str)              # old key, new key (a film can join or leave a box set)
+    matchDetailsReady = Signal(str, "QVariantList")   # key, every picked result's details (Fix Scraped Data, step 2)
     _thumbnailsDone = Signal(str, object)
 
     def __init__(self, app, library: LibraryModel, tabs: TabsModel, frames: dvd_box.FrameProvider, parent=None):
@@ -488,6 +515,7 @@ class Dashboard(QObject):
         self._quitForUpdate.connect(self._quit_for_update)     # queued: runs on the main thread
         self._locked = False
         self._unlocking = False
+        self._match_hits: dict[str, dict] = {}                # Fix Scraped Data: key -> {pid: full details}
         self.hwnd = None                                       # the library window: Windows' sign-in prompt sits on it
         self._unlocked.connect(self._set_unlocked)
         self._jobs: dict[int, dict] = {}
@@ -846,7 +874,9 @@ class Dashboard(QObject):
             "resume": resume and not films,
             "resumeAt": duration_clock(item["last_position"]) if resume else "",
             "score": item.get("score") if not films else None,
-            "scoreSource": "anilist" if item.get("anilist_id") and not films else "",   # AniList scores in %, not stars
+            # AniList scores in %, not stars (a score you took from TMDB or IMDb for an AniList title stays stars)
+            "scoreSource": "" if films else (item.get("score_source") if item.get("score_source") is not None
+                                             else "anilist" if item.get("anilist_id") else ""),
             "order": db.detail_order(),
             "slides": self._slides(key, art, films) if films else [],
             "cast": [] if films else self._cast_list(item),
@@ -928,78 +958,150 @@ class Dashboard(QObject):
         if q:
             threading.Thread(target=from_link if link else work, daemon=True, name="match-search").start()
 
-    @Slot(str, str, str)
-    def applyMatch(self, key: str, source: str, ident: str):
-        threading.Thread(target=self._apply_match, args=(key, source, ident), daemon=True, name="match-apply").start()
+    def _fetch_hit(self, key: str, source: str, ident: str) -> dict:
+        keys = scraper.api_keys()
+        if source == "anilist":
+            from utils import anilist
+            hit = anilist.details(int(ident))
+            hit["gallery_urls"] = anilist.gallery_urls(hit)
+            return hit
+        if source == "omdb":
+            return scraper.omdb_details(ident, keys["omdb"])
+        # "tv:123" / "movie:123" (a pasted link names its kind, whatever this title was)
+        kind, _, num = ident.rpartition(":")
+        show = key.startswith("show:")
+        return scraper.tmdb_details({"tv": "show", "movie": "movie"}.get(kind, "show" if show else "movie"), int(num), keys["tmdb"])
 
-    def _apply_match(self, key: str, source: str, ident: str):
+    @Slot(str, "QVariantList")
+    def matchDetails(self, key: str, picks: list):
+        """Fix Scraped Data, step 2: the full details of every result you picked, all at once, so you can choose
+        field by field. Emits matchDetailsReady(key, [{pid, source, title, year, fields: {...}}])."""
+        picks = [p for p in picks or [] if p.get("source") in ("tmdb", "anilist", "omdb") and p.get("id")][:6]
+
+        def work():
+            from concurrent.futures import ThreadPoolExecutor
+            jobs = {f"{p['source']}|{p['id']}": p for p in picks}
+            with ThreadPoolExecutor(max(1, len(jobs))) as pool:
+                futures = {pid: pool.submit(self._fetch_hit, key, p["source"], str(p["id"])) for pid, p in jobs.items()}
+            hits, out, errors = {}, [], []
+            for pid, f in futures.items():
+                try:
+                    hits[pid] = f.result()
+                except Exception as e:
+                    errors.append(f"{jobs[pid].get('title') or pid}: {e}")
+            self._match_hits[key] = hits
+            for pid, h in hits.items():
+                out.append({"pid": pid, "source": pid.split("|")[0], "title": h.get("title") or "",
+                            "year": (h.get("release_date") or "")[:4], "fields": match_preview(h)})
+            if out:
+                self.matchDetailsReady.emit(key, out)
+            else:
+                self.matchFailed.emit(key, "; ".join(errors) or "Nothing came back")
+        threading.Thread(target=work, daemon=True, name="match-details").start()
+
+    @Slot(str, "QVariantMap", str)
+    def applyMatchParts(self, key: str, choices: dict, primary: str):
+        """Fix Scraped Data, step 3: choices = {field: pid or "" (keep yours), "gallery": [pid, ...]}; primary: the
+        result the title is linked to from now on (its TMDB / AniList id, so Fetch missing asks the right title)."""
+        threading.Thread(target=self._apply_parts, args=(key, dict(choices or {}), primary), daemon=True,
+                         name="match-apply").start()
+
+    def _apply_parts(self, key: str, choices: dict, primary: str):
+        from utils import anilist, progress
+        hits = self._match_hits.get(key) or {}
         show = key.startswith("show:")
         items = [i for i in (db.get_media(u) for u in db.uuids_for(key)) if i]
-        if not items:
+        if not items or not hits:
+            self.matchFailed.emit(key, "Search again: the results have expired")
             return
+        uids = [i["uuid"] for i in items]
+        main = hits.get(primary) or next(iter(hits.values()))
+
+        def pick(field):
+            pid = choices.get(field)
+            return hits.get(pid) if isinstance(pid, str) else None
         keys = scraper.api_keys()
-        try:
-            if source == "anilist":
-                from utils import anilist
-                hit = anilist.details(int(ident))
-            elif source == "omdb":
-                hit = scraper.omdb_details(ident, keys["omdb"])
-            else:                    # "tv:123" / "movie:123" from a pasted link: that kind, whatever this title was
-                kind, _, num = ident.rpartition(":")
-                hit = scraper.tmdb_details({"tv": "show", "movie": "movie"}.get(kind, "show" if show else "movie"), int(num),
-                                           keys["tmdb"])
-        except Exception as e:   # ScrapeError, AniListError
-            self.matchFailed.emit(key, str(e))
-            return
-        own = items[0].get("collection_id") is not None and items[0]["collection_id"] < 0   # a set you made stays
-        cid, cname = (items[0]["collection_id"], items[0]["collection_name"]) if own else (hit["collection_id"], hit["collection_name"])
-        db.set_match([i["uuid"] for i in items], hit["release_date"], hit["synopsis"], hit["tmdb_id"],
-                     None if show else cid, None if show else cname, hit["genres"])
-        if hit.get("score") is not None:
-            db.set_score([i["uuid"] for i in items], hit["score"])
-        db.set_tag_group([i["uuid"] for i in items], "studio:", hit.get("studios") or [])   # AniList only; others clear it
-        with db._tx() as c:   # a fix replaces these outright (the old match's values were wrong)
-            c.executemany("UPDATE media_items SET certification=?, original_title=?, romaji_title=?, alt_titles=? WHERE uuid=?",
-                          [(hit.get("certification"), hit.get("original_title"), hit.get("romaji_title"), hit.get("alt_titles"),
-                            i["uuid"]) for i in items])
-        with db._tx() as c:   # which source the title now comes from (an AniList id means AniList scoring)
-            c.executemany("UPDATE media_items SET anilist_id=? WHERE uuid=?", [(hit.get("anilist_id"), i["uuid"]) for i in items])
-        if hit.get("anilist_id"):
-            from utils import anilist
-            hit["gallery_urls"] = anilist.gallery_urls(hit)
-        if hit.get("gallery_urls"):
-            scraper.save_gallery(items[0], hit["gallery_urls"], replace=True)
-        if hit.get("cast"):
-            db.set_cast(db.cast_owner(items[0]), hit["cast"])
-            scraper.save_person_photos(hit["cast"])
-        if show:
-            db.rename_series(key[5:], hit["title"])
-        else:
-            db.update_media(key, title=hit["title"])
-        db.clear_failed([db.file_hash(i["file_path"]) for i in items])
-        cache = {}
-        for i in items:
-            try:
-                if hit["poster_url"]:
-                    if hit["poster_url"] not in cache:
-                        cache[hit["poster_url"]] = scraper.fetch_image(hit["poster_url"])
-                    scraper.save_webp(cache[hit["poster_url"]], scraper.poster_path(i))
-                if not show and hit.get("tmdb_id"):
-                    scraper.disc_path(i).unlink(missing_ok=True)         # the old title's disc
-                    url = scraper.disc_url(hit["tmdb_id"], keys["fanart"])
-                    if url:
-                        scraper.save_webp(scraper.fetch_image(url), scraper.disc_path(i), box=(500, 500))
-            except Exception:
-                log.warning("fix match art failed for %s", i["file_path"], exc_info=True)
-        if hit.get("collection_id") and hit.get("collection_poster_url") and not show:
-            scraper.save_collection_poster(hit["collection_id"], hit["collection_poster_url"], cache)
+        steps = [f for f in MATCH_FIELDS if pick(f)] + (["gallery"] if choices.get("gallery") else [])
+        with progress.task(f"Applying scraped data \u00B7 {main.get('title') or ''}", total=len(steps) + 1) as t:
+            # which title this is linked to: its ids, so later lookups (Fetch missing) ask about the right one
+            tmdb_id = next((h.get("tmdb_id") for h in [main, *hits.values()] if h.get("tmdb_id")), None)
+            anilist_id = main.get("anilist_id")
+            with db._tx() as c:
+                c.executemany("UPDATE media_items SET tmdb_id=?, anilist_id=? WHERE uuid=?", [(tmdb_id, anilist_id, u) for u in uids])
+            db.clear_failed([db.file_hash(i["file_path"]) for i in items])
+            t.step(detail="Linked")
+            if (h := pick("title")):
+                t.step(detail="Title")
+                if show:
+                    db.rename_series(key[5:], h["title"])
+                else:
+                    for u in uids:
+                        db.update_media(u, title=h["title"])
+            if (h := pick("year")):
+                t.step(detail="Year")
+                with db._tx() as c:
+                    c.executemany("UPDATE media_items SET release_date=? WHERE uuid=?", [(h.get("release_date"), u) for u in uids])
+            if (h := pick("synopsis")):
+                t.step(detail="Synopsis")
+                db.set_synopsis_many(uids, h.get("synopsis") or "")
+            if (h := pick("genres")):
+                t.step(detail="Genres")
+                db.set_tag_group(uids, "genre:", h.get("genres") or [])
+                db.set_tag_group(uids, "studio:", h.get("studios") or [])
+            if (h := pick("score")):
+                t.step(detail="Score")
+                db.set_score(uids, h.get("score"))
+                db.set_score_source(uids, "anilist" if h.get("anilist_id") else "")
+            if (h := pick("rating")):
+                t.step(detail="Age rating")
+                with db._tx() as c:
+                    c.executemany("UPDATE media_items SET certification=? WHERE uuid=?", [(h.get("certification"), u) for u in uids])
+            if (h := pick("titles")):
+                t.step(detail="Other titles")
+                with db._tx() as c:
+                    c.executemany("UPDATE media_items SET original_title=?, romaji_title=?, alt_titles=? WHERE uuid=?",
+                                  [(h.get("original_title"), h.get("romaji_title"), h.get("alt_titles"), u) for u in uids])
+            if (h := pick("cast")):
+                t.step(detail="Cast")
+                db.set_cast(db.cast_owner(items[0]), h.get("cast") or [])
+                scraper.save_person_photos(h.get("cast") or [])
+            if (h := pick("boxset")) and not show:
+                t.step(detail="Box set")
+                own = items[0].get("collection_id") is not None and items[0]["collection_id"] < 0   # a set you made stays
+                if not own:
+                    with db._tx() as c:
+                        c.executemany("UPDATE media_items SET collection_id=?, collection_name=? WHERE uuid=?",
+                                      [(h.get("collection_id"), h.get("collection_name"), u) for u in uids])
+                    if h.get("collection_id") and h.get("collection_poster_url"):
+                        scraper.save_collection_poster(h["collection_id"], h["collection_poster_url"])
+            if (h := pick("poster")):
+                t.step(detail="Poster")
+                try:
+                    img = scraper.fetch_image(h["poster_url"])
+                    for i in items:          # your own front cover (if any) still shows over it, as the window says
+                        scraper.save_webp(img, scraper.poster_path(i))
+                    if not show and h.get("tmdb_id"):
+                        url = scraper.disc_url(h["tmdb_id"], keys.get("fanart", ""))
+                        for i in items:
+                            scraper.disc_path(i).unlink(missing_ok=True)       # the old title's disc
+                            if url:
+                                scraper.save_webp(scraper.fetch_image(url), scraper.disc_path(i), box=(500, 500))
+                except Exception:
+                    log.warning("fix match poster failed", exc_info=True)
+            if (h := pick("banner")):
+                t.step(detail="Banner")
+                scraper.save_banner(items[0], h.get("banner_url"), force=True)
+            gallery = [hits[p] for p in choices.get("gallery") or [] if p in hits]
+            if gallery:
+                t.step(detail="Gallery")
+                urls = list(dict.fromkeys(u for h in gallery for u in h.get("gallery_urls") or []))
+                scraper.save_gallery(items[0], urls, replace=True)
         new_key = key
-        from utils import anilist
-        if show and anilist.is_adult_ova(hit):     # an adult OVA: each episode becomes a film of one box set
+        if show and pick("title") is main and anilist.is_adult_ova(main):   # an adult OVA: its episodes become a box set
             import watcher
-            if watcher._ova_to_set([db.get_media(i["uuid"]) for i in items], hit, key):
-                new_key = f"set:{anilist.ova_set_id(hit)}"
-        self.toast.emit(f"Matched to {hit['title']}" + (f" ({hit['release_date'][:4]})" if hit.get("release_date") else ""))
+            if watcher._ova_to_set([db.get_media(u) for u in uids], main, key):
+                new_key = f"set:{anilist.ova_set_id(main)}"
+        self.toast.emit(f"Updated from {', '.join(sorted({p.split('|')[0].replace('omdb', 'IMDb').replace('tmdb', 'TMDB').replace('anilist', 'AniList') for p in hits}))}")
         try:     # the new age rating and titles can change computed tags
             from utils import tagrules
             d = db.get_directory(items[0]["parent_directory_id"])

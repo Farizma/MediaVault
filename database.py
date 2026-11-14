@@ -219,7 +219,7 @@ def init_db() -> None:
         c.execute("UPDATE scanned_directories SET sort_order = id")   # keep the order they were added in
     for col, kind in (("tmdb_id", "INTEGER"), ("collection_id", "INTEGER"), ("collection_name", "TEXT"), ("score", "REAL"), ("anilist_id", "INTEGER"),
                       ("certification", "TEXT"), ("original_title", "TEXT"), ("romaji_title", "TEXT"),
-                      ("alt_titles", "TEXT"), ("episode_title", "TEXT"), ("episode_synopsis", "TEXT")):
+                      ("alt_titles", "TEXT"), ("episode_title", "TEXT"), ("episode_synopsis", "TEXT"), ("score_source", "TEXT")):
         if col not in cols:
             c.execute(f"ALTER TABLE media_items ADD COLUMN {col} {kind}")
     # box set lookups (after the column exists in a database from an older version)
@@ -553,6 +553,12 @@ def set_scraped(uids, **cols) -> None:
             c.executemany(f"UPDATE media_items SET {k}=? WHERE uuid=? AND ({k} IS NULL OR {k}='')", [(v, u) for u in uids])
 
 
+def set_score_source(uids, source: str) -> None:
+    """Where the score came from: "anilist" shows it as a %, anything else as stars."""
+    with _tx() as c:
+        c.executemany("UPDATE media_items SET score_source=? WHERE uuid=?", [(source, u) for u in uids])
+
+
 def set_score(uids, score) -> None:
     with _tx() as c:
         c.executemany("UPDATE media_items SET score=? WHERE uuid=?", [(score, u) for u in uids])
@@ -573,18 +579,6 @@ def detail_order() -> list[str]:
             before = next((p for p in reversed(ids[:i]) if p in saved), None)
             saved.insert(saved.index(before) + 1 if before else 0, k)
     return saved
-
-
-def set_match(uids, release_date: str | None, synopsis: str | None, tmdb_id, collection_id, collection_name,
-              genres=()) -> None:
-    """Fix match: write what TMDB says about the chosen title onto these items (titles are set by the caller,
-    so series keep their SxxEyy) and replace their genre tags. Your own tags, rating and notes stay."""
-    uids = list(uids)
-    with _tx() as c:
-        c.executemany("UPDATE media_items SET release_date=?, synopsis=?, tmdb_id=?, collection_id=?, collection_name=? "
-                      "WHERE uuid=?", [(release_date, synopsis, tmdb_id, collection_id, collection_name, u) for u in uids])
-        c.executemany("DELETE FROM tags WHERE media_uuid=? AND tag_name LIKE 'genre:%'", [(u,) for u in uids])
-        c.executemany("INSERT INTO tags (media_uuid, tag_name) VALUES (?,?)", [(u, f"genre:{g}") for u in uids for g in genres])
 
 
 def rename_series(folder: str, name: str) -> None:

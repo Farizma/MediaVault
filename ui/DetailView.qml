@@ -110,6 +110,21 @@ Item {
         flyOut.stop()
         flyIn.restart()
     }
+    // what the title has now, for Fix Scraped Data's "Keep yours" choices
+    function fixData() {
+        var i = info, tags = i.tags || []
+        var g = (i.gallery || []).map(function(x) { return x.url })
+        fixMatch.open(infoKey, i.title || "", i.year || "", i.isShow === true, {
+            title: i.title || "", year: i.year || "", synopsis: i.synopsis || "", poster: i.cover || "", banner: i.banner || "",
+            gallery: g, galleryCount: g.length,
+            genres: tags.filter(function(t) { return t.genre || t.studio }).map(function(t) { return t.name.substring(t.genre ? 6 : 7) }).join(", "),
+            score: i.score === undefined || i.score === null ? "" : (i.scoreSource === "anilist" ? Math.round(i.score * 10) + "%" : i.score.toFixed(1) + " / 10"),
+            rating: (i.facts || []).filter(function(f) { return f.label === "Rated" }).map(function(f) { return f.value }).join(""),
+            titles: (i.altTitles || []).map(function(a) { return a.titles.join(" \u00B7 ") }).join(" \u00B7 "),
+            cast: (i.cast || []).slice(0, 6).map(function(c) { return c.name }).join(", "),
+            boxset: (i.boxSet && i.boxSet.name) || ""
+        })
+    }
     function startRename() {
         titleMenu.close()
         renaming = true
@@ -123,7 +138,7 @@ Item {
         else if (ed && ed.text !== (info.title || "")) restoreTitle()
         if (renaming) { renaming = false; forceActiveFocus() }
     }
-    function closeMenus() { titleMenu.close(); setMenu.close(); matchMenu.close(); castMenu.close(); galleryMenu.close() }
+    function closeMenus() { titleMenu.close(); setMenu.close(); castMenu.close(); galleryMenu.close() }
     function close() {
         if (!visible || closing || launching) return
         closeMenus()
@@ -394,7 +409,7 @@ Item {
                         GlassButton { small: true; visible: root.setSlide; label: "Ungroup"; tip: "Split this box set back into separate films"
                             onClicked: { Backend.ungroupSet(root.itemKey); root.close() } }
                         GlassButton { id: matchBtn; small: true; visible: root.info.canMatch === true; label: "Fix Scraped Data\u2026"
-                            tip: matchMenu.opened ? "" : "Wrong title or cover? Search TMDB yourself"; onClicked: matchMenu.begin() }
+                            tip: "Wrong title, cover or details? Search every site and pick what to use"; onClicked: root.fixData() }
                     }
                     // the sections, in the order chosen in Settings > Appearance > View More layout
                     Repeater {
@@ -1102,97 +1117,8 @@ Item {
     // custom box art: the crop editor opens on the picture you picked
     ArtCropper { id: cropper; anchors.fill: parent }
 
-    // Fix Scraped Data: search TMDB, AniList and OMDb by hand; picking a result re-pulls the title, details, genres, cover and disc
-    Popup {
-        id: matchMenu
-        property var results: []
-        property string phase: ""           // "", "searching", "applying", or an error message
-        function begin() {
-            results = []; phase = ""
-            q.text = (root.info.title || "").replace(/\s*\(\d{4}\)$/, ""); yr.text = root.info.isShow ? "" : (root.info.year || "")
-            open(); q.forceActiveFocus(); q.selectAll()
-            search()
-        }
-        function search() { if (q.text.trim() === "") return; phase = "searching"; Backend.searchMatch(root.infoKey, q.text, yr.text) }
-        parent: matchBtn
-        x: matchBtn.width - width
-        y: matchBtn.height + 8
-        width: 460
-        padding: 12
-        modal: false
-        focus: true
-        transformOrigin: Item.TopRight
-        enter: Transition { ParallelAnimation {
-            NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 160 * Theme.motion }
-            NumberAnimation { property: "scale"; from: 0.6; to: 1; duration: 240 * Theme.motion; easing.type: Easing.OutBack; easing.overshoot: 1.1 } } }
-        exit: Transition { ParallelAnimation {
-            NumberAnimation { property: "opacity"; to: 0; duration: 140 * Theme.motion }
-            NumberAnimation { property: "scale"; to: 0.6; duration: 160 * Theme.motion; easing.type: Easing.InCubic } } }
-        background: Rectangle { radius: 14; color: Theme.graphite; border.color: "#33FFFFFF" }
-        contentItem: ColumnLayout {
-            spacing: 10
-            Text { text: "FIX SCRAPED DATA"; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10 }
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 6
-                Field { id: q; Layout.fillWidth: true; placeholderText: "Title, or a TMDB / AniList / MAL / IMDb link"; onAccepted: matchMenu.search() }
-                Field { id: yr; Layout.preferredWidth: 72; placeholderText: "Year"; inputMethodHints: Qt.ImhDigitsOnly
-                    validator: RegularExpressionValidator { regularExpression: /[0-9]{0,4}/ }
-                    onAccepted: matchMenu.search() }
-                GlassButton { small: true; label: "Search"; onClicked: matchMenu.search() }
-            }
-            Text {
-                visible: matchMenu.phase !== "" || matchMenu.results.length === 0
-                Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.muted; font.pixelSize: 12
-                text: matchMenu.phase === "searching" ? "Searching every database\u2026" : matchMenu.phase === "applying" ? "Updating title, details and artwork\u2026"
-                      : matchMenu.phase !== "" ? matchMenu.phase : "No results. Try the original title, or leave the year empty."
-            }
-            ListView {
-                id: matchList
-                Layout.fillWidth: true
-                Layout.preferredHeight: Math.min(contentHeight, 330)
-                visible: matchMenu.results.length > 0 && matchMenu.phase !== "applying"
-                clip: true
-                spacing: 4
-                model: matchMenu.results
-                boundsBehavior: Flickable.StopAtBounds
-                ScrollBar.vertical: ScrollBar {}
-                delegate: Rectangle {
-                    width: matchList.width - 6; height: 74; radius: 10
-                    color: mArea.containsMouse ? Qt.rgba(1, 1, 1, 0.10) : "transparent"
-                    Behavior on color { ColorAnimation { duration: 120 * Theme.motion } }
-                    Rectangle {
-                        id: mThumb
-                        x: 6; anchors.verticalCenter: parent.verticalCenter
-                        width: 42; height: 63; radius: 5; color: Theme.slate; clip: true
-                        Image { anchors.fill: parent; source: modelData.thumb; fillMode: Image.PreserveAspectCrop; asynchronous: true }
-                    }
-                    Column {
-                        anchors { left: mThumb.right; leftMargin: 12; right: parent.right; rightMargin: 10; verticalCenter: parent.verticalCenter }
-                        spacing: 3
-                        Row {
-                            width: parent.width
-                            spacing: 8
-                            Rectangle {     // where this result comes from
-                                anchors.verticalCenter: parent.verticalCenter
-                                width: srcText.implicitWidth + 10; height: 16; radius: 4; color: "transparent"
-                                border.color: modelData.source === "anilist" ? Theme.blue : modelData.source === "omdb" ? Theme.amber : Theme.green
-                                Text { id: srcText; anchors.centerIn: parent; font.family: Theme.mono; font.pixelSize: 9
-                                    text: modelData.source === "anilist" ? "ANILIST" : modelData.source === "omdb" ? "IMDB" : "TMDB"
-                                    color: parent.border.color }
-                            }
-                            Text { width: parent.width - x; elide: Text.ElideRight; color: Theme.text; font.pixelSize: 13; font.weight: Font.DemiBold
-                                text: modelData.title + (modelData.year ? "  \u00B7  " + modelData.year : "") }
-                        }
-                        Text { width: parent.width; maximumLineCount: 2; wrapMode: Text.Wrap; elide: Text.ElideRight; color: Theme.faint; font.pixelSize: 11
-                            text: modelData.overview || "No description." }
-                    }
-                    MouseArea { id: mArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                        onClicked: { matchMenu.phase = "applying"; Backend.applyMatch(root.infoKey, modelData.source, modelData.id) } }
-                }
-            }
-        }
-    }
+    // Fix Scraped Data: a window of its own (search every source, pick, then choose field by field)
+    FixMatch { id: fixMatch; anchors.fill: parent }
 
     // box sets: the title is a dropdown of the set and its films; picking one turns the carousel to it
     Popup {
@@ -1354,9 +1280,7 @@ Item {
 
     Connections {
         target: Backend
-        function onMatchResults(key, list) { if (key === root.infoKey) { matchMenu.results = list; matchMenu.phase = "" } }
-        function onMatchFailed(key, why) { if (key === root.infoKey) matchMenu.phase = why }
-        function onMatchApplied(key, newKey) { if (key === root.infoKey) { matchMenu.close(); root.refresh() } }
+        function onMatchApplied(key, newKey) { if (key === root.infoKey) root.refresh() }
         function onDevicesFound(list) { castMenu.devices = list }
         function onArtPicked(key, face, url, path) { if (root.visible) cropper.open(key, face, url, path) }
         function onBoxArtChanged(key) { if ((key === root.infoKey || key === root.cur.key) && root.visible) root.refresh() }
