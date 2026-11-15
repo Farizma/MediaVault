@@ -130,6 +130,7 @@ class MpvCore:
         self.p = mpv.MPV(wid=str(wid), input_default_bindings=False, input_vo_keyboard=False, osc=False,
                          osd_level=0, keep_open="yes", cursor_autohide="no", **opts)
         self._seek_to = None
+        self._vr_shader = False
         self.next_vo = opts["vo"] == "gpu-next"
         if night:
             self.set_night(True)
@@ -252,12 +253,44 @@ class MpvCore:
             return "AI Ultra needs an RTX GPU and level 3 chosen in Settings before playback starts"
         o = hw.mpv_options(n, self.rtx)
         self.p.scale, self.p.cscale = o["scale"], o["cscale"]
-        self.p.glsl_shaders = o.get("glsl_shaders", "")
         self.level = n
+        self._apply_shaders()
         return f"Upscaling: {hw.LEVEL_NAMES[n]}"
+
+    def _apply_shaders(self):
+        """The upscaling shader of this level, then the VR view's (it must see the picture the upscaler made)."""
+        shaders = [x for x in [hw.mpv_options(self.level, self.rtx).get("glsl_shaders", "")] if x]
+        if self._vr_shader:
+            shaders.append(vr_detector.SHADER)
+        self.p.glsl_shaders = os.pathsep.join(shaders)
 
     def set_vf(self, vf):
         self.p.vf = vf or ""
+
+    def set_vr(self, info, view, yaw, pitch, fov, moved=False):
+        """How a 3D / VR video shows. The look-around view of a VR video runs on the GPU (vr_view.glsl, needs
+        gpu-next), else in software (ffmpeg's v360). moved: only the direction or zoom changed."""
+        look = info is not None and view == "look" and info.projection != "flat"
+        if look and self.next_vo:
+            if not (moved and self._vr_shader):
+                self.p.vf = self._vf if self.level == 3 else ""
+                self._vr_shader = True
+                self._apply_shaders()
+                self.p["video-aspect-override"] = "16:9"       # the shader draws a 16:9 view of one eye
+            self.p["glsl-shader-opts"] = vr_detector.shader_opts(info, yaw, pitch, fov)
+            return
+        if self._vr_shader:
+            self._vr_shader = False
+            self._apply_shaders()
+            self.p["video-aspect-override"] = "no"
+        if look and moved:
+            try:     # turn the view without rebuilding the filter (no hitch)
+                for k, v in (("yaw", yaw), ("pitch", pitch), ("h_fov", fov), ("v_fov", round(vr_detector.v_fov(fov), 2))):
+                    self.p.command("vf-command", "vr", k, str(v))
+                return
+            except Exception:
+                log.debug("vf-command refused; rebuilding the VR filter", exc_info=True)
+        self.p.vf = vr_detector.mpv_filter(info, view, yaw, pitch, fov) or (self._vf if self.level == 3 else "")
 
     def set_shrink(self, s):
         """0 = full window, 1 = small picture in the bottom-right corner (zoom is log2)."""
@@ -406,6 +439,9 @@ class VlcCore:
     def set_vf(self, vf):
         pass
 
+    def set_vr(self, *a, **kw):
+        pass
+
     def set_shrink(self, s):
         pass
 
@@ -468,6 +504,8 @@ class PlayerEngine(QObject):
         self._toast = (0, "")
         self._vr = None
         self._vr_view = "left"
+        self._vr_look = [0.0, 0.0, vr_detector.DEFAULT_FOV]     # yaw, pitch, horizontal field of view (degrees)
+        self._hud_rebuilds = 0
         self._snap = None
         self._snap_kind = ""
         self._snap_id = 0
@@ -532,7 +570,12 @@ class PlayerEngine(QObject):
         self.win.show()                       # a window first; F, a double-click or the HUD button go full screen
         wid = int(self.win.winId())
         if self.hud is not None:
-            self.hud.setTransientParent(self.win)   # owned by the video window: always above it, never behind
+            # a fresh native HUD window each time, owned by this video window (always above it, never behind).
+            # Windows takes an owned window down with its owner, so the HUD left from the last video (or one that
+            # Windows destroyed: "External WM_DESTROY") must not be reused: it would never show again.
+            self.hud.destroy()
+            self.hud.setTransientParent(self.win)
+        self._hud_rebuilds = 0
         self.blackouts = []
         for other in QGuiApplication.screens():
             if other is not screen:
@@ -576,9 +619,16 @@ class PlayerEngine(QObject):
         self._reset_file_state()
         self.session = s
         self._vr = vr_detector.detect(s.path)
-        self._vr_view = "left"
-        vf = vr_detector.mpv_filter(self._vr) if self.core.name == "mpv" else None
-        self.core.load(s.path, s.start, vf)
+        self._vr_view = (vr_detector.views(self._vr) or ("left",))[0]
+        self._vr_look = [0.0, 0.0, vr_detector.DEFAULT_FOV]
+        self.core.load(s.path, s.start, None)
+        if self._vr is not None and self.core.name == "mpv":
+            try:
+                self._apply_vr()
+                if self._vr_view == "look":
+                    self._say(vr_detector.label(self._vr) + ": drag to look around \u00B7 Ctrl + wheel to zoom \u00B7 R to face forward")
+            except Exception:
+                log.warning("VR view not applied", exc_info=True)
         self._apply_volume()
         self.sub_delay = 0.0
         self._credits_at = None
@@ -621,6 +671,8 @@ class PlayerEngine(QObject):
         if self.win:
             self.win.on_close = self.win.on_geometry = self.win.on_focus = None
         if self.hud is not None:
+            # before its owner goes: Windows would destroy the HUD's native window along with the video window
+            self.hud.destroy()
             self.hud.setTransientParent(None)
         for w in [self.win, *self.blackouts]:
             if w:
@@ -629,10 +681,26 @@ class PlayerEngine(QObject):
         self.fullscreen = False
 
     # -- tick
+    def _hud_alive(self):
+        """The HUD's native window can still be destroyed from outside (Windows does it to an owned window when
+        its owner is re-created). Qt keeps the dead window and never shows it again: build a new one."""
+        h = self.hud
+        if h is None or self.win is None or not self._state.get("active"):
+            return
+        if (h.isVisible() and int(h.winId() or 0)) or self._hud_rebuilds >= 3:
+            return
+        self._hud_rebuilds += 1
+        log.warning("HUD window was lost; making a new one")
+        h.destroy()
+        h.setTransientParent(self.win)
+        h.setVisible(True)
+        self._raise_hud()
+
     def _tick(self):
         c, s = self.core, self.session
         if not c or not s:
             return
+        self._hud_alive()
         state = c.state()
         if state == "closed":
             return self.stop()
@@ -749,6 +817,9 @@ class PlayerEngine(QObject):
             "creditsActive": bool(self._in_credits and not s.next_path), "hasCredits": bool(s.credits),
             "introActive": intro, "autoplayLeft": countdown, "nextTitle": s.next_title,
             "shrink": self._shrunk, "vr": self._vr is not None and c.name == "mpv", "vrView": self._vr_view,
+            "vrLook": self._vr_view == "look" and self._vr is not None and c.name == "mpv",
+            "vrLabel": vr_detector.label(self._vr), "vrViews": list(vr_detector.views(self._vr)),
+            "vrYaw": self._vr_look[0], "vrPitch": self._vr_look[1], "vrFov": self._vr_look[2],
             "toastId": self._toast[0], "toast": self._toast[1],
             "snapshot": self._snap_kind, "snapId": self._snap_id,
         }
@@ -866,12 +937,42 @@ class PlayerEngine(QObject):
         if self.core:
             self._say(self.core.set_level(level))
 
+    def _apply_vr(self, moved=False):
+        self.core.set_vr(self._vr, self._vr_view, *self._vr_look, moved=moved)
+        self._state = {**self._state, "vrView": self._vr_view, "vrLook": self._vr_view == "look",
+                       "vrYaw": self._vr_look[0], "vrPitch": self._vr_look[1], "vrFov": self._vr_look[2]}
+        self.stateChanged.emit()
+
     @Slot()
     def cycleVrView(self):
-        if self.core and self._vr and self.core.name == "mpv":
-            self._vr_view = vr_detector.VIEWS[(vr_detector.VIEWS.index(self._vr_view) + 1) % 2]
-            self.core.set_vf(vr_detector.mpv_filter(self._vr, self._vr_view))
-            self._say("VR view: " + ("both eyes side by side" if self._vr_view == "sbs" else "left eye, flat"))
+        views = vr_detector.views(self._vr)
+        if self.core and len(views) > 1 and self.core.name == "mpv":
+            self._vr_view = views[(views.index(self._vr_view) + 1) % len(views) if self._vr_view in views else 0]
+            self._apply_vr()
+            self._say("VR view: " + {"sbs": "both eyes side by side (for a 3D display or headset)",
+                                     "look": "look around (drag)", "left": "left eye, flat"}[self._vr_view])
+
+    @Slot(float, float)
+    def vrLook(self, dyaw: float, dpitch: float):
+        """Turn the VR view by degrees (dragging the picture, or Shift + arrows)."""
+        if self.core and self._vr_view == "look" and self.core.name == "mpv":
+            y, p, f = self._vr_look
+            self._vr_look = list(vr_detector.clamp_look(y + dyaw, p + dpitch, f, self._vr))
+            self._apply_vr(moved=True)
+
+    @Slot(float)
+    def vrZoom(self, dfov: float):
+        """Wider (more degrees) or closer (fewer): Ctrl + wheel."""
+        if self.core and self._vr_view == "look" and self.core.name == "mpv":
+            y, p, f = self._vr_look
+            self._vr_look = list(vr_detector.clamp_look(y, p, f + dfov, self._vr))
+            self._apply_vr(moved=True)
+
+    @Slot()
+    def vrReset(self):
+        if self.core and self._vr_view == "look" and self.core.name == "mpv":
+            self._vr_look = [0.0, 0.0, vr_detector.DEFAULT_FOV]
+            self._apply_vr(moved=True)
 
     @Slot()
     def skipIntro(self):

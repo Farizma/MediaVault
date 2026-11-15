@@ -414,4 +414,4 @@ class WheelClickTests(unittest.TestCase):
         hud = (Path(__file__).resolve().parent.parent / "player" / "Hud.qml").read_text(encoding="utf-8")
         self.assertIn("acceptedButtons: Qt.LeftButton | Qt.MiddleButton", hud)
         self.assertIn("m.button === Qt.MiddleButton && !root.cropping && !root.pip", hud)
-        self.assertIn("if (m.button !== Qt.LeftButton) return", hud)       # a wheel click never pauses
+        self.assertIn("if (m.button !== Qt.LeftButton || dragged) return", hud)       # a wheel click (or a VR drag) never pauses

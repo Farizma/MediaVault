@@ -96,11 +96,14 @@ Window {
             if (root.cropping) { if (e.key === Qt.Key_Escape) Player.cancelSnapshot(); return }
             switch (e.key) {
             case Qt.Key_Space: Player.togglePause(); break
-            case Qt.Key_Left: Player.seekBy(-10); break
-            case Qt.Key_Right: Player.seekBy(10); break
-            case Qt.Key_Up: root.setVol(root.vol + 5); break
+            case Qt.Key_Left: if (win.st.vrLook && (e.modifiers & Qt.ShiftModifier)) Player.vrLook(-10, 0); else Player.seekBy(-10); break
+            case Qt.Key_Right: if (win.st.vrLook && (e.modifiers & Qt.ShiftModifier)) Player.vrLook(10, 0); else Player.seekBy(10); break
+            case Qt.Key_R: Player.vrReset(); break
+            case Qt.Key_Up: if (win.st.vrLook && (e.modifiers & Qt.ShiftModifier)) { Player.vrLook(0, 10); break }
+                            root.setVol(root.vol + 5); break
             case Qt.Key_M: root.toggleMute(); break
-            case Qt.Key_Down: root.setVol(root.vol - 5); break
+            case Qt.Key_Down: if (win.st.vrLook && (e.modifiers & Qt.ShiftModifier)) { Player.vrLook(0, -10); break }
+                              root.setVol(root.vol - 5); break
             case Qt.Key_N: if (e.modifiers & Qt.ShiftModifier) Player.playNext(); else Player.toggleNight(); break
             case Qt.Key_U: Player.setLevel((win.st.level || 1) % 3 + 1); break
             case Qt.Key_Tab: if (win.st.creditsActive) Player.finishNow(); else Player.skipIntro(); break
@@ -129,17 +132,36 @@ Window {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: root.controlsOn ? Qt.ArrowCursor : Qt.BlankCursor
-            onPositionChanged: root.poke()
             acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+            // a VR video in its look-around view: drag the picture to turn your head (a click without a drag still pauses)
+            readonly property bool looking: win.st.vrLook === true && !root.cropping && !root.pip
+            property point last
+            property bool dragged: false
+            onPositionChanged: (m) => {
+                root.poke()
+                if (!looking || !(m.buttons & Qt.LeftButton)) return
+                var dx = m.x - last.x, dy = m.y - last.y
+                if (!dragged && Math.abs(dx) + Math.abs(dy) < 4) return
+                dragged = true
+                last = Qt.point(m.x, m.y)
+                var perPx = (win.st.vrFov || 100) / Math.max(1, width)        // the picture follows the pointer
+                Player.vrLook(-dx * perPx, dy * perPx)
+            }
             // wheel click (middle button): full screen on / off, at once (no pause, no double-click wait)
-            onPressed: (m) => { if (m.button === Qt.MiddleButton && !root.cropping && !root.pip) { root.poke(); Player.toggleFullscreen() } }
-            onClicked: (m) => { if (m.button !== Qt.LeftButton) return
+            onPressed: (m) => {
+                last = Qt.point(m.x, m.y); dragged = false
+                if (m.button === Qt.MiddleButton && !root.cropping && !root.pip) { root.poke(); Player.toggleFullscreen() }
+            }
+            onClicked: (m) => { if (m.button !== Qt.LeftButton || dragged) return
                                 if (root.popup !== "") root.popup = ""; else if (!root.cropping) Player.togglePause() }
             onDoubleClicked: (m) => { if (m.button === Qt.LeftButton && !root.cropping) { Player.togglePause(); Player.toggleFullscreen() } }   // the click before it paused: undo that
             // scroll anywhere over the picture = volume, 5 % a notch (touchpads add up their small steps).
             // The Audio & Video panel swallows its own wheel events, so scrolling there never lands here.
             onWheel: (w) => {
                 if (root.cropping) return
+                if (looking && (w.modifiers & Qt.ControlModifier)) {                 // VR: Ctrl + wheel zooms
+                    Player.vrZoom(-(w.angleDelta.y / 120) * 8); return
+                }
                 root.wheelAcc += w.angleDelta.y
                 var steps = root.wheelAcc > 0 ? Math.floor(root.wheelAcc / 120) : Math.ceil(root.wheelAcc / 120)
                 if (steps !== 0) { root.wheelAcc -= steps * 120; root.setVol(root.vol + steps * 5) }
@@ -547,8 +569,26 @@ Window {
                     }
                     Text { visible: win.st.core !== "mpv"; Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.muted; font.pixelSize: 12
                         text: "Upscaling needs the MPV engine (Settings \u203A Playback)." }
-                    Toggle { visible: win.st.vr === true; Layout.fillWidth: true; Layout.topMargin: 8; text: "VR: both eyes side by side"; hint: "Off: left eye only, flat"
-                        checked: win.st.vrView === "sbs"; onToggled: Player.cycleVrView() }
+                    // a 3D / VR video: look around in one eye (VR) or the left eye flat (3D film), or both eyes untouched
+                    RowLayout {
+                        visible: win.st.vr === true
+                        Layout.fillWidth: true; Layout.topMargin: 8
+                        Head { text: win.st.vrLabel || "VR"; Layout.fillWidth: true }
+                        Text { visible: win.st.vrLook === true; text: "R faces forward"; color: Theme.faint; font.pixelSize: 11 }
+                    }
+                    Flow {
+                        visible: win.st.vr === true && (win.st.vrViews || []).length > 1
+                        Layout.fillWidth: true
+                        spacing: 6
+                        Repeater {
+                            model: win.st.vrViews || []
+                            Pill { label: ({ look: "Look around", left: "One eye, flat", sbs: "Both eyes (3D display)" })[modelData] || modelData
+                                selected: win.st.vrView === modelData; accent: Theme.blue
+                                onClicked: if (win.st.vrView !== modelData) Player.cycleVrView() }
+                        }
+                    }
+                    Text { visible: win.st.vrLook === true; Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 11
+                        text: "Drag the picture to look around, Ctrl + wheel to zoom, Shift + arrows to turn. A headset needs a VR player for now." }
                     // HDR: fit into this screen (tone mapping), or send HDR untouched to an HDR screen
                     RowLayout {
                         Layout.fillWidth: true
