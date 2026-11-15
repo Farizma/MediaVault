@@ -14,7 +14,7 @@ from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
 import database as db
-from utils import autotag, boxart, media_probe, progress, scraper, tagrules
+from utils import autotag, boxart, media_probe, progress, scraper, tagrules, tpdb
 
 log = logging.getLogger(__name__)
 
@@ -62,6 +62,7 @@ def index_paths(directory: dict, paths) -> int:
 
 def _index(directory: dict, new: list, t) -> int:
     scrape = bool(directory["should_scrape"])
+    adult = (directory.get("source") or "tmdb") == "tpdb"     # scenes and movies: each file is its own title
     auto = db.get_setting("auto_tags", "1") != "0"     # tags from folders and file names (Settings > Library)
     hp = _headless()
     rows, tags = [], []
@@ -69,10 +70,12 @@ def _index(directory: dict, new: list, t) -> int:
         for p in new:
             t.step(detail=Path(p).name)
             parsed = scraper.clean_name(p, fallback=Path(p).parent.name)
-            kind = "clip" if not scrape else "show" if parsed.episode is not None else "movie"
+            kind = "clip" if not scrape else "show" if parsed.episode is not None and not adult else "movie"
             title = parsed.title
             if kind == "show":
                 title += f" S{parsed.season or 1:02d}E{parsed.episode:02d}"
+            elif adult:
+                title = tpdb.query_name(p).replace(".", " ").strip() or title    # until ThePornDB answers
             row = {"uuid": db.file_id(p), "file_path": p, "parent_directory_id": directory["id"],
                    "title": title, "media_type": kind, "release_date": parsed.year}
             row.update(media_probe.probe(p, hp) if hp else {"container": Path(p).suffix.lower()})
@@ -106,14 +109,17 @@ def _scrape_into(rows, tags, opts=None, source: str = "tmdb", task=None, tab: st
     (database.SCRAPE_PARTS); None = all."""
     opts = {k for k, _ in db.SCRAPE_PARTS} if opts is None else opts
     keys = scraper.api_keys()
-    if not opts or (source != "anilist" and not (keys["tmdb"] or keys["omdb"])):
+    if not opts or (source == "tpdb" and not keys["tpdb"]) or (source == "tmdb" and not (keys["tmdb"] or keys["omdb"])):
         return  # nothing to ask; do not mark files as failed
     todo = [(r, p) for r, p in rows if not db.is_failed(db.file_hash(r["file_path"]))]
     if not todo:
         return
     task = task or progress.Task("")             # a caller without a progress pill: report to nobody
     task.update(label=f"Looking up titles \u00B7 {tab}", done=0, total=0, detail="")
-    answers = asyncio.run(scraper.scrape_many([(r["media_type"], p) for r, p in todo], keys, source, task=task))
+    if source == "tpdb":            # by file: its name and its hash
+        answers = _tpdb_many([r["file_path"] for r, _ in todo], keys["tpdb"], task)
+    else:
+        answers = asyncio.run(scraper.scrape_many([(r["media_type"], p) for r, p in todo], keys, source, task=task))
     task.update(label=f"Downloading artwork \u00B7 {tab}", done=0, total=len(todo), detail="")
     gallery_done = set()
     images, missed, cast_done = {}, [], set()
@@ -143,6 +149,7 @@ def _scrape_into(rows, tags, opts=None, source: str = "tmdb", task=None, tab: st
                 row["synopsis"] = hit["synopsis"]
             row["tmdb_id"] = hit.get("tmdb_id")
             row["anilist_id"] = hit.get("anilist_id")
+            row["tpdb_id"] = hit.get("tpdb_id")
             if "gallery" in opts and hit.get("banner_url"):
                 scraper.save_banner(row, hit["banner_url"])
             if "gallery" in opts and hit.get("collection_id") and hit.get("collection_banner_url"):
@@ -184,6 +191,24 @@ def _scrape_into(rows, tags, opts=None, source: str = "tmdb", task=None, tab: st
                     log.warning("disc art failed for %s", row["title"], exc_info=True)
     if missed:
         db.mark_failed(missed)
+
+
+def _tpdb_many(paths: list[str], key: str, task=None) -> list:
+    """ThePornDB answers for files (a hit, None, or the error), a few at a time."""
+    from concurrent.futures import ThreadPoolExecutor
+    if task is not None:
+        task.update(done=0, total=len(paths))
+
+    def one(p):
+        try:
+            return tpdb.lookup(p, key)
+        except tpdb.TPDBError as e:
+            return e
+        finally:
+            if task is not None:
+                task.step(detail=Path(p).name)
+    with ThreadPoolExecutor(4) as pool:
+        return list(pool.map(one, paths))
 
 
 def retag(directory: dict) -> int:
@@ -311,14 +336,15 @@ def fetch_missing(directory: dict, redo_images: bool = False, only: set | None =
     box set, genres, synopsis. Titles, and anything you set yourself, are never touched. Returns titles updated."""
     opts = db.scrape_opts(directory)
     keys = scraper.api_keys()
-    anime = (directory.get("source") or "tmdb") == "anilist"
+    source = directory.get("source") or "tmdb"
+    anime = source == "anilist"
     found = 0
     if "poster" in opts and not redo_images:         # box art beside the files: needs no key and no network
         try:
             found = boxart.scan(directory, only)
         except Exception:
             log.warning("box art scan", exc_info=True)
-    if not opts or (not anime and not keys["tmdb"]):
+    if not opts or (source == "tmdb" and not keys["tmdb"]) or (source == "tpdb" and not keys["tpdb"]):
         return found
     groups: dict[str, list[dict]] = {}          # one lookup per film, and per series
     for it in db.list_media(directory["id"]):
@@ -329,7 +355,7 @@ def fetch_missing(directory: dict, redo_images: bool = False, only: set | None =
     t = progress.Task(f"{'Downloading images again' if redo_images else 'Fetching missing details'} \u00B7 {tab}", len(groups))
     t._send(force=True)
     try:
-        updated = _fetch_groups(directory, groups, opts, keys, anime, redo_images, t)
+        updated = _fetch_groups(directory, groups, opts, keys, anime, redo_images, t, adult=source == "tpdb")
     except BaseException:
         t.finish(ok=False)
         raise
@@ -339,7 +365,7 @@ def fetch_missing(directory: dict, redo_images: bool = False, only: set | None =
     return updated + found
 
 
-def _fetch_groups(directory, groups, opts, keys, anime, redo_images, t) -> int:
+def _fetch_groups(directory, groups, opts, keys, anime, redo_images, t, adult=False) -> int:
     updated = 0
     for owner, items in groups.items():
         t.step(detail=items[0]["title"])
@@ -355,7 +381,7 @@ def _fetch_groups(directory, groups, opts, keys, anime, redo_images, t) -> int:
             "sets": "sets" in opts and kind == "movie" and first.get("collection_id") is None,
             # anime: AniList's tags became genres in 1.0.6, so a lone genre ("Hentai") is filled out too
             "genres": "genres" in opts and sum(t.startswith("genre:") for t in tags) < (2 if anime else 1),
-            "studio": anime and not any(t.startswith("studio:") for t in tags),
+            "studio": (anime or adult) and not any(t.startswith("studio:") for t in tags),
             "alt": "titles" in opts and not first.get("alt_titles"),
             "synopsis": "synopsis" in opts and not first.get("synopsis"),
             "score": "score" in opts and first.get("score") is None,
@@ -366,7 +392,7 @@ def _fetch_groups(directory, groups, opts, keys, anime, redo_images, t) -> int:
         if "photos" in opts and need["cast"]:
             need["photos"] = True
         if redo_images:          # a new image resolution: scraped covers and Gallery again (yours are kept)
-            matched = bool(first.get("tmdb_id") or first.get("anilist_id"))
+            matched = bool(first.get("tmdb_id") or first.get("anilist_id") or first.get("tpdb_id"))
             need = {k: False for k in need}
             need["poster"] = "poster" in opts and matched and not all(scraper.custom_front_path(i).exists() for i in items)
             need["gallery"] = "gallery" in opts and matched and not any(p.name.startswith("c-") for p in scraper.gallery_images(first))
@@ -375,7 +401,12 @@ def _fetch_groups(directory, groups, opts, keys, anime, redo_images, t) -> int:
         title = db.series_title(first["title"]) if kind == "show" else first["title"]
         year = (first.get("release_date") or "")[:4] or None
         try:
-            if anime:
+            if adult:
+                hit = tpdb.details(first["tpdb_id"], keys["tpdb"]) if first.get("tpdb_id") else tpdb.lookup(first["file_path"], keys["tpdb"])
+                if not hit:
+                    continue
+                tid = None
+            elif anime:
                 from utils import anilist
                 hit = anilist.details(first["anilist_id"]) if first.get("anilist_id") else anilist.lookup(title, year)
                 if not hit:
@@ -398,6 +429,8 @@ def _fetch_groups(directory, groups, opts, keys, anime, redo_images, t) -> int:
                 c.executemany("UPDATE media_items SET tmdb_id=? WHERE uuid=? AND tmdb_id IS NULL", [(tid, u) for u in uids])
             if hit.get("anilist_id"):
                 c.executemany("UPDATE media_items SET anilist_id=? WHERE uuid=? AND anilist_id IS NULL", [(hit["anilist_id"], u) for u in uids])
+            if hit.get("tpdb_id"):
+                c.executemany("UPDATE media_items SET tpdb_id=? WHERE uuid=? AND tpdb_id IS NULL", [(hit["tpdb_id"], u) for u in uids])
             if need["synopsis"] and hit.get("synopsis"):
                 c.executemany("UPDATE media_items SET synopsis=? WHERE uuid=? AND (synopsis IS NULL OR synopsis='')",
                               [(hit["synopsis"], u) for u in uids])

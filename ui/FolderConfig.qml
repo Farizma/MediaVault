@@ -159,25 +159,29 @@ Sheet {
             opacity: enabled ? 1 : 0.4
             Rectangle {
                 id: sourceSeg
-                implicitWidth: 300; implicitHeight: 34; radius: 10; color: "#99000000"; border.color: Theme.line
-                Rectangle { width: (parent.width - 6) / 2; height: parent.height - 6; y: 3; radius: 8; color: Theme.text
-                    x: 3 + (root.f.anime === true ? width : 0)
+                readonly property var choices: [["tmdb", "Movies & TV · TMDB"], ["anilist", "Anime · AniList"], ["tpdb", "Adult · ThePornDB"]]
+                readonly property int at: Math.max(0, choices.findIndex(function(c) { return c[0] === (root.f.source || "tmdb") }))
+                implicitWidth: 450; implicitHeight: 34; radius: 10; color: "#99000000"; border.color: Theme.line
+                Rectangle { width: (parent.width - 6) / 3; height: parent.height - 6; y: 3; radius: 8; color: Theme.text
+                    x: 3 + sourceSeg.at * width
                     Behavior on x { NumberAnimation { duration: 240 * Theme.motion; easing.type: Easing.OutCubic } } }
                 Row {
                     anchors { fill: parent; margins: 3 }
                     Repeater {
-                        model: [[false, "Movies & TV · TMDB"], [true, "Anime · AniList"]]
+                        model: sourceSeg.choices
                         Item {
-                            width: parent.width / 2; height: parent.height
+                            width: parent.width / 3; height: parent.height
                             Text { anchors.centerIn: parent; text: modelData[1]; font.pixelSize: 12; font.weight: Font.Bold
-                                color: (root.f.anime === true) === modelData[0] ? Theme.black : Theme.muted }
+                                color: sourceSeg.at === index ? Theme.black : Theme.muted }
                             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                onClicked: if ((root.f.anime === true) !== modelData[0]) { Backend.setAnime(root.folderId, modelData[0]); root.after() } }
+                                onClicked: if (sourceSeg.at !== index) { Backend.setSource(root.folderId, modelData[0]); root.after() } }
                         }
                     }
                 }
             }
-            Note { text: root.f.anime === true ? "AniList needs no key, and understands “[Group] Show - 07” file names." : "Needs a TMDB key (Settings › Integrations & APIs); OMDb fills in when TMDB has nothing." }
+            Note { text: root.f.source === "anilist" ? "AniList needs no key, and understands “[Group] Show - 07” file names."
+                       : root.f.source === "tpdb" ? "Needs a ThePornDB token (Settings › Integrations & APIs). Matches by file name and file hash; the site is the box set."
+                       : "Needs a TMDB key (Settings › Integrations & APIs); OMDb fills in when TMDB has nothing." }
         }
         Text { text: "WHAT TO SCRAPE"; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10; opacity: scrapeOn.checked ? 1 : 0.4 }
         ScrapeParts { Layout.fillWidth: true; enabled: scrapeOn.checked; selected: root.f.parts || []

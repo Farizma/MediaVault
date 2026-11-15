@@ -21,7 +21,7 @@ from . import dvd_box, file_url, pick_folder, pick_image
 
 log = logging.getLogger(__name__)
 BILLBOARD_SIZE = 8  # titles in the recommended carousel
-SETTINGS = {"tmdb_key", "omdb_key", "night_mode", "reduce_motion", "upscale_level", "show_insights", "core", "theme",
+SETTINGS = {"tmdb_key", "omdb_key", "tpdb_key", "night_mode", "reduce_motion", "upscale_level", "show_insights", "core", "theme",
             "custom_accent", "custom_highlight", "custom_page", "custom_surface", "custom_card", "custom_text",
             "custom_muted", "custom_amber", "custom_red", "auto_credits", "auto_tags",
             "fanart_key", "animated_theme", "hover_preview", "detail_order", "title_language", "group_collections", "discord", "discord_detail", "discord_app_id",
@@ -97,7 +97,7 @@ def banner_for(card: dict):
 
 # Fix Scraped Data: what can be taken from which result, in the order the window lists them
 MATCH_FIELDS = ("title", "year", "synopsis", "poster", "banner", "disc", "genres", "score", "rating", "titles", "cast", "boxset")
-MATCH_SOURCES = ("tmdb", "anilist", "omdb", "tvmaze", "mal", "kitsu")
+MATCH_SOURCES = ("tmdb", "anilist", "omdb", "tvmaze", "mal", "kitsu", "tpdb")
 SET_FIELDS = ("title", "synopsis", "poster", "banner", "disc")     # what a box set's own page can take
 HIDDEN_KINDS = ("all_dirs", "all_tags", "insights_dirs", "continue_dirs", "private_dirs", "recent_dirs", "landscape_dirs")
 UPLOAD_FIELDS = ("poster", "banner", "disc", "gallery")      # the "Upload file" tile in the window
@@ -116,7 +116,7 @@ def episode_row(e: dict) -> dict:
 
 GALLERY_DROP_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".avif"}
 MATCH_SOURCES_LABEL = {"tmdb": "TMDB", "tmdbset": "TMDB collections", "tvmaze": "TVmaze", "omdb": "IMDb", "anilist": "AniList",
-                       "mal": "MyAnimeList", "kitsu": "Kitsu"}
+                       "mal": "MyAnimeList", "kitsu": "Kitsu", "tpdb": "ThePornDB"}
 
 
 SUBFOLDER_DEPTH = 4         # Configure > Subfolders lists this deep
@@ -1540,17 +1540,21 @@ class Dashboard(QObject):
         }
 
     # -- fix match: search TMDB by hand, then re-pull details and art for the chosen title
-    def _is_anime(self, key: str) -> bool:
+    def _source_of(self, key: str) -> str:
         item = self._target(key)
         d = db.get_directory(item["parent_directory_id"]) if item and item.get("parent_directory_id") else None
-        return bool(d) and (d.get("source") or "tmdb") == "anilist"
+        return (d.get("source") or "tmdb") if d else "tmdb"
+
+    def _is_anime(self, key: str) -> bool:
+        return self._source_of(key) == "anilist"
 
     @Slot(str, str, str)
     def searchMatch(self, key: str, query: str, year: str):
         """Fix Scraped Data: ask every source that can answer (AniList always; TMDB and OMDb with a key) at once.
         The folder's own source comes first; one source failing does not hide the others."""
         kind = "show" if key.startswith("show:") else "movie"
-        anime = self._is_anime(key)
+        source = self._source_of(key)
+        anime = source == "anilist"
         q, y = query.strip(), year.strip()
         keys = scraper.api_keys()
 
@@ -1599,6 +1603,13 @@ class Dashboard(QObject):
                 jobs["omdb"] = lambda: scraper.omdb_search(kind, q, y, keys["omdb"])
             order = (["anilist", "mal", "kitsu", "tmdb", "tvmaze", "omdb"] if anime
                      else ["tmdb", "tvmaze", "omdb", "anilist", "mal", "kitsu"])
+            if source == "tpdb":         # an adult folder asks ThePornDB alone (and other folders never ask it)
+                from utils import tpdb
+                if not keys.get("tpdb"):
+                    self.matchWaiting.emit(key, [])
+                    self.matchFailed.emit(key, "ThePornDB needs an API token (Settings \u203A Integrations & APIs)")
+                    return
+                jobs, order = {"tpdb": lambda: tpdb.search(q, keys["tpdb"])}, ["tpdb"]
             if key.startswith("set:") and keys.get("tmdb"):          # a box set: TMDB's collections first
                 jobs["tmdbset"] = lambda: scraper.tmdb_collection_search(q, keys["tmdb"])
                 order.insert(0, "tmdbset")
@@ -1648,6 +1659,9 @@ class Dashboard(QObject):
             return hit
         if source == "omdb":
             return scraper.omdb_details(ident, keys["omdb"])
+        if source == "tpdb":
+            from utils import tpdb
+            return tpdb.details(ident, keys["tpdb"])
         # "tv:123" / "movie:123" (a pasted link names its kind, whatever this title was)
         kind, _, num = ident.rpartition(":")
         if kind == "collection":
@@ -1777,8 +1791,10 @@ class Dashboard(QObject):
             # which title this is linked to: its ids, so later lookups (Fetch missing) ask about the right one
             tmdb_id = next((h.get("tmdb_id") for h in [main, *hits.values()] if h.get("tmdb_id")), None)
             anilist_id = main.get("anilist_id")
+            tpdb_id = main.get("tpdb_id")
             with db._tx() as c:
-                c.executemany("UPDATE media_items SET tmdb_id=?, anilist_id=? WHERE uuid=?", [(tmdb_id, anilist_id, u) for u in uids])
+                c.executemany("UPDATE media_items SET tmdb_id=?, anilist_id=?, tpdb_id=? WHERE uuid=?",
+                              [(tmdb_id, anilist_id, tpdb_id, u) for u in uids])
             db.clear_failed([db.file_hash(i["file_path"]) for i in items])
             t.step(detail="Linked")
             if (h := pick("title")):
@@ -2436,6 +2452,7 @@ class Dashboard(QObject):
         return [{"id": d["id"], "name": d["tab_name"], "path": d["folder_path"], "scrape": bool(d["should_scrape"]),
                  "parts": sorted(db.scrape_opts({**d, "should_scrape": 1})),
                  "anime": (d.get("source") or "tmdb") == "anilist",
+                 "source": d.get("source") or "tmdb",
                  "inAll": d["id"] not in set(db.hidden("all_dirs")),
                  "inInsights": d["id"] not in set(db.hidden("insights_dirs")),
                  "continueRow": d["id"] not in set(db.hidden("continue_dirs")),
@@ -2523,6 +2540,11 @@ class Dashboard(QObject):
     def setAnime(self, dir_id: int, anime: bool):
         """An anime folder gets its details from AniList (no key needed) instead of TMDB."""
         db.set_source(dir_id, "anilist" if anime else "tmdb")
+
+    @Slot(int, str)
+    def setSource(self, dir_id: int, source: str):
+        """Where a folder's details come from: "tmdb", "anilist" or "tpdb" (ThePornDB, adult scenes and movies)."""
+        db.set_source(dir_id, source)
 
     @Slot(int)
     def retag(self, dir_id: int):

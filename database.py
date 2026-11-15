@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS scanned_directories (
     should_scrape INTEGER DEFAULT 1,
     scrape_opts TEXT DEFAULT '',         -- what to scrape (comma list of SCRAPE_PARTS); '' = everything
     sort_order INTEGER DEFAULT 0,        -- tab order (drag the tabs, or Settings > Library)
-    source TEXT DEFAULT 'tmdb'           -- where details come from: 'tmdb' (films and series) or 'anilist' (anime)
+    source TEXT DEFAULT 'tmdb'           -- where details come from: 'tmdb' (films and series), 'anilist' (anime), 'tpdb' (adult)
 );
 CREATE TABLE IF NOT EXISTS media_items (
     uuid TEXT PRIMARY KEY,
@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS media_items (
     romaji_title TEXT,                  -- anime: the title in Latin letters (AniList romaji)
     alt_titles TEXT,                    -- JSON: other titles grouped english / romanized / native / other
     anilist_id INTEGER,
+    tpdb_id TEXT,                       -- ThePornDB "scenes:<id>" / "movies:<id>"
     FOREIGN KEY(parent_directory_id) REFERENCES scanned_directories(id)
 );
 CREATE TABLE IF NOT EXISTS tags (
@@ -140,7 +141,7 @@ CREATE INDEX IF NOT EXISTS idx_tags_media ON tags(media_uuid);
 EDITABLE = ("title", "synopsis", "release_date")
 _TECH = ("duration", "resolution", "codec", "container", "audio_layout", "frame_rate")
 _COLS = ("uuid", "file_path", "parent_directory_id", "title", "media_type",
-         "release_date", "synopsis", "tmdb_id", "collection_id", "collection_name", "score", "anilist_id",
+         "release_date", "synopsis", "tmdb_id", "collection_id", "collection_name", "score", "anilist_id", "tpdb_id",
          "certification", "original_title", "romaji_title", "alt_titles") + _TECH
 
 _local = threading.local()
@@ -231,7 +232,7 @@ def init_db() -> None:
         c.execute("UPDATE scanned_directories SET sort_order = id")   # keep the order they were added in
     for col, kind in (("tmdb_id", "INTEGER"), ("collection_id", "INTEGER"), ("collection_name", "TEXT"), ("score", "REAL"), ("anilist_id", "INTEGER"),
                       ("certification", "TEXT"), ("original_title", "TEXT"), ("romaji_title", "TEXT"),
-                      ("alt_titles", "TEXT"), ("episode_title", "TEXT"), ("episode_synopsis", "TEXT"), ("score_source", "TEXT")):
+                      ("alt_titles", "TEXT"), ("tpdb_id", "TEXT"), ("episode_title", "TEXT"), ("episode_synopsis", "TEXT"), ("score_source", "TEXT")):
         if col not in cols:
             c.execute(f"ALTER TABLE media_items ADD COLUMN {col} {kind}")
     # box set lookups (after the column exists in a database from an older version)
@@ -278,9 +279,16 @@ def set_scrape_opts(dir_id: int, parts) -> None:
                   ("" if len(chosen) == len(allowed) else ",".join(chosen) or "none", dir_id))
 
 
+SOURCES = ("tmdb", "anilist", "tpdb")
+
+
+def _source(source) -> str:
+    return source if source in SOURCES else "tmdb"
+
+
 def set_source(dir_id: int, source: str) -> None:
     with _tx() as c:
-        c.execute("UPDATE scanned_directories SET source=? WHERE id=?", ("anilist" if source == "anilist" else "tmdb", dir_id))
+        c.execute("UPDATE scanned_directories SET source=? WHERE id=?", (_source(source), dir_id))
 
 
 def add_directory(folder_path: str, tab_name: str, should_scrape: bool = True, parts=None, source: str = "tmdb") -> int:
@@ -290,7 +298,7 @@ def add_directory(folder_path: str, tab_name: str, should_scrape: bool = True, p
     with _tx() as c:
         c.execute("INSERT OR IGNORE INTO scanned_directories (folder_path, tab_name, should_scrape, scrape_opts, sort_order, source) "
                   "VALUES (?,?,?,?, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM scanned_directories), ?)",
-                  (folder_path, tab_name, int(should_scrape), opts, "anilist" if source == "anilist" else "tmdb"))
+                  (folder_path, tab_name, int(should_scrape), opts, _source(source)))
         return c.execute("SELECT id FROM scanned_directories WHERE folder_path=?",
                          (folder_path,)).fetchone()["id"]
 
@@ -928,7 +936,7 @@ def move_item(uid: str, new_path: str) -> str:
 
 # ---------------------------------------------------------------- settings
 
-SECRET_SETTINGS = {"tmdb_key", "omdb_key", "fanart_key", "opensubtitles_key"}     # API keys: encrypted with Windows DPAPI at rest
+SECRET_SETTINGS = {"tmdb_key", "omdb_key", "fanart_key", "opensubtitles_key", "tpdb_key"}     # API keys: encrypted with Windows DPAPI at rest
 
 
 def get_setting(key: str, default=None):

@@ -117,7 +117,8 @@ def clean_name(filename: str, fallback: str = "") -> Parsed:
 def api_keys() -> dict:
     return {"tmdb": os.environ.get("TMDB_API_KEY") or db.get_setting("tmdb_key") or "",
             "omdb": os.environ.get("OMDB_API_KEY") or db.get_setting("omdb_key") or "",
-            "fanart": os.environ.get("FANART_API_KEY") or db.get_setting("fanart_key") or ""}
+            "fanart": os.environ.get("FANART_API_KEY") or db.get_setting("fanart_key") or "",
+            "tpdb": os.environ.get("TPDB_API_KEY") or db.get_setting("tpdb_key") or ""}
 
 
 MAX_JSON = 16 << 20

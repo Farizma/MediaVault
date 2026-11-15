@@ -80,5 +80,82 @@ class SubfolderTests(unittest.TestCase):
         self.assertEqual(db.excluded_subfolders(self.dir), [])
 
 
+SCENE = {"id": "a1b2", "_id": 77, "title": "Sunset Swim", "date": "2024-03-15", "description": "<b>Two</b> friends.",
+         "site": {"id": 12, "name": "Example Studio", "network": {"name": "Example Network"}},
+         "performers": [{"name": "Jo", "image": "https://img/x.jpg", "parent": {"_id": 5, "name": "Jo Smith",
+                                                                              "image": {"large": "https://img/jo.jpg"}}}],
+         "tags": [{"name": "Outdoor"}, {"name": "Outdoor"}, {"name": "Pool"}],
+         "poster": {"small": "https://img/p-s.jpg", "large": "https://img/p-l.jpg"},
+         "background": {"medium": "https://img/b-m.jpg", "full": "https://img/b-f.jpg"},
+         "hashes": [{"hash": "00000000000a0000", "type": "OSHASH"}]}
+
+
+class TPDBTests(unittest.TestCase):
+    def setUp(self):
+        db.init_db()
+        self.root = Path(tempfile.mkdtemp())
+
+    def test_shape_like_tmdb(self):
+        from utils import tpdb
+        h = tpdb._shape(SCENE)
+        self.assertEqual((h["tpdb_id"], h["title"], h["release_date"], h["synopsis"]),
+                         ("scenes:a1b2", "Sunset Swim", "2024-03-15", "Two friends."))
+        self.assertEqual(h["poster_url"], "https://img/p-l.jpg")                    # the largest size given
+        self.assertEqual(h["banner_url"], "https://img/b-f.jpg")
+        self.assertEqual(h["genres"], ["Outdoor", "Pool"])
+        self.assertEqual(h["studios"], ["Example Studio", "Example Network"])
+        self.assertEqual(h["cast"], [{"id": tpdb.PERSON_OFFSET + 5, "name": "Jo Smith", "role": "Jo",
+                                      "photo_url": "https://img/jo.jpg"}])
+        self.assertEqual((h["collection_id"], h["collection_name"], h["certification"]),
+                         (tpdb.SET_OFFSET + 12, "Example Studio", "18+"))
+
+    def test_oshash(self):
+        from utils import tpdb
+        p = self.root / "v.mp4"
+        p.write_bytes(b"\x01" + b"\x00" * (200_000 - 1))
+        self.assertEqual(tpdb.oshash(str(p)), f"{(200_000 + 1) & (2**64 - 1):016x}")
+        (self.root / "tiny.mp4").write_bytes(b"x")
+        self.assertIsNone(tpdb.oshash(str(self.root / "tiny.mp4")))
+
+    def test_lookup_takes_a_fitting_result_only(self):
+        from utils import tpdb
+        p = self.root / "ExampleStudio.24.03.15.Sunset.Swim.1080p.mp4"
+        p.write_bytes(b"")
+        asked = []
+
+        def get(path, key):
+            asked.append(path)
+            return {"data": [{**SCENE, "title": "Something Else Entirely"}, SCENE]} if path.startswith("/scenes") else {}
+        with mock.patch.object(tpdb, "_get", get):
+            self.assertEqual(tpdb.lookup(str(p), "k")["title"], "Sunset Swim")
+            self.assertIn("parse=ExampleStudio.24.03.15.Sunset.Swim", asked[0])
+            self.assertNotIn("1080p", asked[0])
+        with mock.patch.object(tpdb, "_get", lambda path, key: {"data": [{**SCENE, "title": "Other Thing"}]}):
+            self.assertIsNone(tpdb.lookup(str(p), "k"))                            # scenes, then movies: nothing fits
+        with self.assertRaises(tpdb.TPDBError):
+            tpdb.lookup(str(p), "")
+
+    def test_adult_folder_scrape(self):
+        from utils import tpdb
+        with db._tx() as c:
+            for t in ("media_items", "scanned_directories"):
+                c.execute(f"DELETE FROM {t}")
+        (self.root / "Example Studio - Sunset Swim.mp4").write_bytes(b"")
+        (self.root / "Show S01E02.mp4").write_bytes(b"")
+        d = db.get_directory(db.add_directory(str(self.root), "Adult", True, ["titles", "synopsis", "genres", "sets"], "tpdb"))
+        self.assertEqual(d["source"], "tpdb")
+        db.set_setting("tpdb_key", "k")
+        with mock.patch.object(tpdb, "lookup", lambda p, k: tpdb._shape(SCENE) if "Sunset" in p else None), \
+                mock.patch.object(watcher, "_headless", lambda: None):
+            watcher.scan_directory(d)
+        rows = {Path(r["file_path"]).name: r for r in db.list_media(d["id"])}
+        swim = rows["Example Studio - Sunset Swim.mp4"]
+        self.assertEqual((swim["title"], swim["tpdb_id"], swim["collection_name"]), ("Sunset Swim", "scenes:a1b2", "Example Studio"))
+        self.assertIn("genre:Pool", db.tags_for(swim["uuid"]))
+        self.assertIn("studio:Example Studio", db.tags_for(swim["uuid"]))
+        self.assertEqual(rows["Show S01E02.mp4"]["media_type"], "movie")             # an adult folder has no series
+        db.set_setting("tpdb_key", "")
+
+
 if __name__ == "__main__":
     unittest.main()

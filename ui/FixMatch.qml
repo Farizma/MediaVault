@@ -118,9 +118,9 @@ Item {
         }
         phase = "applying"; Backend.applyMatchParts(key, c, primary)
     }
-    function srcName(s) { return ({ anilist: "AniList", omdb: "IMDb", tvmaze: "TVmaze", mal: "MyAnimeList", kitsu: "Kitsu",
+    function srcName(s) { return ({ anilist: "AniList", omdb: "IMDb", tvmaze: "TVmaze", mal: "MyAnimeList", kitsu: "Kitsu", tpdb: "ThePornDB",
                                      fanart: "fanart.tv", file: "Your file" })[s] || "TMDB" }
-    function srcColor(s) { return ({ anilist: Theme.blue, omdb: Theme.amber, tvmaze: "#64D2FF", mal: "#7D9BFF", kitsu: "#FF7A66",
+    function srcColor(s) { return ({ anilist: Theme.blue, omdb: Theme.amber, tvmaze: "#64D2FF", mal: "#7D9BFF", kitsu: "#FF7A66", tpdb: "#FF375F",
                                      fanart: "#BF5AF2", file: Theme.text })[s] || Theme.green }
 
     Connections {

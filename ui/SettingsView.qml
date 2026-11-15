@@ -1091,6 +1091,10 @@ Item {
                     Field { Layout.fillWidth: true; placeholderText: "Paste your TMDB key"; echoMode: TextInput.Password; text: Backend.setting("tmdb_key"); onActiveFocusChanged: if (!activeFocus) Backend.setSetting("tmdb_key", text) }
                     Caption { text: "OMDB API KEY (FALLBACK)" }
                     Field { Layout.fillWidth: true; placeholderText: "Paste your OMDb key"; echoMode: TextInput.Password; text: Backend.setting("omdb_key"); onActiveFocusChanged: if (!activeFocus) Backend.setSetting("omdb_key", text) }
+                    Caption { text: "THEPORNDB API TOKEN (ADULT FOLDERS)" }
+                    Field { Layout.fillWidth: true; placeholderText: "Paste your ThePornDB token"; echoMode: TextInput.Password; text: Backend.setting("tpdb_key"); onActiveFocusChanged: if (!activeFocus) Backend.setSetting("tpdb_key", text) }
+                    Text { Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 11
+                        text: "Free at theporndb.net (your account \u203A API tokens). Only folders set to Adult \u00B7 ThePornDB in their Configure window ask it." }
                     Caption { text: "OPENSUBTITLES API KEY (SUBTITLE DOWNLOADS)" }
                     RowLayout {
                         Layout.fillWidth: true

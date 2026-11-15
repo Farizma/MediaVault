@@ -180,7 +180,7 @@ class FeatureTests(unittest.TestCase):
     def test_fetch_missing_for_a_selection_only(self):
         import watcher
         seen = []
-        with mock.patch.object(watcher, "_fetch_groups", side_effect=lambda d, groups, *a: seen.append(sorted(groups)) or 0), \
+        with mock.patch.object(watcher, "_fetch_groups", side_effect=lambda d, groups, *a, **kw: seen.append(sorted(groups)) or 0), \
                 mock.patch.object(scraper, "api_keys", return_value={"tmdb": "k", "omdb": "", "fanart": ""}):
             watcher.fetch_missing(db.get_directory(self.pub), only={self.beta})
         self.assertEqual(seen, [[self.beta]])
