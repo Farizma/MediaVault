@@ -112,6 +112,10 @@ CREATE TABLE IF NOT EXISTS cast_members (
     role TEXT,
     PRIMARY KEY (owner, ord)
 );
+CREATE TABLE IF NOT EXISTS custom_people (    -- actors you added yourself (their photo: data_dir/people/<id>.webp)
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE COLLATE NOCASE
+);
 CREATE TABLE IF NOT EXISTS collection_info (
     collection_id INTEGER PRIMARY KEY,  -- a box set's own page: what you wrote about the set as a whole
     synopsis TEXT
@@ -623,6 +627,62 @@ def set_cast(owner: str, people: list[dict]) -> None:
         c.execute("DELETE FROM cast_members WHERE owner=?", (owner,))
         c.executemany("INSERT INTO cast_members (owner, ord, person_id, name, role) VALUES (?,?,?,?,?)",
                       [(owner, i, p.get("id"), p["name"], p.get("role") or "") for i, p in enumerate(people) if p.get("name")])
+
+
+CUSTOM_PERSON_OFFSET = 4_000_000_000      # person ids of actors you added, apart from TMDB, AniList and ThePornDB
+
+
+def person_named(name: str) -> int:
+    """The person id for a name: someone already in a cast list (the most credited), else an actor you added,
+    made now if new."""
+    name = " ".join(name.split())
+    r = conn().execute("SELECT person_id, COUNT(*) n FROM cast_members WHERE name=? COLLATE NOCASE AND person_id IS NOT NULL "
+                       "GROUP BY person_id ORDER BY n DESC LIMIT 1", (name,)).fetchone()
+    if r:
+        return int(r["person_id"])
+    with _tx() as c:
+        c.execute("INSERT OR IGNORE INTO custom_people (name) VALUES (?)", (name,))
+        return CUSTOM_PERSON_OFFSET + c.execute("SELECT id FROM custom_people WHERE name=?", (name,)).fetchone()["id"]
+
+
+def people(query: str = "", limit: int = 12) -> list[dict]:
+    """Actors whose name contains query: everyone in a cast list and the ones you added. [{id, name, titles}],
+    most credited first."""
+    q = f"%{query.strip()}%"
+    rows = _rows(conn().execute(
+        "SELECT person_id AS id, MAX(name) AS name, COUNT(DISTINCT owner) AS titles FROM cast_members "
+        "WHERE person_id IS NOT NULL AND name LIKE ? GROUP BY person_id ORDER BY titles DESC, name COLLATE NOCASE LIMIT ?",
+        (q, limit)))
+    seen = {r["id"] for r in rows}
+    for r in conn().execute("SELECT id, name FROM custom_people WHERE name LIKE ? ORDER BY name COLLATE NOCASE", (q,)):
+        if CUSTOM_PERSON_OFFSET + r["id"] not in seen and len(rows) < limit:
+            rows.append({"id": CUSTOM_PERSON_OFFSET + r["id"], "name": r["name"], "titles": 0})
+    return rows
+
+
+def add_cast_member(owner: str, person_id: int, name: str, role: str = "") -> bool:
+    """Put someone at the end of a title's cast. False when they are in it already."""
+    with _tx() as c:
+        if c.execute("SELECT 1 FROM cast_members WHERE owner=? AND (person_id=? OR name=? COLLATE NOCASE)",
+                     (owner, person_id, name)).fetchone():
+            return False
+        nxt = c.execute("SELECT COALESCE(MAX(ord), -1) + 1 FROM cast_members WHERE owner=?", (owner,)).fetchone()[0]
+        c.execute("INSERT INTO cast_members (owner, ord, person_id, name, role) VALUES (?,?,?,?,?)",
+                  (owner, nxt, person_id, name, role or ""))
+    return True
+
+
+def remove_cast_member(owner: str, name: str) -> None:
+    with _tx() as c:
+        c.execute("DELETE FROM cast_members WHERE owner=? AND name=?", (owner, name))
+
+
+def give_person_id(name: str) -> int:
+    """Cast entries with no id (an OMDb cast list) get one, so a photo you choose can be kept for them."""
+    pid = person_named(name)
+    with _tx() as c:
+        c.execute("UPDATE cast_members SET person_id=? WHERE person_id IS NULL AND name=? COLLATE NOCASE", (pid, name))
+    return pid
 
 
 def get_cast(owner: str) -> list[dict]:

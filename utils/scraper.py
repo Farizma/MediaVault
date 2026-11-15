@@ -422,9 +422,15 @@ def save_round(img, dest: Path, size: int = 160) -> None:
     out.save(dest, "WEBP", quality=80)
 
 
+def custom_person_photo_path(person_id) -> Path:
+    """A photo you chose for an actor (kept out of the cache, so Storage clean-up never removes it)."""
+    return db.data_dir() / "people" / f"{int(person_id)}.webp"
+
+
 def person_photo_path(person_id) -> Path:
-    """Actor photos are shared by every title they appear in: one file per person in the app cache."""
-    return db.data_dir() / "cache" / "people" / f"{int(person_id)}.webp"
+    """Actor photos are shared by every title they appear in: one file per person. Yours wins over the scraped one."""
+    own = custom_person_photo_path(person_id)
+    return own if own.exists() else db.data_dir() / "cache" / "people" / f"{int(person_id)}.webp"
 
 
 IMAGE_WORKERS = 6          # pictures of one title downloaded at once (each one waits mostly on the network)

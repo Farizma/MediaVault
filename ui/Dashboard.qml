@@ -657,9 +657,70 @@ Item {
                         spacing: 10
                         Row {
                             spacing: 12
-                            Text { id: catalogTitle; text: dash.currentTabName + (dash.shelfView ? " Shelf" : " Catalog"); color: "#FFFFFF"; font.pixelSize: 20; font.weight: Font.ExtraBold; font.letterSpacing: -0.4
+                            Text { id: catalogTitle; text: dash.currentTabName + (Backend.subtab !== "" ? " \u203A " + Backend.subtab : "") + (dash.shelfView ? " Shelf" : " Catalog"); color: "#FFFFFF"; font.pixelSize: 20; font.weight: Font.ExtraBold; font.letterSpacing: -0.4
                                 elide: Text.ElideRight; width: Math.min(implicitWidth, catalogCol.width - 140) }
                             Text { anchors.baseline: catalogTitle.baseline; text: grid.count + (grid.count === 1 ? " title" : " titles"); color: "#66FFFFFF"; font.family: Theme.mono; font.pixelSize: 12 }
+                        }
+                        // subtabs: the tab's first-level subfolders (Movies > All, English, Japanese). A pill slides to the one chosen
+                        Item {
+                            id: subtabBar
+                            readonly property var rows: Backend.subtabs
+                            readonly property string current: Backend.subtab
+                            width: parent.width
+                            height: 34
+                            visible: rows.length > 0
+                            Flickable {
+                                id: subFlick
+                                anchors.fill: parent
+                                contentWidth: subRow.width; contentHeight: height
+                                flickableDirection: Flickable.HorizontalFlick
+                                boundsBehavior: Flickable.StopAtBounds
+                                interactive: false                       // the page's wheel passes over it (SideWheel scrolls it)
+                                clip: true
+                                SideWheel { view: subFlick }
+                                SideWheel { view: subFlick; shift: true }
+                                Rectangle {
+                                    id: subPill
+                                    property Item at: null
+                                    x: at ? at.x : 0; width: at ? at.width : 0
+                                    y: 2; height: 30; radius: 10
+                                    color: "#26FFFFFF"; border.color: "#1FFFFFFF"
+                                    visible: at !== null
+                                    Behavior on x { enabled: subPill.ready; NumberAnimation { duration: 280 * Theme.motion; easing.type: Easing.OutCubic } }
+                                    Behavior on width { enabled: subPill.ready; NumberAnimation { duration: 280 * Theme.motion; easing.type: Easing.OutCubic } }
+                                    property bool ready: false
+                                }
+                                Row {
+                                    id: subRow
+                                    spacing: 2
+                                    Repeater {
+                                        model: [{ rel: "", name: "All", count: -1 }].concat(subtabBar.rows)
+                                        Item {
+                                            id: st
+                                            readonly property bool on: modelData.rel === subtabBar.current
+                                            width: stRow.implicitWidth + 24; height: 34
+                                            onOnChanged: if (on) { subPill.at = st; subFlick.reveal(st) }
+                                            Component.onCompleted: if (on) { subPill.at = st; Qt.callLater(function() { subPill.ready = true }) }
+                                            Row {
+                                                id: stRow
+                                                anchors.centerIn: parent
+                                                spacing: 6
+                                                Text { text: modelData.name; font.pixelSize: 13; font.weight: st.on ? Font.Bold : Font.DemiBold
+                                                    color: st.on ? "#FFFFFF" : stHover.hovered ? "#D9FFFFFF" : "#8CFFFFFF"
+                                                    Behavior on color { ColorAnimation { duration: 160 * Theme.motion } } }
+                                                Text { visible: modelData.count >= 0; anchors.baseline: parent.children[0].baseline
+                                                    text: modelData.count; color: st.on ? "#99FFFFFF" : "#4DFFFFFF"; font.family: Theme.mono; font.pixelSize: 10 }
+                                            }
+                                            HoverHandler { id: stHover; cursorShape: Qt.PointingHandCursor }
+                                            TapHandler { onTapped: { if (!st.on) { dash.stagger = true; staggerOff.restart(); Backend.selectSubtab(modelData.rel) } } }
+                                        }
+                                    }
+                                }
+                                function reveal(it) {                   // keep the chosen one in view on a long row
+                                    if (it.x < contentX) contentX = it.x
+                                    else if (it.x + it.width > contentX + width) contentX = it.x + it.width - width
+                                }
+                            }
                         }
                         // sort and filters on the left (they wrap on a narrow window); the view switch and search stay on the right
                         // plain anchors, not a RowLayout: a wrapping Flow inside a layout makes Qt re-lay out forever
@@ -1220,7 +1281,8 @@ Item {
 
     // ---- overlays
     DetailView { id: detail; anchors.fill: parent; onChooseThumbnail: (key, source) => picker.begin(key, source); onPlayRequested: (start) => dash.launch(start, "", 450)
-        onResumeAsked: (key, at) => resumeAsk.ask(at, function(again) { detail.play(key, again) }) }
+        onResumeAsked: (key, at) => resumeAsk.ask(at, function(again) { detail.play(key, again) })
+        onAddActor: (keys, source) => actorSheet.begin(keys, source) }
     PickerView { id: picker; anchors.fill: parent }
     SettingsView { id: settings; anchors.fill: parent; onThemeChosen: (id) => dash.switchTheme(id)
         onConfigureFolder: (id, source) => folderConfig.show(id, source)
@@ -1230,6 +1292,7 @@ Item {
     FolderSheet { id: folderSheet; anchors.fill: parent }
     InsightsSheet { id: insightsSheet; anchors.fill: parent }
     RenameSheet { id: renameSheet; anchors.fill: parent; onDone: dash.selClear() }
+    ActorSheet { id: actorSheet; anchors.fill: parent; onAdded: if (detail.visible) detail.refresh() }
     ResumeAsk { id: resumeAsk; anchors.fill: parent }
     Connections { target: Backend; function onFolderPicked(path, name) { folderSheet.open(path, name) } }
 
@@ -1329,6 +1392,7 @@ Item {
                     { t: "Add a tag\u2026", show: true, f: function() { if (!dash.selection[cardMenu.key]) dash.selToggle(cardMenu.key, -1); selTag.forceActiveFocus() } },
                     { t: dash.selection[cardMenu.key] ? "Deselect" : "Select", show: true, f: function() { dash.selToggle(cardMenu.key, -1) } },
                     { t: "Fetch missing details", show: true, f: function() { Backend.fetchMissingFor(cardMenu.keys) } },
+                    { t: cardMenu.many ? "Add an actor to all\u2026" : "Add an actor\u2026", show: true, f: function() { actorSheet.begin(cardMenu.keys, null) } },
                     { t: "Rename file" + (cardMenu.many ? "s" : "") + " to match\u2026", show: true, f: function() { renameSheet.begin(cardMenu.keys) } },
                     { t: "Fix Scraped Data\u2026", show: !cardMenu.many,
                       f: function() { detail.open(cardMenu.key, cardMenu.from, "button"); Qt.callLater(detail.fixData) } }
@@ -1372,6 +1436,7 @@ Item {
             Field { id: selSet; width: 140; anchors.verticalCenter: parent.verticalCenter; placeholderText: "New box set name"
                 onAccepted: if (Backend.groupIntoSet(dash.selKeys(), text) !== "") { text = ""; dash.selClear() } }
             GlassButton { small: true; label: "Fetch missing"; onClicked: Backend.fetchMissingFor(dash.selKeys()) }
+            GlassButton { id: selActor; small: true; label: "+ Actor"; tip: "Add an actor to every selected title"; onClicked: actorSheet.begin(dash.selKeys(), selActor) }
             GlassButton { small: true; label: "Rename files\u2026"; onClicked: renameSheet.begin(dash.selKeys()) }
             GlassButton { small: true; label: "\u2715"; tip: "Clear the selection (Esc)"; onClicked: dash.selClear() }
         }

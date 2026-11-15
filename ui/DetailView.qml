@@ -34,7 +34,7 @@ Item {
         case "meta": return (info.facts || []).length > 0
         case "synopsis": return true                  // a box set's page has its own synopsis
         case "tags": case "notes": return !setSlide
-        case "cast": return !setSlide && (info.cast || []).length > 0
+        case "cast": return !setSlide          // empty too: its + adds the first actor
         case "gallery": return !setSlide
         case "boxset": return info.canSet === true
         case "list": return (d.episodes || []).length > 0
@@ -83,6 +83,7 @@ Item {
     property bool launching: false
     readonly property real sheetIn: Math.max(0, Math.min(1, (f - 0.35) / 0.65))   // the sheet arrives in the second half
     signal chooseThumbnail(string key, var source)
+    signal addActor(var keys, var source)       // the dashboard's Add an actor window
     signal resumeAsked(string key, string at)    // stopped part-way: the dashboard asks "resume or start over", then calls play()
     signal playRequested(var start)          // start() begins playback; the dashboard runs the fade to black first
 
@@ -808,17 +809,65 @@ Item {
                         boundsBehavior: Flickable.StopAtBounds
                         model: root.info.cast || []
                         ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AsNeeded }
+                        // the last tile adds someone (to this title; a selection on the dashboard adds to many)
+                        footer: Item {
+                            width: 76 + (castList.count ? 12 : 0); height: 120
+                            Column {
+                                x: castList.count ? 12 : 0
+                                width: 76
+                                spacing: 5
+                                Rectangle {
+                                    id: addFace
+                                    width: 64; height: 64; radius: 32
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    color: addHover.hovered ? Theme.fillHover : "transparent"
+                                    border.color: addHover.hovered ? Theme.blue : Theme.line
+                                    border.width: 1.5
+                                    scale: addTap.pressed ? 0.94 : 1
+                                    Behavior on scale { NumberAnimation { duration: 120 * Theme.motion; easing.type: Easing.OutCubic } }
+                                    Behavior on border.color { ColorAnimation { duration: 140 * Theme.motion } }
+                                    Text { anchors.centerIn: parent; text: "+"; color: addHover.hovered ? Theme.blue : Theme.muted; font.pixelSize: 24 }
+                                    HoverHandler { id: addHover; cursorShape: Qt.PointingHandCursor }
+                                    TapHandler { id: addTap; onTapped: root.addActor([root.infoKey], addFace) }
+                                }
+                                Text { width: parent.width; text: "Add actor"; color: Theme.faint; font.pixelSize: 11
+                                    horizontalAlignment: Text.AlignHCenter }
+                            }
+                        }
                         delegate: Column {
+                            id: person
                             width: 76
                             spacing: 5
+                            property string photo: modelData.photo
                             Rectangle {
                                 width: 64; height: 64; radius: 32
                                 anchors.horizontalCenter: parent.horizontalCenter
-                                color: Theme.slate; border.color: Theme.line
-                                Image { anchors.fill: parent; source: modelData.photo; fillMode: Image.PreserveAspectCrop; asynchronous: true
-                                    sourceSize.width: 128; sourceSize.height: 128; visible: modelData.photo !== "" }   // saved round already
-                                Text { visible: modelData.photo === ""; anchors.centerIn: parent; color: "#B3FFFFFF"; font.pixelSize: 18; font.weight: Font.Bold
+                                color: Theme.slate; border.color: faceHover.hovered ? Theme.blue : Theme.line
+                                Behavior on border.color { ColorAnimation { duration: 140 * Theme.motion } }
+                                Image { anchors.fill: parent; source: person.photo; fillMode: Image.PreserveAspectCrop; asynchronous: true
+                                    sourceSize.width: 128; sourceSize.height: 128; visible: person.photo !== ""; cache: false }   // saved round already
+                                Text { visible: person.photo === ""; anchors.centerIn: parent; color: "#B3FFFFFF"; font.pixelSize: 18; font.weight: Font.Bold
                                     text: modelData.name.split(" ").filter(function(w) { return w.length }).slice(0, 2).map(function(w) { return w[0] }).join("") }
+                                // hover: choose their photo (it shows on every title they are in)
+                                Rectangle { anchors.fill: parent; radius: 32; color: "#99000000"; opacity: faceHover.hovered ? 1 : 0
+                                    Behavior on opacity { NumberAnimation { duration: 140 * Theme.motion } }
+                                    Text { anchors.centerIn: parent; text: "Photo"; color: "#FFFFFF"; font.pixelSize: 11; font.weight: Font.DemiBold } }
+                                HoverHandler { id: faceHover; cursorShape: Qt.PointingHandCursor }
+                                TapHandler { onTapped: { var u = Backend.setActorPhoto(modelData.name); if (u !== "") person.photo = u } }
+                                // take them out of this title's cast
+                                Rectangle {
+                                    width: 20; height: 20; radius: 10
+                                    x: parent.width - 16; y: -2
+                                    color: Theme.graphite; border.color: "#40FFFFFF"
+                                    opacity: faceHover.hovered || xArea.containsMouse ? 1 : 0
+                                    scale: opacity > 0.5 ? 1 : 0.7
+                                    Behavior on opacity { NumberAnimation { duration: 140 * Theme.motion } }
+                                    Behavior on scale { NumberAnimation { duration: 160 * Theme.motion; easing.type: Easing.OutBack } }
+                                    Text { anchors.centerIn: parent; text: "\u2715"; color: Theme.text; font.pixelSize: 9 }
+                                    MouseArea { id: xArea; anchors.fill: parent; anchors.margins: -3; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                        onClicked: { Backend.removeActor(root.infoKey, modelData.name); root.refresh() } }
+                                    Tip { visible: xArea.containsMouse; delay: 500; text: "Remove from this title" }
+                                }
                             }
                             Text { width: parent.width; text: modelData.name; color: Theme.text; font.pixelSize: 11; font.weight: Font.DemiBold
                                 horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap; maximumLineCount: 2; elide: Text.ElideRight }

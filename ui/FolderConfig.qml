@@ -56,7 +56,8 @@ Sheet {
             // how this tab shows its titles: DVD cases (the grid or the shelf) or wide video cards
             Toggle { Layout.fillWidth: true; text: "Landscape thumbnails"; hint: "16:9 video cards in this tab instead of DVD cases (pick a frame with Choose thumbnail)"
                 checked: root.f.landscape === true; onToggled: { Backend.setTabLandscape(root.folderId, checked); root.after() } }
-            Item { Layout.fillWidth: true }
+            Toggle { Layout.fillWidth: true; text: "Subtabs from subfolders"; hint: "All, then one per subfolder (English, Japanese\u2026) above the catalog"
+                checked: root.f.subtabs !== false; onToggled: { Backend.toggleHidden("nosubtab_dirs", String(root.folderId)); root.after() } }
         }
         RowLayout {
             Layout.fillWidth: true

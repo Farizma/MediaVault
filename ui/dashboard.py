@@ -99,7 +99,8 @@ def banner_for(card: dict):
 MATCH_FIELDS = ("title", "year", "synopsis", "poster", "banner", "disc", "genres", "score", "rating", "titles", "cast", "boxset")
 MATCH_SOURCES = ("tmdb", "anilist", "omdb", "tvmaze", "mal", "kitsu", "tpdb")
 SET_FIELDS = ("title", "synopsis", "poster", "banner", "disc")     # what a box set's own page can take
-HIDDEN_KINDS = ("all_dirs", "all_tags", "insights_dirs", "continue_dirs", "private_dirs", "recent_dirs", "landscape_dirs")
+HIDDEN_KINDS = ("all_dirs", "all_tags", "insights_dirs", "continue_dirs", "private_dirs", "recent_dirs", "landscape_dirs",
+                "nosubtab_dirs")
 UPLOAD_FIELDS = ("poster", "banner", "disc", "gallery")      # the "Upload file" tile in the window
 PERCENT_SOURCES = ("anilist", "kitsu")                        # scores shown as a percentage
 GALLERY_PICK_MAX = 40                                         # Gallery images offered per result, to pick one by one
@@ -117,6 +118,18 @@ def episode_row(e: dict) -> dict:
 GALLERY_DROP_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".avif"}
 MATCH_SOURCES_LABEL = {"tmdb": "TMDB", "tmdbset": "TMDB collections", "tvmaze": "TVmaze", "omdb": "IMDb", "anilist": "AniList",
                        "mal": "MyAnimeList", "kitsu": "Kitsu", "tpdb": "ThePornDB"}
+
+
+def subtab_rows(root: str, items: list[dict]) -> list[dict]:
+    """A folder tab's subtabs: its first-level subfolders that hold titles, A to Z, with how many files each.
+    [] when there are none (files only at the top: no subtabs)."""
+    counts: dict[str, int] = {}
+    for it in items:
+        rel = os.path.relpath(it["file_path"], root)
+        if os.sep in rel and not rel.startswith(".."):
+            top = rel.split(os.sep, 1)[0]
+            counts[top] = counts.get(top, 0) + 1
+    return [{"rel": k, "name": k, "count": counts[k]} for k in sorted(counts, key=str.casefold)]
 
 
 SUBFOLDER_DEPTH = 4         # Configure > Subfolders lists this deep
@@ -453,6 +466,7 @@ class LibraryModel(QAbstractListModel):
         self.title_pref = "english"    # Settings > Library > Titles (set by reload)
         self.private_closed: set = set()   # private folders not signed in to: their titles are left out everywhere
         self.mark = ""                 # "favourite" / "watchlist": show only those
+        self.under = ""                # a subtab: only cards whose file is under this folder (absolute, ends in a separator)
         self._marks: dict = {}
 
     @Slot(int, int, result="QVariantList")
@@ -526,7 +540,8 @@ class LibraryModel(QAbstractListModel):
         self._marks = db.marks()
         online = {d["id"]: os.path.isdir(d["folder_path"]) for d in db.list_directories()}   # one check per folder
         marked = self._marks.get(self.mark) if self.mark else None
-        shown = library_view(cards, index, **self.view, marked=marked) if (self.view or marked is not None) else cards
+        shown = [c for c in cards if (c.get("file_path") or "").startswith(self.under)] if self.under else cards
+        shown = library_view(shown, index, **self.view, marked=marked) if (self.view or marked is not None) else shown
         files = FolderIndex()               # one listing per art folder instead of several file checks per card
         rows = [self._row(c, online.get(c["parent_directory_id"], True), files) for c in shown]
         if not fresh and rows == self._rows:
@@ -638,6 +653,7 @@ class Dashboard(QObject):
     controlsChanged = Signal()         # a binding changed, or a controller came or went
     layoutChanged = Signal()           # the tab shown now is a DVD tab (grid / shelf) or a Landscape one
     subfoldersReady = Signal(int, "QVariantList")    # folder id, its subfolders (Configure > Subfolders)
+    subtabsChanged = Signal()                        # the subtabs under a folder tab (its first-level subfolders)
     padButton = Signal(str)            # a controller button, while Settings > Controls waits for one
     minimizeWindow = Signal()          # picture in picture: only the small video window stays on screen
     thumbnailsReady = Signal(int)
@@ -675,6 +691,8 @@ class Dashboard(QObject):
         self.app, self.library, self.tabs, self.frames = app, library, tabs, frames
         self._needs_setup = True
         self._tab = -1
+        self._subtabs: list = []
+        self._subtab_of: dict[int, str] = {}        # the subtab each tab was left on (this session)
         self._billboard, self._insights = {"visible": False, "items": []}, {}
         self._bb_keys: list[str] = []  # the carousel deck; kept across refreshes so it does not reshuffle
         self._ignored_now: dict[str, set] = {}   # Library health: hidden until Media Vault restarts
@@ -959,6 +977,7 @@ class Dashboard(QObject):
             self._tab = -1
         self.tabs.reload()
         self._apply_layout()
+        self._refresh_subtabs()
         cards = self.library.reload(None if self._tab < 0 else self._tab)
         self._auto_thumbs()
         self._refresh_billboard(cards)
@@ -986,6 +1005,35 @@ class Dashboard(QObject):
         if on != self.library.landscape:
             self.library.landscape = on
             self.layoutChanged.emit()
+
+    # -- subtabs: a folder tab's first-level subfolders (Movies > All, English, Japanese). Off per folder in Configure
+    @Property("QVariantList", notify=subtabsChanged)
+    def subtabs(self):
+        return self._subtabs
+
+    @Property(str, notify=subtabsChanged)
+    def subtab(self):
+        return self._subtab_of.get(self._tab, "")
+
+    def _refresh_subtabs(self):
+        d = db.get_directory(self._tab) if self._tab >= 0 else None
+        rows = [] if not d or self._tab in set(db.hidden("nosubtab_dirs")) else subtab_rows(d["folder_path"], db.list_media(self._tab))
+        rel = self._subtab_of.get(self._tab, "")
+        if rel and rel not in {r["rel"] for r in rows}:        # its subfolder is gone (or left out)
+            rel = self._subtab_of[self._tab] = ""
+        under = (db.norm(os.path.join(d["folder_path"], rel)) + os.sep) if d and rel else ""
+        if rows != self._subtabs or under != self.library.under:
+            self._subtabs, self.library.under = rows, under
+            self.subtabsChanged.emit()
+
+    @Slot(str)
+    def selectSubtab(self, rel: str):
+        """"" = All. Only this tab's grid follows; its rows (Continue Watching, Recently Added) show the whole tab."""
+        if self._tab < 0 or rel == self._subtab_of.get(self._tab, ""):
+            return
+        self._subtab_of[self._tab] = rel
+        self._refresh_subtabs()
+        self.library.reload(self._tab)
 
     # -- a folder's subfolders: each can be left out of the library (with everything inside it)
     @Slot(int)
@@ -1096,6 +1144,7 @@ class Dashboard(QObject):
         self._tab = tab_id
         self._bb_keys = []  # new tab, new random picks
         self._apply_layout()
+        self._refresh_subtabs()
         cards = self.library.reload(None if tab_id < 0 else tab_id, fresh=True)
         self._auto_thumbs()
         self._refresh_billboard(cards)
@@ -1912,8 +1961,82 @@ class Dashboard(QObject):
         out = []
         for p in db.get_cast(db.cast_owner(item)):
             photo = scraper.person_photo_path(p["person_id"]) if p["person_id"] else None
-            out.append({"name": p["name"], "role": p["role"], "photo": file_url(photo) if photo and photo.exists() else ""})
+            out.append({"id": p["person_id"] or 0, "name": p["name"], "role": p["role"],
+                        "photo": file_url(photo) if photo and photo.exists() else ""})
         return out
+
+    # -- actors you add: to one title or many at once, with a photo you choose (shown wherever they appear)
+    @Slot(str, result="QVariantList")
+    def people(self, query: str):
+        """Suggestions while typing an actor's name: [{id, name, titles, photo}]."""
+        out = []
+        for p in db.people(query, 12):
+            photo = scraper.person_photo_path(p["id"])
+            out.append({**p, "photo": file_url(photo) if photo.exists() else ""})
+        return out
+
+    @Slot(result=str)
+    def pickActorPhoto(self) -> str:
+        """A picture file for an actor, before adding them: its file:/// URL (shown as the preview), "" when cancelled."""
+        path = pick_image("", "Choose a photo of the actor")
+        return file_url(path, bust=False) if path else ""
+
+    @Slot("QVariantList", str, str, str, result=int)
+    def addActor(self, keys, name: str, role: str, photo: str) -> int:
+        """Add someone to every title in keys (a series or box set: each of its titles). A new name becomes an actor
+        of your own; photo (a file path, or "") becomes their picture everywhere. Returns titles they were added to."""
+        name = " ".join((name or "").split())[:120]
+        if not name:
+            return 0
+        pid = db.give_person_id(name)
+        if photo.startswith("file:"):
+            photo = QUrl(photo).toLocalFile()
+        if photo and os.path.isfile(photo):
+            if not self._save_actor_photo(pid, photo):
+                return 0
+        owners = []
+        for k in keys or []:
+            for u in db.uuids_for(str(k)):
+                it = db.get_media(u)
+                if it and (o := db.cast_owner(it)) not in owners:
+                    owners.append(o)
+        added = sum(db.add_cast_member(o, pid, name, (role or "").strip()[:120]) for o in owners)
+        n = len(keys or [])
+        self.toast.emit(f"Added {name} to {n} title{'s' if n != 1 else ''}" if added else f"{name} is already in the cast")
+        self.libraryChanged.emit()
+        return added
+
+    @Slot(str, str)
+    def removeActor(self, key: str, name: str):
+        for u in db.uuids_for(key):
+            it = db.get_media(u)
+            if it:
+                db.remove_cast_member(db.cast_owner(it), name)
+        self.libraryChanged.emit()
+
+    @Slot(str, result=str)
+    def setActorPhoto(self, name: str) -> str:
+        """Choose a picture for an actor: it replaces their photo on every title. Returns its URL ("" if cancelled)."""
+        path = pick_image("", f"Choose a photo of {name}")
+        if not path:
+            return ""
+        pid = db.give_person_id(name)
+        if not self._save_actor_photo(pid, path):
+            return ""
+        self.libraryChanged.emit()
+        return file_url(scraper.person_photo_path(pid))
+
+    def _save_actor_photo(self, pid: int, path: str) -> bool:
+        from PIL import Image
+        try:
+            with Image.open(path) as img:
+                img.load()
+                scraper.save_round(img, scraper.custom_person_photo_path(pid), 256)
+            return True
+        except Exception as e:
+            log.warning("actor photo %s: %s", path, e)
+            self.toast.emit("That file is not a picture Media Vault can read")
+            return False
 
     # -- box sets you edit: add a film to a set (or a new one), take it out, or ungroup a whole set
     @Slot(result="QVariantList")
@@ -2459,6 +2582,7 @@ class Dashboard(QObject):
                  "recentRow": d["id"] not in set(db.hidden("recent_dirs")),
                  "landscape": d["id"] in set(db.hidden("landscape_dirs")),
                  "leftOut": len(db.excluded_subfolders(d["id"])),
+                 "subtabs": d["id"] not in set(db.hidden("nosubtab_dirs")),
                  "private": d["id"] in db.private_dirs()} for d in db.list_directories()]
 
     @Slot(result="QVariantList")
