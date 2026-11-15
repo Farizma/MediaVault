@@ -18,7 +18,14 @@ Sheet {
         f = Backend.directories().find(function(d) { return d.id === folderId }) || ({})
         discordMode = Backend.discordPrivacy().folders[String(folderId)] || "show"
     }
-    function show(id, source) { folderId = id; load(); open(source) }
+    property var subs: []           // its subfolders, tree order: {rel, name, depth, videos, excluded, inherited}
+    property bool subsBusy: false
+    function loadSubs() { subsBusy = true; Backend.listSubfolders(folderId) }
+    Connections {
+        target: Backend
+        function onSubfoldersReady(id, rows) { if (id === root.folderId) { root.subs = rows; root.subsBusy = false } }
+    }
+    function show(id, source) { folderId = id; subs = []; load(); open(source); loadSubs() }
     function after() { load(); changed() }
 
     component Caption: Text { color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10; Layout.topMargin: 10 }
@@ -65,6 +72,80 @@ Sheet {
             Toggle { Layout.fillWidth: true; text: "Private tab"; hint: "Hidden everywhere until you sign in (needs a sign-in in Settings \u203A Privacy)"
                 checked: root.f.private === true
                 onToggled: { Backend.toggleHidden("private_dirs", String(root.folderId)); root.after(); checked = Qt.binding(function() { return root.f.private === true }) } }
+        }
+
+        Caption { text: "SUBFOLDERS" + (root.f.leftOut ? "  \u00B7  " + root.f.leftOut + " LEFT OUT" : "") }
+        Note { text: "Untick a subfolder to leave it out: its titles leave this tab, scans, scraping and the watcher. Their tags, notes and watch history are kept for when you tick it again." }
+        Rectangle {
+            id: subBox
+            Layout.fillWidth: true
+            Layout.preferredHeight: root.subs.length ? Math.min(subList.contentHeight + 8, 264) : 44
+            radius: 10
+            color: "transparent"
+            border.color: Theme.line
+            Behavior on Layout.preferredHeight { NumberAnimation { duration: Theme.motion ? 220 : 0; easing.type: Easing.OutCubic } }
+            Row {
+                anchors.centerIn: parent
+                spacing: 8
+                visible: root.subs.length === 0
+                Spinner { size: 14; color: Theme.blue; running: root.subsBusy; visible: root.subsBusy; anchors.verticalCenter: parent.verticalCenter }
+                Text { color: Theme.faint; font.pixelSize: 12; anchors.verticalCenter: parent.verticalCenter
+                    text: root.subsBusy ? "Reading the folder\u2026" : "No subfolders: every video sits in the folder itself" }
+            }
+            ListView {
+                id: subList
+                anchors { fill: parent; margins: 4 }
+                clip: true
+                model: root.subs
+                boundsBehavior: Flickable.StopAtBounds
+                delegate: Rectangle {
+                    id: row
+                    required property var modelData
+                    readonly property bool on: !modelData.excluded && !modelData.inherited
+                    width: ListView.view.width
+                    height: 32
+                    radius: 7
+                    color: hit.containsMouse && !modelData.inherited ? Theme.fillHover : "transparent"
+                    opacity: modelData.inherited ? 0.4 : 1
+                    Rectangle {
+                        id: box
+                        x: 10 + row.modelData.depth * 20
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 16; height: 16; radius: 4
+                        color: row.on ? Theme.blue : "transparent"
+                        border.color: row.on ? Theme.blue : Theme.muted
+                        border.width: 1.5
+                        Behavior on color { ColorAnimation { duration: Theme.motion ? 120 : 0 } }
+                        Text { anchors.centerIn: parent; text: "\u2713"; color: "white"; font.pixelSize: 11; font.bold: true
+                            visible: row.on; scale: row.on ? 1 : 0.6
+                            Behavior on scale { NumberAnimation { duration: Theme.motion ? 160 : 0; easing.type: Easing.OutBack } } }
+                    }
+                    Text {
+                        anchors { left: box.right; leftMargin: 10; right: count.left; rightMargin: 10; verticalCenter: parent.verticalCenter }
+                        text: row.modelData.name
+                        elide: Text.ElideMiddle
+                        color: row.on ? Theme.text : Theme.muted
+                        font.pixelSize: 13
+                    }
+                    Text {
+                        id: count
+                        anchors { right: parent.right; rightMargin: 12; verticalCenter: parent.verticalCenter }
+                        text: row.modelData.videos === 1 ? "1 video" : row.modelData.videos + " videos"
+                        color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10
+                    }
+                    MouseArea {
+                        id: hit
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        enabled: !row.modelData.inherited
+                        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                        onClicked: {
+                            Backend.setSubfolderIncluded(root.folderId, row.modelData.rel, !row.on)
+                            root.after(); root.loadSubs()
+                        }
+                    }
+                }
+            }
         }
 
         Caption { text: "SCRAPING" }

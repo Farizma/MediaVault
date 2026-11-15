@@ -375,9 +375,58 @@ _SELECT = ("SELECT m.*, COALESCE(w.last_position,0) AS last_position, "
            "FROM media_items m LEFT JOIN watch_history w ON w.media_uuid=m.uuid ")
 
 
-def list_media(dir_id: int | None = None) -> list[dict]:
+def list_media(dir_id: int | None = None, everything: bool = False) -> list[dict]:
+    """A folder's titles (None: every folder's), leaving out the subfolders you unticked in its Configure window.
+    everything: those too (clean-up and backups must still know their artwork)."""
     where, args = ("WHERE m.parent_directory_id=? ", (dir_id,)) if dir_id is not None else ("", ())
-    return _rows(conn().execute(_SELECT + where + "ORDER BY m.title COLLATE NOCASE, m.file_path", args))
+    rows = _rows(conn().execute(_SELECT + where + "ORDER BY m.title COLLATE NOCASE, m.file_path", args))
+    skip = {} if everything else excluded_prefixes()
+    if not skip:
+        return rows
+    return [r for r in rows if not any(r["file_path"].startswith(p) for p in skip.get(r["parent_directory_id"], ()))]
+
+
+# ---------------------------------------------------------------- subfolders left out of a folder's library
+
+def excluded_subfolders(dir_id: int) -> list[str]:
+    """The subfolders of a library folder you unticked, relative to it ("Extras", "Season 1/Behind the scenes")."""
+    try:
+        return list(json.loads(get_setting("excluded_subfolders", "{}") or "{}").get(str(int(dir_id)), []))
+    except (TypeError, ValueError, AttributeError):
+        return []
+
+
+def set_excluded_subfolders(dir_id: int, rels) -> None:
+    try:
+        now = dict(json.loads(get_setting("excluded_subfolders", "{}") or "{}"))
+    except (TypeError, ValueError):
+        now = {}
+    clean = sorted({os.path.normpath(r) for r in rels if r and not os.path.isabs(r) and not r.startswith("..")})
+    # a subfolder inside one already left out says nothing more
+    keep = [r for r in clean if not any(r != o and r.startswith(o + os.sep) for o in clean)]
+    if keep:
+        now[str(int(dir_id))] = keep
+    else:
+        now.pop(str(int(dir_id)), None)
+    set_setting("excluded_subfolders", json.dumps(now))
+
+
+def excluded_prefixes() -> dict[int, list[str]]:
+    """{folder id: [absolute path + separator, ...]} of every subfolder left out."""
+    try:
+        raw = json.loads(get_setting("excluded_subfolders", "{}") or "{}")
+    except (TypeError, ValueError):
+        return {}
+    if not raw:
+        return {}
+    roots = {d["id"]: d["folder_path"] for d in list_directories()}
+    return {int(k): [norm(os.path.join(roots[int(k)], r)) + os.sep for r in v]
+            for k, v in raw.items() if int(k) in roots and v}
+
+
+def is_excluded(dir_id: int, path: str) -> bool:
+    p = norm(path)
+    return any((p + os.sep).startswith(x) for x in excluded_prefixes().get(dir_id, ()))
 
 
 def get_media(uid: str) -> dict | None:

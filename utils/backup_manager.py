@@ -88,7 +88,7 @@ def pending_restore_path() -> Path:
 
 def _art_folders() -> list[Path]:
     from utils import scraper
-    folders = {scraper._assets(it) for it in db.list_media(None)}
+    folders = {scraper._assets(it) for it in db.list_media(None, everything=True)}
     folders.add(db.data_dir() / "cache")
     return sorted(f for f in folders if f.is_dir())
 

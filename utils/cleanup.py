@@ -71,7 +71,7 @@ def scan() -> list[tuple[Path, int, bool, bool]]:
             continue                         # unplugged: its titles are still in the library
         by_folder: dict[str, set] = {}
         series: set = set()
-        for it in db.list_media(d["id"]):
+        for it in db.list_media(d["id"], everything=True):
             if it["media_type"] == "clip":
                 continue
             folder = os.path.normcase(os.path.dirname(it["file_path"]))
@@ -88,7 +88,7 @@ def scan() -> list[tuple[Path, int, bool, bool]]:
     # 2. the app cache: box sets, home videos, actor photos, 3D box cards
     cache = db.data_dir() / "cache"
     if cache.is_dir():
-        media = db.list_media()
+        media = db.list_media(everything=True)
         uuids = {it["uuid"] for it in media}
         owners = {it["uuid"] for it in media if it["media_type"] == "clip"} | {f"set-{b['id']}" for b in db.box_sets()}
         people = {str(r[0]) for r in db.conn().execute("SELECT DISTINCT person_id FROM cast_members WHERE person_id IS NOT NULL")}

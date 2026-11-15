@@ -27,9 +27,11 @@ def is_video(path) -> bool:
     return p.suffix.lower() in VIDEO_EXTS and scraper.ASSET_DIR not in p.parts
 
 
-def scan_paths(root):
+def scan_paths(root, skip=()):
+    """Every video under root, leaving out our artwork folders and the subfolders in skip (absolute + separator)."""
     for folder, subdirs, files in os.walk(root):
-        subdirs[:] = [d for d in subdirs if d != scraper.ASSET_DIR]
+        subdirs[:] = [d for d in subdirs if d != scraper.ASSET_DIR
+                      and not (db.norm(os.path.join(folder, d)) + os.sep) in skip]
         for f in files:
             if is_video(f):
                 yield os.path.join(folder, f)
@@ -48,7 +50,9 @@ def _headless():
 def index_paths(directory: dict, paths) -> int:
     """Add files not yet in the library. Returns how many were new."""
     known = db.known_paths(directory["id"])
-    new = sorted({db.norm(p) for p in paths if os.path.isfile(p)} - known)
+    skip = db.excluded_prefixes().get(directory["id"], ())      # subfolders left out (the folder's Configure window)
+    found = {db.norm(p) for p in paths if os.path.isfile(p)}
+    new = sorted({p for p in found if not any(p.startswith(x) for x in skip)} - known)
     if not new:
         return 0
     with progress.task(f"Adding {len(new)} file{'s' if len(new) != 1 else ''} \u00B7 {directory.get('tab_name') or 'library'}",
@@ -451,9 +455,11 @@ def scan_directory(directory: dict) -> int:
     root = directory["folder_path"]
     if not os.path.isdir(root):
         return 0  # drive unplugged: keep the library entries
-    found = {db.norm(p) for p in scan_paths(root)}
-    # Prune only when something was found: an empty result usually means a share that did not mount.
-    gone = db.known_paths(directory["id"]) - found if found else set()
+    skip = db.excluded_prefixes().get(directory["id"], [])
+    found = {db.norm(p) for p in scan_paths(root, set(skip))}
+    # Prune only when something was found: an empty result usually means a share that did not mount. Titles in a
+    # subfolder you left out are kept (hidden), so their tags and history are there if you tick it again.
+    gone = {p for p in db.known_paths(directory["id"]) - found if not any(p.startswith(x) for x in skip)} if found else set()
     if gone:
         db.remove_under(gone)
     return index_paths(directory, found)
@@ -467,6 +473,8 @@ class _Handler(FileSystemEventHandler):
 
     def _add(self, path, is_dir):
         if scraper.ASSET_DIR in Path(path).parts:  # our own poster writes must not trigger a rescan
+            return
+        if db.is_excluded(self.dir_id, path):     # a subfolder you left out (the folder's Configure window)
             return
         if is_dir:
             self.w.queue(self.dir_id, scan=[path])

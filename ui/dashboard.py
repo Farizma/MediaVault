@@ -119,6 +119,41 @@ MATCH_SOURCES_LABEL = {"tmdb": "TMDB", "tmdbset": "TMDB collections", "tvmaze": 
                        "mal": "MyAnimeList", "kitsu": "Kitsu"}
 
 
+SUBFOLDER_DEPTH = 4         # Configure > Subfolders lists this deep
+SUBFOLDER_ROWS = 400
+
+
+def subfolder_rows(root: str, excluded: list[str]) -> list[dict]:
+    """A library folder's subfolders, in tree order, with how many videos each holds (itself and below). A subfolder
+    inside one that is left out is marked inherited."""
+    from watcher import VIDEO_EXTS
+    counts: dict[str, int] = {}
+    dirs: list[str] = []
+    for folder, subdirs, files in os.walk(root):
+        subdirs[:] = sorted((x for x in subdirs if x != scraper.ASSET_DIR and not x.startswith(".")), key=str.casefold)
+        rel = os.path.relpath(folder, root)
+        n = sum(1 for f in files if os.path.splitext(f)[1].lower() in VIDEO_EXTS)
+        if rel != ".":
+            dirs.append(rel)
+        # each video counts for its own folder and every folder above it
+        parts = [] if rel == "." else rel.split(os.sep)
+        for i in range(1, len(parts) + 1):
+            k = os.sep.join(parts[:i])
+            counts[k] = counts.get(k, 0) + n
+    out = set(os.path.normpath(r) for r in excluded)
+    rows = []
+    for rel in dirs:
+        depth = rel.count(os.sep)
+        if depth >= SUBFOLDER_DEPTH:
+            continue
+        above = [os.sep.join(rel.split(os.sep)[:i]) for i in range(1, depth + 1)]
+        rows.append({"rel": rel, "name": os.path.basename(rel), "depth": depth, "videos": counts.get(rel, 0),
+                     "excluded": rel in out, "inherited": any(a in out for a in above)})
+        if len(rows) >= SUBFOLDER_ROWS:
+            break
+    return rows
+
+
 def wide_picture(card: dict, art: dict, files: "FolderIndex"):
     """What a card shows in a Landscape tab: the frame you picked (or one taken from the video), else the banner,
     else the first Gallery still, else a frame you captured in the player. None: nothing wide yet."""
@@ -602,6 +637,7 @@ class Dashboard(QObject):
     recentChanged = Signal()
     controlsChanged = Signal()         # a binding changed, or a controller came or went
     layoutChanged = Signal()           # the tab shown now is a DVD tab (grid / shelf) or a Landscape one
+    subfoldersReady = Signal(int, "QVariantList")    # folder id, its subfolders (Configure > Subfolders)
     padButton = Signal(str)            # a controller button, while Settings > Controls waits for one
     minimizeWindow = Signal()          # picture in picture: only the small video window stays on screen
     thumbnailsReady = Signal(int)
@@ -950,6 +986,45 @@ class Dashboard(QObject):
         if on != self.library.landscape:
             self.library.landscape = on
             self.layoutChanged.emit()
+
+    # -- a folder's subfolders: each can be left out of the library (with everything inside it)
+    @Slot(int)
+    def listSubfolders(self, dir_id: int):
+        """In the background (a big drive takes a moment): subfoldersReady(dir_id, rows) with rows
+        [{rel, name, depth, videos, excluded, inherited}] in tree order. videos: in it and below it."""
+        d = db.get_directory(dir_id)
+        if not d:
+            return
+        out_rel = db.excluded_subfolders(dir_id)
+
+        def work():
+            self.subfoldersReady.emit(dir_id, subfolder_rows(d["folder_path"], out_rel))
+        threading.Thread(target=work, daemon=True, name="subfolders").start()
+
+    @Slot(int, str, bool)
+    def setSubfolderIncluded(self, dir_id: int, rel: str, included: bool):
+        """Tick: the subfolder is back (new files in it are added); untick: its titles leave the tab, the scan, scraping
+        and the watcher, but keep their tags, notes and history for when you tick it again."""
+        d = db.get_directory(dir_id)
+        if not d or not rel or os.path.isabs(rel) or rel.startswith(".."):
+            return
+        rel = os.path.normpath(rel)
+        now = db.excluded_subfolders(dir_id)
+        if included:
+            now = [r for r in now if r != rel]
+        else:
+            now = [r for r in now if not r.startswith(rel + os.sep)] + [rel]
+        db.set_excluded_subfolders(dir_id, now)
+        self.reload()
+        if included:                          # files added while it was left out
+            def work():
+                import watcher
+                try:
+                    if watcher.index_paths(d, watcher.scan_paths(os.path.join(d["folder_path"], rel))):
+                        self.libraryChanged.emit()
+                except Exception:
+                    log.warning("adding %s", rel, exc_info=True)
+            threading.Thread(target=work, daemon=True, name="subfolder-scan").start()
 
     @Slot(int, bool)
     def setTabLandscape(self, tab: int, on: bool):
@@ -2366,6 +2441,7 @@ class Dashboard(QObject):
                  "continueRow": d["id"] not in set(db.hidden("continue_dirs")),
                  "recentRow": d["id"] not in set(db.hidden("recent_dirs")),
                  "landscape": d["id"] in set(db.hidden("landscape_dirs")),
+                 "leftOut": len(db.excluded_subfolders(d["id"])),
                  "private": d["id"] in db.private_dirs()} for d in db.list_directories()]
 
     @Slot(result="QVariantList")
