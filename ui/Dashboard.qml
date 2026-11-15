@@ -208,6 +208,7 @@ Item {
         var a = Backend.keyAction(e.key, e.modifiers)
         if (a === "nextTab" || a === "prevTab") { stepTab(a === "nextTab" ? 1 : -1); e.accepted = true }
         else if (a === "back" && selCount > 0) { selClear(); e.accepted = true }
+        else if (a === "back" && Backend.folderMode && Backend.subtab !== "") { openFolder(""); e.accepted = true }
         else if (["up", "down", "left", "right", "viewMore", "play"].indexOf(a) >= 0 && !grid.activeFocus) {
             grid.forceActiveFocus(); keyNav = true
             if (grid.currentIndex < 0) grid.currentIndex = 0
@@ -215,6 +216,13 @@ Item {
         }
     }
     Keys.onPressed: (e) => pageKey(e)
+    // a folder-cards tab (Artists): its cards first; a card opens that folder's videos
+    readonly property bool folderHome: Backend.folderMode && Backend.subtab === ""
+    function subName(rel) { return rel === "*" ? "All videos" : rel === "~" ? "Unsorted" : rel }
+    function openFolder(rel) {
+        dash.selClear(); dash.stagger = true; staggerOff.restart()
+        Backend.selectSubtab(rel); grid.keptY = -1; grid.userScrolled = false; grid.positionViewAtBeginning()
+    }
     function setShelf(on) { shelf = on; stagger = true; staggerOff.restart(); grid.keptY = -1; Backend.setShelf(on); grid.keptY = -1; grid.userScrolled = false; grid.positionViewAtBeginning() }
     Timer { id: searchDebounce; interval: 160; onTriggered: dash.applyView() }
     Shortcut { sequences: [StandardKey.Find]; onActivated: if (dash.searchField) { grid.contentY = grid.originY; dash.searchField.forceActiveFocus() } }
@@ -657,9 +665,11 @@ Item {
                         spacing: 10
                         Row {
                             spacing: 12
-                            Text { id: catalogTitle; text: dash.currentTabName + (Backend.subtab !== "" ? " \u203A " + Backend.subtab : "") + (dash.shelfView ? " Shelf" : " Catalog"); color: "#FFFFFF"; font.pixelSize: 20; font.weight: Font.ExtraBold; font.letterSpacing: -0.4
+                            Text { id: catalogTitle; text: dash.currentTabName + (Backend.subtab !== "" ? " \u203A " + dash.subName(Backend.subtab) : "") + (dash.folderHome ? "" : dash.shelfView ? " Shelf" : " Catalog"); color: "#FFFFFF"; font.pixelSize: 20; font.weight: Font.ExtraBold; font.letterSpacing: -0.4
                                 elide: Text.ElideRight; width: Math.min(implicitWidth, catalogCol.width - 140) }
-                            Text { anchors.baseline: catalogTitle.baseline; text: grid.count + (grid.count === 1 ? " title" : " titles"); color: "#66FFFFFF"; font.family: Theme.mono; font.pixelSize: 12 }
+                            Text { anchors.baseline: catalogTitle.baseline; color: "#66FFFFFF"; font.family: Theme.mono; font.pixelSize: 12
+                                text: dash.folderHome ? folderGrid.shown + (folderGrid.shown === 1 ? " folder" : " folders")
+                                                      : grid.count + (grid.count === 1 ? " title" : " titles") }
                         }
                         // subtabs: the tab's first-level subfolders (Movies > All, English, Japanese). A pill slides to the one chosen
                         Item {
@@ -668,7 +678,7 @@ Item {
                             readonly property string current: Backend.subtab
                             width: parent.width
                             height: 34
-                            visible: rows.length > 0
+                            visible: rows.length > 0 && !Backend.folderMode
                             Flickable {
                                 id: subFlick
                                 anchors.fill: parent
@@ -722,6 +732,18 @@ Item {
                                 }
                             }
                         }
+                        // a folder-cards tab: on its cards, how they are sorted; inside one, the way back
+                        Row {
+                            visible: Backend.folderMode
+                            spacing: 8
+                            GlassButton { small: true; visible: Backend.subtab !== ""; glyph: "\u2039"; label: "All " + dash.currentTabName.toLowerCase()
+                                tip: "Back to the cards (Esc)"; onClicked: dash.openFolder("") }
+                            Repeater {
+                                model: dash.folderHome ? [["name", "A\u2013Z"], ["count", "Most videos"], ["recent", "Newest"]] : []
+                                Pill { height: 32; label: modelData[1]; accent: Theme.blue
+                                    selected: Backend.folderSort === modelData[0]; onClicked: Backend.setFolderSort(modelData[0]) }
+                            }
+                        }
                         // sort and filters on the left (they wrap on a narrow window); the view switch and search stay on the right
                         // plain anchors, not a RowLayout: a wrapping Flow inside a layout makes Qt re-lay out forever
                         Item {
@@ -729,12 +751,13 @@ Item {
                             height: Math.max(filterFlow.height, viewTools.height)
                             Flow {
                                 id: filterFlow
+                                visible: !dash.folderHome
                                 anchors { left: parent.left; right: viewTools.left; rightMargin: 12; top: parent.top }
                                 spacing: 8
                                 Dropdown { prefix: "Sort: "; options: dash.opts.sorts || []; value: dash.sort; onChosen: (v) => { dash.sort = v; dash.applyView() } }
                                 Dropdown { options: dash.opts.genres || []; value: dash.genre; onChosen: (v) => { dash.genre = v; dash.applyView() } }
                                 Dropdown { options: dash.opts.qualities || []; value: dash.quality; onChosen: (v) => { dash.quality = v; dash.applyView() } }
-                                Pill { height: 32; label: "Unwatched"; selected: dash.unwatched; accent: Theme.blue; onClicked: { dash.unwatched = !dash.unwatched; dash.applyView() } }
+                                Pill { height: 32; label: "Unwatched"; visible: Backend.trackWatched; selected: dash.unwatched; accent: Theme.blue; onClicked: { dash.unwatched = !dash.unwatched; dash.applyView() } }
                                 Pill { height: 32; label: "\u2665 Favourites"; selected: dash.mark === "favourite"; accent: Theme.red; onClicked: dash.setMark("favourite") }
                                 Pill { height: 32; label: "Watchlist"; selected: dash.mark === "watchlist"; accent: Theme.green; onClicked: dash.setMark("watchlist") }
                                 Pill { height: 32; label: "Continue Watching"; selected: dash.showContinue; accent: Theme.green; onClicked: dash.toggleRow("continue") }
@@ -756,6 +779,7 @@ Item {
                                 // this tab back to DVD cases, and the grid-or-shelf choice is shared by every DVD tab
                                 Rectangle {
                                     id: layoutSwitch
+                                    visible: !dash.folderHome
                                     readonly property int chosen: dash.landscape ? 2 : dash.shelf ? 1 : 0
                                     implicitWidth: 226; implicitHeight: 32; radius: 10
                                     color: "#99000000"; border.color: Theme.line
@@ -789,7 +813,7 @@ Item {
                                     Behavior on width { NumberAnimation { duration: 220 * Theme.motion; easing.type: Easing.OutCubic } }
                                     implicitHeight: 32
                                     topPadding: 6; bottomPadding: 6; leftPadding: 30
-                                    placeholderText: "Search library"
+                                    placeholderText: dash.folderHome ? "Search " + dash.currentTabName.toLowerCase() : "Search library"
                                     text: dash.query
                                     onTextEdited: { dash.query = text; searchDebounce.restart() }
                                     Keys.onEscapePressed: { text = ""; dash.query = ""; dash.applyView(); grid.forceActiveFocus() }
@@ -797,6 +821,24 @@ Item {
                                     Text { x: 11; anchors.verticalCenter: parent.verticalCenter; text: "\u2315"; color: Theme.faint; font.pixelSize: 14 }
                                 }
                                                     }
+                        }
+                        // the cards: favourites first; search filters them by name. Right-click: picture, favourite
+                        Grid {
+                            id: folderGrid
+                            visible: dash.folderHome
+                            width: parent.width
+                            columns: grid.columns
+                            columnSpacing: grid.gap
+                            rowSpacing: 22
+                            readonly property var shownCards: (Backend.folderCards || []).filter(function(c) {
+                                return dash.query === "" || c.kind !== "folder" || c.name.toLowerCase().indexOf(dash.query.toLowerCase()) >= 0 })
+                            readonly property int shown: shownCards.filter(function(c) { return c.kind === "folder" }).length
+                            Repeater {
+                                model: dash.folderHome ? folderGrid.shownCards : []
+                                FolderCard { width: dash.cardW; info: modelData
+                                    onOpen: dash.openFolder(modelData.rel)
+                                    onMenu: (item, x, y) => folderMenu.show(modelData, item, x, y) }
+                            }
                         }
                     }
                     Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Theme.line }
@@ -806,9 +848,9 @@ Item {
 
             footer: Item {
                 width: grid.width
-                height: grid.count === 0 ? 300 : 40
+                height: grid.count === 0 && !dash.folderHome ? 300 : 40
                 Column {
-                    visible: grid.count === 0
+                    visible: grid.count === 0 && !dash.folderHome
                     anchors.centerIn: parent
                     spacing: 10
                     Rectangle { anchors.horizontalCenter: parent.horizontalCenter; width: 48; height: 48; radius: 16; color: Theme.fill; border.color: Theme.line
@@ -1381,9 +1423,9 @@ Item {
                     { t: "Play", show: !cardMenu.many, f: function() { dash.playCard(cardMenu.key) } },
                     { t: "View More", show: !cardMenu.many, f: function() { detail.open(cardMenu.key, cardMenu.from, "button") } },
                     { line: true, show: !cardMenu.many },
-                    { t: cardMenu.row.done && !cardMenu.many ? "Mark unwatched" : "Mark watched", show: true,
+                    { t: cardMenu.row.done && !cardMenu.many ? "Mark unwatched" : "Mark watched", show: Backend.trackWatched,
                       f: function() { Backend.setWatched(cardMenu.keys, !(cardMenu.row.done && !cardMenu.many)) } },
-                    { t: "Mark unwatched", show: cardMenu.many, f: function() { Backend.setWatched(cardMenu.keys, false) } },
+                    { t: "Mark unwatched", show: cardMenu.many && Backend.trackWatched, f: function() { Backend.setWatched(cardMenu.keys, false) } },
                     { t: cardMenu.row.fav && !cardMenu.many ? "Remove from Favourites" : "Add to Favourites", show: true,
                       f: function() { Backend.setMark(cardMenu.keys, "favourite", !(cardMenu.row.fav && !cardMenu.many)) } },
                     { t: cardMenu.row.watch && !cardMenu.many ? "Remove from Watchlist" : "Add to Watchlist", show: true,
@@ -1405,6 +1447,48 @@ Item {
                     Text { visible: !modelData.line; x: 10; anchors.verticalCenter: parent.verticalCenter; text: modelData.t || ""; color: Theme.text; font.pixelSize: 13 }
                     MouseArea { id: miArea; anchors.fill: parent; enabled: !modelData.line; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
                         onClicked: cardMenu.act(modelData.f) }
+                }
+            }
+        }
+    }
+
+    // ---- right-click menu for a folder card: its picture, and pinning it to the front
+    Popup {
+        id: folderMenu
+        property var info: ({})
+        function show(info, item, mx, my) {
+            folderMenu.info = info
+            var p = item.mapToItem(dash, mx, my)
+            x = Math.max(8, Math.min(p.x, dash.width - width - 8)); y = Math.max(8, Math.min(p.y, dash.height - implicitHeight - 8))
+            open()
+        }
+        z: 60
+        width: 230
+        padding: 6
+        transformOrigin: Item.TopLeft
+        enter: Transition { ParallelAnimation {
+            NumberAnimation { property: "opacity"; from: 0; to: 1; duration: 120 * Theme.motion }
+            NumberAnimation { property: "scale"; from: 0.94; to: 1; duration: 160 * Theme.motion; easing.type: Easing.OutCubic } } }
+        exit: Transition { NumberAnimation { property: "opacity"; to: 0; duration: 90 * Theme.motion } }
+        background: Rectangle { radius: 12; color: Theme.graphite; border.color: "#33FFFFFF" }
+        contentItem: Column {
+            spacing: 1
+            Repeater {
+                model: [
+                    { t: "Open", show: true, f: function() { dash.openFolder(folderMenu.info.rel) } },
+                    { t: "Choose a picture\u2026", show: folderMenu.info.kind === "folder", f: function() { Backend.setFolderPicture(folderMenu.info.rel) } },
+                    { t: "Remove the picture", show: folderMenu.info.kind === "folder" && folderMenu.info.picture !== "",
+                      f: function() { Backend.clearFolderPicture(folderMenu.info.rel) } },
+                    { t: folderMenu.info.fav ? "Unpin from the front" : "Pin to the front", show: folderMenu.info.kind === "folder",
+                      f: function() { Backend.toggleFolderFav(folderMenu.info.rel) } }
+                ]
+                Item {
+                    visible: modelData.show
+                    width: 218; height: 32
+                    Rectangle { anchors.fill: parent; radius: 7; color: fmArea.containsMouse ? Qt.rgba(1, 1, 1, 0.12) : "transparent" }
+                    Text { x: 10; anchors.verticalCenter: parent.verticalCenter; text: modelData.t; color: Theme.text; font.pixelSize: 13 }
+                    MouseArea { id: fmArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                        onClicked: { folderMenu.close(); modelData.f() } }
                 }
             }
         }

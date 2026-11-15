@@ -100,7 +100,7 @@ MATCH_FIELDS = ("title", "year", "synopsis", "poster", "banner", "disc", "genres
 MATCH_SOURCES = ("tmdb", "anilist", "omdb", "tvmaze", "mal", "kitsu", "tpdb")
 SET_FIELDS = ("title", "synopsis", "poster", "banner", "disc")     # what a box set's own page can take
 HIDDEN_KINDS = ("all_dirs", "all_tags", "insights_dirs", "continue_dirs", "private_dirs", "recent_dirs", "landscape_dirs",
-                "nosubtab_dirs")
+                "nosubtab_dirs", "folders_dirs", "nowatch_dirs", "partsets_dirs")
 UPLOAD_FIELDS = ("poster", "banner", "disc", "gallery")      # the "Upload file" tile in the window
 PERCENT_SOURCES = ("anilist", "kitsu")                        # scores shown as a percentage
 GALLERY_PICK_MAX = 40                                         # Gallery images offered per result, to pick one by one
@@ -118,6 +118,60 @@ def episode_row(e: dict) -> dict:
 GALLERY_DROP_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".avif"}
 MATCH_SOURCES_LABEL = {"tmdb": "TMDB", "tmdbset": "TMDB collections", "tvmaze": "TVmaze", "omdb": "IMDb", "anilist": "AniList",
                        "mal": "MyAnimeList", "kitsu": "Kitsu", "tpdb": "ThePornDB"}
+
+
+def folder_favs() -> dict:
+    try:
+        return dict(json.loads(db.get_setting("folder_favs", "{}") or "{}"))
+    except (TypeError, ValueError):
+        return {}
+
+
+def folder_picture_path(dir_id: int, rel: str) -> Path:
+    import zlib
+    return db.data_dir() / "folders" / f"{int(dir_id)}-{zlib.crc32(rel.encode()):08x}.webp"
+
+
+FOLDER_COVERS = 4        # a folder card without your picture: a mosaic of its first covers
+
+
+def folder_cards(dir_id: int, root: str, items: list[dict], rows: list[dict], loose: bool, sort: str) -> list[dict]:
+    """The cards of a folder-cards tab: All videos, Unsorted (loose files), then one per subfolder, favourites first.
+    [{rel, name, count, fav, picture, covers, kind}]"""
+    files = FolderIndex()
+    favs = set(folder_favs().get(str(dir_id), []))
+    by_top: dict[str, list] = {}
+    for it in items:
+        rel = os.path.relpath(it["file_path"], root)
+        by_top.setdefault(rel.split(os.sep, 1)[0] if os.sep in rel else "~", []).append(it)
+
+    def covers(its):
+        out = []
+        for it in sorted(its, key=lambda i: (i.get("added_at") or "", i["title"].lower()), reverse=True):
+            for p in (scraper.cover_path(it, files.has), scraper.thumb_path(it)):
+                if files.has(p):
+                    out.append(files.url(p))
+                    break
+            if len(out) >= FOLDER_COVERS:
+                break
+        return out
+
+    def card(rel, name, its, kind):
+        pic = folder_picture_path(dir_id, rel)
+        return {"rel": rel, "name": name, "count": len(its), "fav": rel in favs, "kind": kind,
+                "picture": file_url(pic) if pic.exists() else "", "covers": covers(its),
+                "recent": max((i.get("added_at") or "" for i in its), default="")}
+    out = [card(r["rel"], r["name"], by_top.get(r["rel"], []), "folder") for r in rows]
+    out.sort(key=lambda c: c["name"].casefold())
+    if sort == "count":
+        out.sort(key=lambda c: -c["count"])
+    elif sort == "recent":
+        out.sort(key=lambda c: c["recent"], reverse=True)
+    out.sort(key=lambda c: not c["fav"])                 # favourites first, each group in the chosen order
+    head = [card("*", "All videos", items, "all")]
+    if loose:
+        head.append(card("~", "Unsorted", by_top.get("~", []), "loose"))
+    return head + out
 
 
 def subtab_rows(root: str, items: list[dict]) -> list[dict]:
@@ -467,6 +521,9 @@ class LibraryModel(QAbstractListModel):
         self.private_closed: set = set()   # private folders not signed in to: their titles are left out everywhere
         self.mark = ""                 # "favourite" / "watchlist": show only those
         self.under = ""                # a subtab: only cards whose file is under this folder (absolute, ends in a separator)
+        self.root_only = ""            # Unsorted: only files right in this folder (its loose files)
+        self.hide_all = False          # a folder-cards tab on its cards: the grid shows nothing
+        self.nowatch: set = set()      # folders that do not track watched (no progress bars or ticks)
         self._marks: dict = {}
 
     @Slot(int, int, result="QVariantList")
@@ -490,6 +547,8 @@ class LibraryModel(QAbstractListModel):
 
     def _row(self, card: dict, online: bool, files: "FolderIndex") -> dict:
         row = self._card_row(card, online, files)
+        if card.get("parent_directory_id") in self.nowatch:      # this folder does not track watched
+            row["progress"], row["done"] = 0.0, False
         row["fav"] = card["key"] in self._marks.get("favourite", ())
         row["watch"] = card["key"] in self._marks.get("watchlist", ())
         return row
@@ -540,7 +599,12 @@ class LibraryModel(QAbstractListModel):
         self._marks = db.marks()
         online = {d["id"]: os.path.isdir(d["folder_path"]) for d in db.list_directories()}   # one check per folder
         marked = self._marks.get(self.mark) if self.mark else None
-        shown = [c for c in cards if (c.get("file_path") or "").startswith(self.under)] if self.under else cards
+        if self.hide_all:
+            shown = []
+        elif self.root_only:
+            shown = [c for c in cards if os.path.dirname(c.get("file_path") or "") == self.root_only]
+        else:
+            shown = [c for c in cards if (c.get("file_path") or "").startswith(self.under)] if self.under else cards
         shown = library_view(shown, index, **self.view, marked=marked) if (self.view or marked is not None) else shown
         files = FolderIndex()               # one listing per art folder instead of several file checks per card
         rows = [self._row(c, online.get(c["parent_directory_id"], True), files) for c in shown]
@@ -692,6 +756,8 @@ class Dashboard(QObject):
         self._needs_setup = True
         self._tab = -1
         self._subtabs: list = []
+        self._folder_cards: list = []
+        self._folder_mode = False
         self._subtab_of: dict[int, str] = {}        # the subtab each tab was left on (this session)
         self._billboard, self._insights = {"visible": False, "items": []}, {}
         self._bb_keys: list[str] = []  # the carousel deck; kept across refreshes so it does not reshuffle
@@ -1017,18 +1083,94 @@ class Dashboard(QObject):
 
     def _refresh_subtabs(self):
         d = db.get_directory(self._tab) if self._tab >= 0 else None
-        rows = [] if not d or self._tab in set(db.hidden("nosubtab_dirs")) else subtab_rows(d["folder_path"], db.list_media(self._tab))
+        folder_mode = bool(d) and self._tab in set(db.hidden("folders_dirs"))
+        self.library.nowatch = set(db.hidden("nowatch_dirs"))
+        items = db.list_media(self._tab) if d else []
+        rows = [] if not d or (self._tab in set(db.hidden("nosubtab_dirs")) and not folder_mode) \
+            else subtab_rows(d["folder_path"], items)
+        loose = bool(d) and any(os.path.dirname(it["file_path"]) == d["folder_path"] for it in items)
         rel = self._subtab_of.get(self._tab, "")
-        if rel and rel not in {r["rel"] for r in rows}:        # its subfolder is gone (or left out)
+        allowed = {r["rel"] for r in rows} | ({"*"} | ({"~"} if loose else set()) if folder_mode else set())
+        if rel and rel not in allowed:                         # its subfolder is gone (or left out)
             rel = self._subtab_of[self._tab] = ""
-        under = (db.norm(os.path.join(d["folder_path"], rel)) + os.sep) if d and rel else ""
-        if rows != self._subtabs or under != self.library.under:
-            self._subtabs, self.library.under = rows, under
+        root = d["folder_path"] if d else ""
+        under = (db.norm(os.path.join(root, rel)) + os.sep) if d and rel and rel not in ("*", "~") else ""
+        flags = (under, root if rel == "~" else "", folder_mode and rel == "")
+        cards = folder_cards(self._tab, root, items, rows, loose, db.get_setting("folder_sort", "name") or "name") \
+            if folder_mode else []
+        if (rows, flags, cards, folder_mode) != (self._subtabs, (self.library.under, self.library.root_only,
+                                                                  self.library.hide_all), self._folder_cards, self._folder_mode):
+            self._subtabs, self._folder_cards, self._folder_mode = rows, cards, folder_mode
+            self.library.under, self.library.root_only, self.library.hide_all = flags
+            self.subtabsChanged.emit()
+
+    # -- a folder-cards tab (Configure > Open on folder cards): one card per subfolder (an artist), then its videos
+    @Property(bool, notify=subtabsChanged)
+    def folderMode(self):
+        return self._folder_mode
+
+    @Property("QVariantList", notify=subtabsChanged)
+    def folderCards(self):
+        return self._folder_cards
+
+    @Property(bool, notify=subtabsChanged)
+    def trackWatched(self):
+        return self._tab not in set(db.hidden("nowatch_dirs"))
+
+    @Property(str, notify=subtabsChanged)
+    def folderSort(self):
+        return db.get_setting("folder_sort", "name") or "name"
+
+    @Slot(str)
+    def setFolderSort(self, how: str):
+        if how in ("name", "count", "recent"):
+            db.set_setting("folder_sort", how)
+            self._refresh_subtabs()
             self.subtabsChanged.emit()
 
     @Slot(str)
+    def toggleFolderFav(self, rel: str):
+        favs = folder_favs()
+        mine = set(favs.get(str(self._tab), []))
+        mine.symmetric_difference_update({rel})
+        favs[str(self._tab)] = sorted(mine)
+        db.set_setting("folder_favs", json.dumps(favs))
+        self._refresh_subtabs()
+
+    @Slot(str)
+    def setFolderPicture(self, rel: str):
+        """Your own picture for a folder card (an artist's photo)."""
+        d = db.get_directory(self._tab) if self._tab >= 0 else None
+        if not d:
+            return
+        path = pick_image(os.path.join(d["folder_path"], rel), f"Choose a picture for {rel}")
+        if not path:
+            return
+        from PIL import Image, ImageOps
+        try:
+            with Image.open(path) as img:
+                pic = ImageOps.fit(img.convert("RGB"), (512, 512), Image.Resampling.LANCZOS, centering=(0.5, 0.35))
+            dest = folder_picture_path(self._tab, rel)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            pic.save(dest, "WEBP", quality=88)
+        except Exception as e:
+            log.warning("folder picture %s: %s", path, e)
+            self.toast.emit("That file is not a picture Media Vault can read")
+            return
+        self._refresh_subtabs()
+
+    @Slot(str)
+    def clearFolderPicture(self, rel: str):
+        try:
+            folder_picture_path(self._tab, rel).unlink()
+        except OSError:
+            pass
+        self._refresh_subtabs()
+
+    @Slot(str)
     def selectSubtab(self, rel: str):
-        """"" = All. Only this tab's grid follows; its rows (Continue Watching, Recently Added) show the whole tab."""
+        """"" = All (on a folder-cards tab: the cards; "*" every video, "~" the loose files). Only this tab's grid
+        follows; its rows (Continue Watching, Recently Added) show the whole tab."""
         if self._tab < 0 or rel == self._subtab_of.get(self._tab, ""):
             return
         self._subtab_of[self._tab] = rel
@@ -1159,7 +1301,8 @@ class Dashboard(QObject):
         rows = []
         if db.get_setting("continue_watching", "1") != "0" and self._tab not in set(db.hidden("continue_dirs")):
             files = FolderIndex()
-            started = [c for c in cards if not c["is_completed"] and (
+            quiet = set(db.hidden("nowatch_dirs"))
+            started = [c for c in cards if c.get("parent_directory_id") not in quiet and not c["is_completed"] and (
                 (c["last_position"] or 0) > 10 or (c["watched"] and (c["episodes"] or c.get("films"))))]
             started.sort(key=lambda c: c.get("last_watched") or "", reverse=True)
             pref = self.library.title_pref
@@ -2583,6 +2726,9 @@ class Dashboard(QObject):
                  "landscape": d["id"] in set(db.hidden("landscape_dirs")),
                  "leftOut": len(db.excluded_subfolders(d["id"])),
                  "subtabs": d["id"] not in set(db.hidden("nosubtab_dirs")),
+                 "folders": d["id"] in set(db.hidden("folders_dirs")),
+                 "trackWatched": d["id"] not in set(db.hidden("nowatch_dirs")),
+                 "partSets": d["id"] in set(db.hidden("partsets_dirs")),
                  "private": d["id"] in db.private_dirs()} for d in db.list_directories()]
 
     @Slot(result="QVariantList")
@@ -2618,6 +2764,14 @@ class Dashboard(QObject):
         now = set(db.hidden(kind))
         now.symmetric_difference_update({v})
         db.set_hidden(kind, now)
+        if kind == "partsets_dirs":          # box sets from "Part 1 / Ep 1" names: make them, or undo them
+            if v in now:
+                n = db.group_parts(v)
+                self.toast.emit(f"{n} box set{'s' if n != 1 else ''} made from part and episode numbers")
+            else:
+                db.ungroup_parts(v)
+        if kind == "folders_dirs":
+            self._subtab_of.pop(v, None)
         if kind == "insights_dirs":
             self._refresh_insights()
         else:

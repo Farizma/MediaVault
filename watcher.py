@@ -63,6 +63,7 @@ def index_paths(directory: dict, paths) -> int:
 def _index(directory: dict, new: list, t) -> int:
     scrape = bool(directory["should_scrape"])
     adult = (directory.get("source") or "tmdb") == "tpdb"     # scenes and movies: each file is its own title
+    parts = directory["id"] in set(db.hidden("partsets_dirs"))   # "Title Ep 2" is part of a box set, not an episode
     auto = db.get_setting("auto_tags", "1") != "0"     # tags from folders and file names (Settings > Library)
     hp = _headless()
     rows, tags = [], []
@@ -70,12 +71,14 @@ def _index(directory: dict, new: list, t) -> int:
         for p in new:
             t.step(detail=Path(p).name)
             parsed = scraper.clean_name(p, fallback=Path(p).parent.name)
-            kind = "clip" if not scrape else "show" if parsed.episode is not None and not adult else "movie"
+            kind = "clip" if not scrape else "show" if parsed.episode is not None and not (adult or parts) else "movie"
             title = parsed.title
             if kind == "show":
                 title += f" S{parsed.season or 1:02d}E{parsed.episode:02d}"
             elif adult:
                 title = tpdb.query_name(p).replace(".", " ").strip() or title    # until ThePornDB answers
+            if parts and db.part_name(name := re.sub(r"[._]+", " ", Path(p).stem).strip()):
+                title = name                       # keep "Ep 2" in the title: it tells the parts of a set apart
             row = {"uuid": db.file_id(p), "file_path": p, "parent_directory_id": directory["id"],
                    "title": title, "media_type": kind, "release_date": parsed.year}
             row.update(media_probe.probe(p, hp) if hp else {"container": Path(p).suffix.lower()})
@@ -96,6 +99,8 @@ def _index(directory: dict, new: list, t) -> int:
         tags.extend((row["uuid"], autotag.PREFIX + t)
                     for t in tagrules.computed_tags(row, info, directory["folder_path"], rules, auto))
     db.add_items([r for r, _ in rows], tags)  # the one collective write
+    if parts:
+        db.group_parts(directory["id"])
     if scrape and "poster" in db.scrape_opts(directory):      # a DVD / Blu-ray scan kept beside the new files
         try:
             boxart.scan(directory, only={r["uuid"] for r, _ in rows})

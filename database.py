@@ -11,6 +11,7 @@ import re
 import sqlite3
 import threading
 import uuid
+import zlib
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -537,7 +538,7 @@ def list_library(dir_id: int | None = None, sets: bool | None = None) -> list[di
     for r in list_media(dir_id):
         if r["media_type"] == "show":
             shows.setdefault(os.path.dirname(r["file_path"]), []).append(r)
-        elif sets and r["media_type"] == "movie" and r.get("collection_id"):
+        elif sets and r.get("collection_id") and (r["media_type"] == "movie" or r["collection_id"] >= PART_SET_OFFSET):
             boxes.setdefault(r["collection_id"], []).append(r)
         else:
             cards.append({**r, "key": r["uuid"], "episodes": 0, "watched": 0, "films": 0})
@@ -586,7 +587,73 @@ def _in_set_order(cid, films: list[dict], orders: dict | None = None) -> list[di
 
 
 def films_in_set(cid) -> list[dict]:
-    return _in_set_order(int(cid), _rows(conn().execute(_SELECT + "WHERE m.collection_id=? AND m.media_type='movie'", (int(cid),))))
+    return _in_set_order(int(cid), _rows(conn().execute(_SELECT + "WHERE m.collection_id=? AND m.media_type IN ('movie', 'clip')",
+                                                        (int(cid),))))
+
+
+# ---------------------------------------------------------------- box sets from names: "Title Part 1", "Title Ep 2"
+
+PART_SET_OFFSET = 5_000_000_000      # their ids: apart from TMDB, AniList, ThePornDB and your own sets
+_PART = re.compile(r"^(?P<base>.*?\w.*?)[\s._\-:,#(\[]*\b(?:part|pt|ep|episode|chapter|ch)\.?[\s._\-#]*(?P<n>\d{1,3})(?!\d)",
+                   re.I)
+
+
+def part_name(title: str) -> tuple[str, int] | None:
+    """("Title", 2) for "Title Part 2", "Title - Ep 2", "Title Episode 02 - the end"; None otherwise."""
+    m = _PART.match(title or "")
+    if not m:
+        return None
+    base = re.sub(r"[\s._\-:,#(\[]+$", "", m["base"]).strip()
+    return (base, int(m["n"])) if base else None
+
+
+def group_parts(dir_id: int) -> int:
+    """In a folder set to (Configure > Box sets from names): files that share a name apart from "Part 1, Part 2" or
+    "Ep 1, Ep 2", in the same subfolder of the folder's top level (an artist), become one box set; two or more make
+    a set. Sets made this way before and no longer right are undone. Box sets you or TMDB made are left alone.
+    Returns how many sets there are."""
+    d = get_directory(dir_id)
+    if not d:
+        return 0
+    root = d["folder_path"]
+    groups: dict[tuple, list] = {}
+    rows = list_media(dir_id, everything=True)
+    for r in rows:
+        cid = r.get("collection_id")
+        if r["media_type"] == "show" or (cid is not None and cid < PART_SET_OFFSET):
+            continue
+        # the file name: a title may have lost its "Ep 2" already (it reads as an episode number)
+        name = re.sub(r"[._]+", " ", os.path.splitext(os.path.basename(r["file_path"]))[0]).strip()
+        hit = part_name(name)
+        if not hit:
+            continue
+        r["_name"] = name
+        rel = os.path.relpath(r["file_path"], root)
+        top = rel.split(os.sep, 1)[0] if os.sep in rel else ""
+        groups.setdefault((top, re.sub(r"[^\w]+", " ", hit[0]).casefold().strip()), []).append((r, hit[0]))
+    want = {}
+    for (top, key), members in groups.items():
+        if len(members) < 2:
+            continue
+        cid = PART_SET_OFFSET + zlib.crc32(f"{dir_id}|{top}|{key}".encode())
+        for r, base in members:
+            want[r["uuid"]] = (cid, members[0][1])
+    with _tx() as c:
+        for r in rows:
+            cid = r.get("collection_id")
+            if r["uuid"] in want and (cid, r.get("collection_name")) != want[r["uuid"]]:
+                c.execute("UPDATE media_items SET collection_id=?, collection_name=? WHERE uuid=?", (*want[r["uuid"]], r["uuid"]))
+                if r["title"].casefold() == want[r["uuid"]][1].casefold():   # the part number was cut from the title
+                    c.execute("UPDATE media_items SET title=? WHERE uuid=?", (r["_name"], r["uuid"]))
+            elif r["uuid"] not in want and cid is not None and cid >= PART_SET_OFFSET:
+                c.execute("UPDATE media_items SET collection_id=NULL, collection_name=NULL WHERE uuid=?", (r["uuid"],))
+    return len({v[0] for v in want.values()})
+
+
+def ungroup_parts(dir_id: int) -> None:
+    with _tx() as c:
+        c.execute("UPDATE media_items SET collection_id=NULL, collection_name=NULL WHERE parent_directory_id=? "
+                  "AND collection_id>=?", (dir_id, PART_SET_OFFSET))
 
 
 def uuids_for(key: str) -> list[str]:

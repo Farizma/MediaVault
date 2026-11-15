@@ -62,6 +62,17 @@ Sheet {
         RowLayout {
             Layout.fillWidth: true
             spacing: 16
+            Toggle { Layout.fillWidth: true; text: "Open on folder cards"; hint: "A card per subfolder (an artist) with All videos first; a card opens its videos"
+                checked: root.f.folders === true; onToggled: { Backend.toggleHidden("folders_dirs", String(root.folderId)); root.after() } }
+            Toggle { Layout.fillWidth: true; text: "Track watched"; hint: "Off: no progress bars, ticks or Unwatched filter in this tab"
+                checked: root.f.trackWatched !== false; onToggled: { Backend.toggleHidden("nowatch_dirs", String(root.folderId)); root.after() } }
+        }
+        Toggle { Layout.fillWidth: true; text: "Box sets from Part 1 / Ep 1 names"
+            hint: "Videos named the same apart from Part 1, Part 2 or Ep 1, Ep 2 (in the same subfolder) become one box set"
+            checked: root.f.partSets === true; onToggled: { Backend.toggleHidden("partsets_dirs", String(root.folderId)); root.after() } }
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 16
             Toggle { Layout.fillWidth: true; text: "Continue Watching row"; hint: "Part-watched titles above this tab's catalog"
                 checked: root.f.continueRow === true; onToggled: { Backend.toggleHidden("continue_dirs", String(root.folderId)); root.after() } }
             Toggle { Layout.fillWidth: true; text: "Recently Added row"; hint: "Titles added in the last 30 days"
