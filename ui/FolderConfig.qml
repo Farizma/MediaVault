@@ -159,7 +159,7 @@ Sheet {
             opacity: enabled ? 1 : 0.4
             Rectangle {
                 id: sourceSeg
-                readonly property var choices: [["tmdb", "Movies & TV · TMDB"], ["anilist", "Anime · AniList"], ["tpdb", "Adult · ThePornDB"]]
+                readonly property var choices: [["tmdb", "Movies & TV · TMDB"], ["anilist", "Anime · AniList"], ["tpdb", "Adult · TPDB"]]
                 readonly property int at: Math.max(0, choices.findIndex(function(c) { return c[0] === (root.f.source || "tmdb") }))
                 implicitWidth: 450; implicitHeight: 34; radius: 10; color: "#99000000"; border.color: Theme.line
                 Rectangle { width: (parent.width - 6) / 3; height: parent.height - 6; y: 3; radius: 8; color: Theme.text

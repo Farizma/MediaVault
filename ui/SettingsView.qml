@@ -1094,7 +1094,7 @@ Item {
                     Caption { text: "THEPORNDB API TOKEN (ADULT FOLDERS)" }
                     Field { Layout.fillWidth: true; placeholderText: "Paste your ThePornDB token"; echoMode: TextInput.Password; text: Backend.setting("tpdb_key"); onActiveFocusChanged: if (!activeFocus) Backend.setSetting("tpdb_key", text) }
                     Text { Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 11
-                        text: "Free at theporndb.net (your account \u203A API tokens). Only folders set to Adult \u00B7 ThePornDB in their Configure window ask it." }
+                        text: "Free at theporndb.net (your account \u203A API tokens). Only folders set to Adult \u00B7 TPDB in their Configure window ask it." }
                     Caption { text: "OPENSUBTITLES API KEY (SUBTITLE DOWNLOADS)" }
                     RowLayout {
                         Layout.fillWidth: true
