@@ -2953,10 +2953,9 @@ class Dashboard(QObject):
         """Portable backup: library, settings and all artwork in one .mvault file you can carry to another PC."""
         def run():
             from datetime import date
-            from PySide6.QtWidgets import QFileDialog
-            dest, _ = QFileDialog.getSaveFileName(None, "Save portable backup",
-                                                  str(Path.home() / f"Media Vault backup {date.today()}.mvault"),
-                                                  "Media Vault backup (*.mvault)")
+            from . import save_file
+            dest = save_file("Save portable backup", str(Path.home() / f"Media Vault backup {date.today()}.mvault"),
+                             "Media Vault backup (*.mvault)")
             if not dest:
                 return
 
@@ -2973,9 +2972,8 @@ class Dashboard(QObject):
     @Slot()
     def importPortable(self):
         def run():
-            from PySide6.QtWidgets import QFileDialog
-            src, _ = QFileDialog.getOpenFileName(None, "Restore portable backup", str(Path.home()),
-                                                 "Media Vault backup (*.mvault *.zip)")
+            from . import pick_files
+            src = next(iter(pick_files("Restore portable backup", str(Path.home()), "Media Vault backup (*.mvault *.zip)")), "")
             if not src:
                 return
             try:

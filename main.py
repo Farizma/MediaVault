@@ -61,6 +61,8 @@ class App:
         self.main_window = main_window
         try:
             self.dashboard.hwnd = int(main_window.winId())     # Windows' sign-in prompt opens over the library
+            import ui
+            ui.DIALOG_OWNER = self.dashboard.hwnd               # and file choosers belong to it
         except Exception:
             pass
         self.dashboard.lockedChanged.connect(self._after_unlock)

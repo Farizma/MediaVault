@@ -136,40 +136,63 @@ def detect_reduced_motion() -> bool:
     return not on.value
 
 
-def pick_folder() -> str:
+# Every file and folder chooser is Windows' own Explorer dialog (utils/native_dialog), owned by the library window.
+# Qt's dialog (asked to be native too) is only the fallback when that is not available.
+DIALOG_OWNER = 0          # the library window's handle, set once it exists (main.App.attach)
+
+
+def _qt_parent():
+    from PySide6.QtWidgets import QApplication
+    if QApplication.instance() is None:
+        raise RuntimeError("no QApplication (QtWidgets missing?)")
+    return None
+
+
+def pick_folder(title: str = "Choose a media folder", start: str = "") -> str:
     """Folder chooser. Returns "" when cancelled. Errors are logged, then raised so the caller can show them."""
     import logging
+    from utils import native_dialog
+    start = start if start and Path(start).is_dir() else str(Path.home())
     try:
-        from PySide6.QtCore import Qt
-        from PySide6.QtWidgets import QApplication, QFileDialog
-        if QApplication.instance() is None:
-            raise RuntimeError("no QApplication (QtWidgets missing?)")
-        dialog = QFileDialog(None, "Choose a media folder", str(Path.home()))
-        dialog.setFileMode(QFileDialog.FileMode.Directory)
-        dialog.setOption(QFileDialog.Option.ShowDirsOnly, True)
-        dialog.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)  # the HUD window is always-on-top
-        dialog.show()
-        dialog.raise_()
-        dialog.activateWindow()
-        if dialog.exec() and dialog.selectedFiles():
-            return str(Path(dialog.selectedFiles()[0]))
+        got = native_dialog.open_folder(title, start, DIALOG_OWNER)
+        if got is not None:
+            return str(Path(got)) if got else ""
+        from PySide6.QtWidgets import QFileDialog
+        return str(Path(p)) if (p := QFileDialog.getExistingDirectory(_qt_parent(), title, start)) else ""
     except Exception:
         logging.getLogger("ui").exception("folder dialog failed")
         raise
-    return ""
 
 
-IMAGE_FILTER = "Images (*.png *.jpg *.jpeg *.webp *.bmp)"
+IMAGE_FILTER = "Images (*.png *.jpg *.jpeg *.webp *.bmp *.gif *.avif *.tif *.tiff)"
+
+
+def pick_files(title: str, start: str = "", file_filter: str = "", many: bool = False) -> list[str]:
+    """Files chosen in Windows' own dialog ([] when cancelled)."""
+    from utils import native_dialog
+    start = start if start and Path(start).is_dir() else str(Path.home())
+    got = native_dialog.open_files(title, start, file_filter, many, DIALOG_OWNER)
+    if got is not None:
+        return got
+    from PySide6.QtWidgets import QFileDialog
+    if many:
+        return QFileDialog.getOpenFileNames(_qt_parent(), title, start, file_filter)[0]
+    return [p for p in [QFileDialog.getOpenFileName(_qt_parent(), title, start, file_filter)[0]] if p]
+
+
+def save_file(title: str, suggested: str, file_filter: str = "") -> str:
+    """Where to save, in Windows' own dialog ("" when cancelled). suggested: a full path (its folder and name)."""
+    from utils import native_dialog
+    got = native_dialog.save_file(title, suggested, file_filter, DIALOG_OWNER)
+    if got is not None:
+        return got
+    from PySide6.QtWidgets import QFileDialog
+    return QFileDialog.getSaveFileName(_qt_parent(), title, suggested, file_filter)[0]
 
 
 def _image_dialog(start_dir: str, title: str, many: bool):
-    from PySide6.QtCore import Qt
-    from PySide6.QtWidgets import QFileDialog
     start = start_dir if start_dir and Path(start_dir).is_dir() else str(Path.home() / "Pictures")
-    dialog = QFileDialog(None, title, start, IMAGE_FILTER)     # starts in the title's own folder
-    dialog.setFileMode(QFileDialog.FileMode.ExistingFiles if many else QFileDialog.FileMode.ExistingFile)
-    dialog.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
-    return dialog.selectedFiles() if dialog.exec() else []
+    return pick_files(title, start, IMAGE_FILTER, many)               # starts in the title's own folder
 
 
 def pick_image(start_dir: str = "", title: str = "Choose box art") -> str:
