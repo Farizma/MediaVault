@@ -1,6 +1,6 @@
 // Fix Scraped Data: a window of its own over View More.
-//   1. Search: every source at once (TMDB, AniList, IMDb via OMDb), or paste a TMDB / AniList / MyAnimeList / IMDb
-//      link. Pick one result or several (picks stay while you search again for another source).
+//   1. Search: every source at once (TMDB, AniList, IMDb via OMDb, MyAnimeList, Kitsu, TVmaze, ThePornDB), or paste
+//      a link to a title's page on any of them. Pick one result or several (picks stay while you search again for another source).
 //   2. Choose: each picked result's details side by side, field by field: which title, synopsis, poster, banner,
 //      Gallery images (several sources can be combined), genres, score, age rating, cast... or keep what you have.
 //   3. Apply: only what you chose is written. Your own box art, Gallery images, tags and notes are never touched.
@@ -212,7 +212,7 @@ Item {
                 id: bar
                 anchors { left: parent.left; right: parent.right; top: parent.top; margins: 24 }
                 spacing: 8
-                Field { id: q; Layout.fillWidth: true; placeholderText: "Title, or paste a TMDB / AniList / MyAnimeList / IMDb link"; onAccepted: root.search() }
+                Field { id: q; Layout.fillWidth: true; placeholderText: "Title, or paste a link (TMDB, IMDb, AniList, MyAnimeList, Kitsu, TVmaze, ThePornDB)"; onAccepted: root.search() }
                 Field { id: yr; Layout.preferredWidth: 84; placeholderText: "Year"; inputMethodHints: Qt.ImhDigitsOnly
                     validator: RegularExpressionValidator { regularExpression: /[0-9]{0,4}/ }
                     onAccepted: root.search() }

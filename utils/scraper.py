@@ -235,11 +235,13 @@ _LINKS = (
     (re.compile(r"imdb\.com/(?:[a-z]{2}/)?title/(tt\d{5,10})", re.I), "omdb"),
     (re.compile(r"tvmaze\.com/shows/(\d+)", re.I), "tvmaze"),
     (re.compile(r"kitsu\.(?:app|io)/anime/([\w-]+)", re.I), "kitsu"),
+    (re.compile(r"theporndb\.net/(scenes|movies)/([\w-]+)", re.I), "tpdb"),
 )
 
 
 def parse_link(text: str) -> dict | None:
-    """A TMDB, AniList, MyAnimeList or IMDb page address pasted into Fix Scraped Data: {"source", "id", "kind"}.
+    """A TMDB, AniList, MyAnimeList, IMDb, TVmaze, Kitsu or ThePornDB page address pasted into Fix Scraped Data:
+    {"source", "id", "kind"}. ThePornDB's id is "scenes:<slug>" or "movies:<slug>" (its API takes the page's slug).
     TMDB episode and season pages count as their series ("/tv/90395-x/season/1/episode/1" -> series 90395)."""
     text = (text or "").strip()
     if not text or " " in text:
@@ -249,6 +251,8 @@ def parse_link(text: str) -> dict | None:
         if m:
             if source == "tmdb":
                 return {"source": "tmdb", "id": m.group(2), "kind": "show" if m.group(1).lower() == "tv" else "movie"}
+            if source == "tpdb":
+                return {"source": "tpdb", "id": f"{m.group(1).lower()}:{m.group(2)}", "kind": "movie"}
             return {"source": source, "id": m.group(1), "kind": None}
     return None
 

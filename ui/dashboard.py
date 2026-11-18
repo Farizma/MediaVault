@@ -1742,7 +1742,7 @@ class Dashboard(QObject):
 
     @Slot(str, str, str)
     def searchMatch(self, key: str, query: str, year: str):
-        """Fix Scraped Data: ask every source that can answer (AniList always; TMDB and OMDb with a key) at once.
+        """Fix Scraped Data: ask every source that can answer (AniList, MyAnimeList, Kitsu, TVmaze always; TMDB, OMDb and ThePornDB with a key) at once.
         The folder's own source comes first; one source failing does not hide the others."""
         kind = "show" if key.startswith("show:") else "movie"
         source = self._source_of(key)
@@ -1756,7 +1756,12 @@ class Dashboard(QObject):
             """A pasted TMDB / AniList / MyAnimeList / IMDb page: that exact title, as the only result."""
             from utils import anilist
             try:
-                if link["source"] in ("mal", "tvmaze", "kitsu"):
+                if link["source"] == "tpdb":
+                    if not keys.get("tpdb"):
+                        raise scraper.ScrapeError("ThePornDB links need a ThePornDB token (Settings \u203A Integrations & APIs)")
+                    h = self._fetch_hit(key, "tpdb", link["id"])
+                    row = {"id": link["id"], "source": "tpdb"}
+                elif link["source"] in ("mal", "tvmaze", "kitsu"):
                     h = self._fetch_hit(key, link["source"], link["id"])
                     row = {"id": str(link["id"]), "source": link["source"]}
                 elif link["source"] == "anilist":
@@ -1793,15 +1798,12 @@ class Dashboard(QObject):
                 jobs["tmdb"] = lambda: scraper.tmdb_search(kind, q, y, keys["tmdb"])
             if keys.get("omdb"):
                 jobs["omdb"] = lambda: scraper.omdb_search(kind, q, y, keys["omdb"])
-            order = (["anilist", "mal", "kitsu", "tmdb", "tvmaze", "omdb"] if anime
-                     else ["tmdb", "tvmaze", "omdb", "anilist", "mal", "kitsu"])
-            if source == "tpdb":         # an adult folder asks ThePornDB alone (and other folders never ask it)
+            if keys.get("tpdb"):         # every database at once; the folder's own source is listed first
                 from utils import tpdb
-                if not keys.get("tpdb"):
-                    self.matchWaiting.emit(key, [])
-                    self.matchFailed.emit(key, "ThePornDB needs an API token (Settings \u203A Integrations & APIs)")
-                    return
-                jobs, order = {"tpdb": lambda: tpdb.search(q, keys["tpdb"])}, ["tpdb"]
+                jobs["tpdb"] = lambda: tpdb.search(q, keys["tpdb"])
+            order = (["anilist", "mal", "kitsu", "tmdb", "tvmaze", "omdb", "tpdb"] if anime
+                     else ["tpdb", "tmdb", "tvmaze", "omdb", "anilist", "mal", "kitsu"] if source == "tpdb"
+                     else ["tmdb", "tvmaze", "omdb", "anilist", "mal", "kitsu", "tpdb"])
             if key.startswith("set:") and keys.get("tmdb"):          # a box set: TMDB's collections first
                 jobs["tmdbset"] = lambda: scraper.tmdb_collection_search(q, keys["tmdb"])
                 order.insert(0, "tmdbset")
