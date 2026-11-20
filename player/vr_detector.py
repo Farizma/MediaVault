@@ -58,6 +58,38 @@ def detect(path: str) -> VRInfo | None:
     return VRInfo(projection, layout, full, lens or 180)
 
 
+# the formats you can pick in the player (when a file's name does not say, or says it wrong): code, label, info
+FORMATS = (
+    ("2d", "2D", None),
+    ("3d_sbs", "3D side by side", VRInfo("flat", "sbs", False)),
+    ("3d_tb", "3D top-bottom", VRInfo("flat", "tb", False)),
+    ("180_sbs", "180\u00B0 side by side", VRInfo("180", "sbs", False)),
+    ("180_tb", "180\u00B0 top-bottom", VRInfo("180", "tb", False)),
+    ("180_mono", "180\u00B0 mono", VRInfo("180", "mono", False)),
+    ("360_mono", "360\u00B0 mono", VRInfo("360", "mono", False)),
+    ("360_tb", "360\u00B0 top-bottom", VRInfo("360", "tb", False)),
+    ("360_sbs", "360\u00B0 side by side", VRInfo("360", "sbs", False)),
+    ("fisheye_sbs", "Fisheye 190\u00B0 side by side", VRInfo("fisheye", "sbs", False, 190)),
+    ("fisheye200_sbs", "Fisheye 200\u00B0 side by side", VRInfo("fisheye", "sbs", False, 200)),
+)
+_BY_CODE = {c: i for c, _, i in FORMATS}
+
+
+def by_code(code: str):
+    """The VRInfo for a format code (None for 2D); KeyError for an unknown code."""
+    return _BY_CODE[code]
+
+
+def code_of(info: VRInfo | None) -> str:
+    """The closest format code for a detected file (full-size stereo and odd lenses map to the nearest)."""
+    if info is None:
+        return "2d"
+    if info.projection == "fisheye":
+        return "fisheye200_sbs" if info.lens >= 200 else "fisheye_sbs"
+    code = ("3d" if info.projection == "flat" else info.projection) + "_" + info.layout
+    return code if code in _BY_CODE else "2d"
+
+
 def views(info: VRInfo | None) -> tuple:
     if info is None:
         return ()

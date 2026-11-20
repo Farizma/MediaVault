@@ -49,9 +49,18 @@ Item {
     property var lock: ({})                  // Privacy: what sign-ins are set up (never a secret)
     property var castDevices: []
     property bool searching: false
-    function refreshHealth() { report = Backend.health() }
+    // Library Status runs only when you ask: on a big library with many gaps it takes a while
+    property bool healthBusy: false
+    property bool healthChecked: false
+    function refreshHealth() { if (!healthBusy) { healthBusy = true; Backend.checkHealth() } }
+    function dropIssue(kind, key) {           // ignored: gone from the list at once, without checking everything again
+        var list = ({ duplicate: "duplicates", missing_episode: "episodes", missing_art: "artwork" })[kind]
+        var r = Object.assign({}, report)
+        r[list] = (r[list] || []).filter(function(x) { return x.key !== key })
+        r[list + "Total"] = Math.max(0, (r[list + "Total"] || 1) - 1)
+        report = r
+    }
     onSectionNameChanged: {
-        if (sectionName === "Library Status") refreshHealth()
         if (sectionName === "Streaming") { castLibs = Backend.castSupport(); castDevices = Backend.devices() }
         if (sectionName === "Privacy") lock = Backend.lockInfo()
         if (sectionName === "About & Updates") { comps = Backend.components(); checking = true; Backend.checkComponents() }
@@ -62,7 +71,7 @@ Item {
         function onComponentsChecked(list) { root.comps = list; root.checking = false }
         function onAppUpdateProgress(p) { root.downloading = p }
         function onStreamChanged() { root.castLibs = Backend.castSupport() }
-        function onBoxArtChanged(key) { if (root.visible && root.sectionName === "Library Status") root.refreshHealth() }
+        function onHealthReady(r) { root.report = r; root.healthBusy = false; root.healthChecked = true }
         function onLibraryChanged() { if (root.visible && root.sectionName === "Library") root.folders = Backend.directories() }
     }
     readonly property var levelNames: ["Standard", "High Quality", "AI Ultra"]
@@ -773,8 +782,8 @@ Item {
                         property string kind
                         property string key
                         spacing: 6
-                        GlassButton { small: true; label: "Ignore for now"; onClicked: { Backend.ignoreIssue(parent.kind, parent.key, false); root.refreshHealth() } }
-                        GlassButton { small: true; label: "Ignore forever"; onClicked: { Backend.ignoreIssue(parent.kind, parent.key, true); root.refreshHealth() } }
+                        GlassButton { small: true; label: "Ignore for now"; onClicked: { Backend.ignoreIssue(parent.kind, parent.key, false); root.dropIssue(parent.kind, parent.key) } }
+                        GlassButton { small: true; label: "Ignore forever"; onClicked: { Backend.ignoreIssue(parent.kind, parent.key, true); root.dropIssue(parent.kind, parent.key) } }
                     }
                     component Card: Rectangle {
                         default property alias body: inner.data
@@ -786,11 +795,16 @@ Item {
                     Heading { title: "Library Status"; sub: "Copies you have twice, gaps in series, titles without a cover, and folders that cannot be reached. Nothing is ever deleted from here."; Layout.rightMargin: 48 }
                     Row {
                         spacing: 8
-                        GlassButton { small: true; label: "Check again"; glyph: "\u21BB"; onClicked: root.refreshHealth() }
+                        GlassButton { small: true; primary: !root.healthChecked; enabled: !root.healthBusy
+                            label: root.healthBusy ? "Checking\u2026" : root.healthChecked ? "Check again" : "Check library"; glyph: "\u21BB"
+                            onClicked: root.refreshHealth() }
+                        Spinner { visible: root.healthBusy; running: visible; size: 16; color: Theme.blue; anchors.verticalCenter: parent.verticalCenter }
                         GlassButton { small: true; label: "Show ignored items again"; onClicked: { Backend.resetIgnored(); root.refreshHealth() } }
                     }
 
-                    Caption { text: "FOLDERS" }
+                    Text { visible: !root.healthChecked && !root.healthBusy; Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 12
+                        text: "Press Check library to look for copies you have twice, gaps in seasons, titles without a cover and folders that cannot be reached. It runs in the background." }
+                    Caption { visible: root.healthChecked; text: "FOLDERS" }
                     Repeater {
                         model: root.report.folders || []
                         Card {
@@ -814,8 +828,8 @@ Item {
                         }
                     }
 
-                    Caption { text: "DUPLICATES" + ((root.report.duplicates || []).length ? "  \u00B7  " + root.report.duplicates.length : "") }
-                    Text { visible: (root.report.duplicates || []).length === 0; text: "No title is in the library twice."; color: Theme.faint; font.pixelSize: 12 }
+                    Caption { visible: root.healthChecked; text: "DUPLICATES" + (root.report.duplicatesTotal ? "  \u00B7  " + root.report.duplicatesTotal + (root.report.duplicatesTotal > (root.report.duplicates || []).length ? "  (THE FIRST " + root.report.duplicates.length + " SHOWN)" : "") : "") }
+                    Text { visible: root.healthChecked && (root.report.duplicates || []).length === 0; text: "No title is in the library twice."; color: Theme.faint; font.pixelSize: 12 }
                     Repeater {
                         model: root.report.duplicates || []
                         Card {
@@ -838,8 +852,8 @@ Item {
                         }
                     }
 
-                    Caption { text: "MISSING EPISODES" + ((root.report.episodes || []).length ? "  \u00B7  " + root.report.episodes.length : "") }
-                    Text { visible: (root.report.episodes || []).length === 0; text: "No gaps in any season."; color: Theme.faint; font.pixelSize: 12 }
+                    Caption { visible: root.healthChecked; text: "MISSING EPISODES" + (root.report.episodesTotal ? "  \u00B7  " + root.report.episodesTotal + (root.report.episodesTotal > (root.report.episodes || []).length ? "  (THE FIRST " + root.report.episodes.length + " SHOWN)" : "") : "") }
+                    Text { visible: root.healthChecked && (root.report.episodes || []).length === 0; text: "No gaps in any season."; color: Theme.faint; font.pixelSize: 12 }
                     Repeater {
                         model: root.report.episodes || []
                         Card {
@@ -855,8 +869,8 @@ Item {
                         }
                     }
 
-                    Caption { text: "MISSING ARTWORK" + ((root.report.artwork || []).length ? "  \u00B7  " + root.report.artwork.length : "") }
-                    Text { visible: (root.report.artwork || []).length === 0; text: "Every title has a cover."; color: Theme.faint; font.pixelSize: 12 }
+                    Caption { visible: root.healthChecked; text: "MISSING ARTWORK" + (root.report.artworkTotal ? "  \u00B7  " + root.report.artworkTotal + (root.report.artworkTotal > (root.report.artwork || []).length ? "  (THE FIRST " + root.report.artwork.length + " SHOWN)" : "") : "") }
+                    Text { visible: root.healthChecked && (root.report.artwork || []).length === 0; text: "Every title has a cover."; color: Theme.faint; font.pixelSize: 12 }
                     Repeater {
                         model: root.report.artwork || []
                         Card {

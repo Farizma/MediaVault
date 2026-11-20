@@ -17,6 +17,7 @@ import ctypes
 import logging
 import os
 import re
+import json
 import sys
 import tempfile
 import time
@@ -35,6 +36,18 @@ COUNTDOWN = 15  # seconds before the end of an episode
 _INTRO_CHAPTER = re.compile(r"^\W*(intro|opening|op|recap|previously)\b", re.I)
 _CREDITS_CHAPTER = re.compile(r"^\W*(end\s*credits|credits|ending|outro|ed)\b", re.I)
 SPEEDS = (0.5, 3.0)
+
+
+VR_FORMAT_ROWS = [{"code": c, "label": lab} for c, lab, _ in vr_detector.FORMATS]
+
+
+def vr_formats() -> dict:
+    """{file path: format code} you picked in the player."""
+    import database as db
+    try:
+        return dict(json.loads(db.get_setting("vr_formats", "{}") or "{}"))
+    except (TypeError, ValueError):
+        return {}
 
 
 @dataclass
@@ -619,6 +632,12 @@ class PlayerEngine(QObject):
         self._reset_file_state()
         self.session = s
         self._vr = vr_detector.detect(s.path)
+        own = vr_formats().get(os.path.normcase(os.path.abspath(s.path)))          # a format you picked for this file in the player
+        if own is not None:
+            try:
+                self._vr = vr_detector.by_code(own)
+            except KeyError:
+                pass
         self._vr_view = (vr_detector.views(self._vr) or ("left",))[0]
         self._vr_look = [0.0, 0.0, vr_detector.DEFAULT_FOV]
         self.core.load(s.path, s.start, None)
@@ -819,6 +838,7 @@ class PlayerEngine(QObject):
             "shrink": self._shrunk, "vr": self._vr is not None and c.name == "mpv", "vrView": self._vr_view,
             "vrLook": self._vr_view == "look" and self._vr is not None and c.name == "mpv",
             "vrLabel": vr_detector.label(self._vr), "vrViews": list(vr_detector.views(self._vr)),
+            "vrFormat": vr_detector.code_of(self._vr), "vrFormats": VR_FORMAT_ROWS, "canVr": c.name == "mpv",
             "vrYaw": self._vr_look[0], "vrPitch": self._vr_look[1], "vrFov": self._vr_look[2],
             "toastId": self._toast[0], "toast": self._toast[1],
             "snapshot": self._snap_kind, "snapId": self._snap_id,
@@ -942,6 +962,35 @@ class PlayerEngine(QObject):
         self._state = {**self._state, "vrView": self._vr_view, "vrLook": self._vr_view == "look",
                        "vrYaw": self._vr_look[0], "vrPitch": self._vr_look[1], "vrFov": self._vr_look[2]}
         self.stateChanged.emit()
+
+    @Slot(str)
+    def setVrFormat(self, code: str):
+        """The player's 3D / VR format picker: what this file is (2D, 3D SBS, 180 SBS, 360 ...). Remembered for the file."""
+        try:
+            info = vr_detector.by_code(code)
+        except KeyError:
+            return
+        if not (self.core and self.session) or self.core.name != "mpv":
+            return
+        self._vr = info
+        self._vr_view = (vr_detector.views(info) or ("left",))[0]
+        self._vr_look = [0.0, 0.0, vr_detector.DEFAULT_FOV]
+        import database as db
+        formats = vr_formats()
+        path = os.path.normcase(os.path.abspath(self.session.path))
+        if code == vr_detector.code_of(vr_detector.detect(self.session.path)):
+            formats.pop(path, None)                       # back to what the name says: nothing to remember
+        else:
+            formats[path] = code
+        db.set_setting("vr_formats", json.dumps(formats))
+        try:
+            self._apply_vr()
+        except Exception:
+            log.warning("VR format not applied", exc_info=True)
+        self._state = {**self._state, "vr": info is not None, "vrFormat": code, "vrLabel": vr_detector.label(info),
+                       "vrViews": list(vr_detector.views(info))}
+        self.stateChanged.emit()
+        self._say(dict((c, l) for c, l, _ in vr_detector.FORMATS)[code] + (": drag to look around" if self._vr_view == "look" else ""))
 
     @Slot()
     def cycleVrView(self):

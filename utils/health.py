@@ -99,7 +99,15 @@ def report(quality_of, ignored_now: dict[str, set]) -> dict:
         hidden = db.ignored(kind) | ignored_now.get(kind, set())
         return [r for r in rows if r["key"] not in hidden]
 
-    return {"duplicates": keep("duplicate", duplicates(items, quality_of)),
-            "episodes": keep("missing_episode", missing_episodes(items)),
-            "artwork": keep("missing_art", missing_artwork(cards)),
-            "folders": folders(items)}
+    out = {"duplicates": keep("duplicate", duplicates(items, quality_of)),
+           "episodes": keep("missing_episode", missing_episodes(items)),
+           "artwork": keep("missing_art", missing_artwork(cards)),
+           "folders": folders(items)}
+    # a long list is drawn a card at a time: show the first ones, and say how many there are in all
+    for k in ("duplicates", "episodes", "artwork"):
+        out[k + "Total"] = len(out[k])
+        out[k] = out[k][:SHOW_MAX]
+    return out
+
+
+SHOW_MAX = 100

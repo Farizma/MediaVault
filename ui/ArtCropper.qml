@@ -1,9 +1,12 @@
 // Frame a picture for a box face: the frame has the face's shape (2:3 front and back, a tall thin spine, a round
 // disc). Drag to move the picture, scroll or use the slider to zoom, Turn for a quarter turn. The picture always
 // covers the frame. Use sends the frame as fractions of the picture (as shown) and the turns to Backend.saveCroppedArt.
+// A folder card's picture (face "folder") has a square frame and may also be zoomed out until the whole picture fits:
+// the empty space around it is filled with a blurred copy (Backend.saveFolderPicture).
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Effects
 
 Item {
     id: crop
@@ -16,8 +19,12 @@ Item {
     property real panX: 0
     property real panY: 0
     property real shown: 0
-    readonly property real aspect: face === "spine" ? 60 / 810 : face === "disc" ? 1 : 135 / 190
-    readonly property string faceName: ({ front: "front cover", back: "back cover", spine: "spine", disc: "disc" })[face] || face
+    readonly property real aspect: face === "spine" ? 60 / 810 : face === "disc" || face === "folder" ? 1 : 135 / 190
+    readonly property string faceName: ({ front: "front cover", back: "back cover", spine: "spine", disc: "disc",
+                                          folder: "picture" })[face] || face
+    readonly property bool canFit: face === "folder"
+    // zoomed out as far as the whole picture fitting the frame (folder pictures), else just covering it
+    readonly property real minZoom: canFit ? Math.min(1, img.contain / Math.max(0.0001, img.cover)) : 1
     visible: shown > 0.001
     z: 45
     Behavior on shown { NumberAnimation { duration: (crop.shown < 0.5 ? 300 : 200) * Theme.motion; easing.type: Easing.OutCubic } }
@@ -29,6 +36,11 @@ Item {
         var a = frame.mapToItem(img, 0, 0), b = frame.mapToItem(img, frame.width, frame.height)
         var x0 = Math.min(a.x, b.x) / img.width, x1 = Math.max(a.x, b.x) / img.width
         var y0 = Math.min(a.y, b.y) / img.height, y1 = Math.max(a.y, b.y) / img.height
+        if (face === "folder") {           // the frame may reach past the picture: the rest is filled
+            Backend.saveFolderPicture(key, path, x0, y0, x1 - x0, y1 - y0, turns)
+            close()
+            return
+        }
         Backend.saveCroppedArt(key, face, path, Math.max(0, x0), Math.max(0, y0), Math.min(1, x1) - Math.max(0, x0), Math.min(1, y1) - Math.max(0, y0), turns)
         close()
     }
@@ -58,7 +70,9 @@ Item {
                     Layout.fillWidth: true
                     spacing: 2
                     Text { text: "Frame the " + crop.faceName; color: Theme.text; font.pixelSize: 20; font.weight: Font.ExtraBold }
-                    Text { text: "Drag to move · scroll to zoom · Turn for a quarter turn. Only what is inside the frame is used."; color: Theme.faint; font.pixelSize: 12 }
+                    Text { color: Theme.faint; font.pixelSize: 12
+                        text: crop.canFit ? "Drag to move · scroll to zoom · Fit whole image keeps all of it (the space around fills with a blurred copy)."
+                                          : "Drag to move · scroll to zoom · Turn for a quarter turn. Only what is inside the frame is used." }
                 }
             }
             // the picture under a fixed frame
@@ -70,6 +84,17 @@ Item {
                 readonly property real fw: Math.min(width * 0.86, height * 0.86 * crop.aspect)
                 readonly property real fh: fw / crop.aspect
                 Rectangle { anchors.fill: parent; color: "#0A0A0C"; radius: 10 }
+                // a folder picture zoomed out: the blurred copy that fills the frame around it, as it will be saved
+                Item {
+                    visible: crop.canFit
+                    x: frame.x; y: frame.y; width: frame.width; height: frame.height
+                    clip: true
+                    Image { anchors.fill: parent; source: crop.canFit ? crop.src : ""; autoTransform: true
+                        fillMode: Image.PreserveAspectCrop; sourceSize: Qt.size(400, 400); asynchronous: true
+                        rotation: crop.turns * 90
+                        layer.enabled: true
+                        layer.effect: MultiEffect { blurEnabled: true; blur: 1; blurMax: 48; brightness: -0.25 } }
+                }
                 Image {
                     id: img
                     source: crop.src
@@ -82,6 +107,7 @@ Item {
                     readonly property real nw: Math.max(1, implicitWidth)
                     readonly property real nh: Math.max(1, implicitHeight)
                     readonly property real cover: Math.max(canvas.fw / (sideways ? nh : nw), canvas.fh / (sideways ? nw : nh))
+                    readonly property real contain: Math.min(canvas.fw / (sideways ? nh : nw), canvas.fh / (sideways ? nw : nh))
                     readonly property real s: cover * crop.zoom
                     width: nw * s; height: nh * s
                     readonly property real bw: sideways ? height : width       // what the frame sees
@@ -93,7 +119,7 @@ Item {
                 }
                 // keep the picture covering the frame, whatever the zoom and turn
                 function clampPan() {
-                    var mx = Math.max(0, (img.bw - fw) / 2), my = Math.max(0, (img.bh - fh) / 2)
+                    var mx = Math.abs(img.bw - fw) / 2, my = Math.abs(img.bh - fh) / 2      // smaller than the frame: moves inside it
                     crop.panX = Math.max(-mx, Math.min(mx, crop.panX)); crop.panY = Math.max(-my, Math.min(my, crop.panY))
                 }
                 Connections { target: crop; function onZoomChanged() { canvas.clampPan() } function onTurnsChanged() { canvas.clampPan() } }
@@ -115,18 +141,22 @@ Item {
                     property point last
                     onPressed: (m) => last = Qt.point(m.x, m.y)
                     onPositionChanged: (m) => { crop.panX += m.x - last.x; crop.panY += m.y - last.y; last = Qt.point(m.x, m.y); canvas.clampPan() }
-                    onWheel: (w) => { crop.zoom = Math.max(1, Math.min(6, crop.zoom * (1 + (w.angleDelta.y || w.pixelDelta.y * 3) / 1200))) }
+                    onWheel: (w) => { crop.zoom = Math.max(crop.minZoom, Math.min(6, crop.zoom * (1 + (w.angleDelta.y || w.pixelDelta.y * 3) / 1200))) }
                 }
             }
             RowLayout {
                 Layout.fillWidth: true
                 spacing: 12
                 GlassButton { small: true; label: "Turn"; glyph: "↻"; onClicked: { crop.turns = (crop.turns + 1) % 4 } }
+                GlassButton { small: true; visible: crop.canFit; label: "Fit whole image"; active: crop.zoom <= crop.minZoom + 0.001
+                    onClicked: { crop.zoom = crop.minZoom; crop.panX = 0; crop.panY = 0 } }
+                GlassButton { small: true; visible: crop.canFit; label: "Fill"; active: Math.abs(crop.zoom - 1) < 0.001
+                    onClicked: { crop.zoom = 1; crop.panX = 0; crop.panY = 0 } }
                 Text { text: "Zoom"; color: Theme.muted; font.pixelSize: 12 }
                 Slider {
                     id: zoomSlider
                     Layout.preferredWidth: 220
-                    from: 1; to: 6; value: crop.zoom
+                    from: crop.minZoom; to: 6; value: crop.zoom
                     onMoved: crop.zoom = value
                 }
                 Item { Layout.fillWidth: true }

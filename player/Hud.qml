@@ -69,6 +69,10 @@ Window {
         property real originY: 0
         property real anchorRight: 0
         function poke() { controlsOn = true; idle.restart() }
+        function vrFormatLabel(code) {
+            var f = (win.st.vrFormats || []).filter(function(x) { return x.code === code })
+            return f.length ? f[0].label : "2D"
+        }
         function togglePopup(name, button) {
             if (popup === name) { popup = ""; return }
             var p = button.mapToItem(root, button.width / 2, button.height / 2)
@@ -189,6 +193,19 @@ Window {
                     text: win.st.title || ""
                     color: Theme.text; font.pixelSize: 18; font.weight: Font.Bold; font.letterSpacing: -0.3
                     elide: Text.ElideRight
+                }
+                // a 3D / VR video: what format it is, and a quick way to change it (180 SBS, 360, ...)
+                Rectangle {
+                    id: vrChip
+                    visible: win.st.vr === true && win.st.canVr === true
+                    implicitWidth: vrChipText.implicitWidth + 40; implicitHeight: 30; radius: 9
+                    color: vrChipArea.containsMouse || root.popup === "vrfmt" ? Theme.fillHover : "#99000000"
+                    border.color: root.popup === "vrfmt" ? Theme.blue : Theme.lineStrong
+                    Text { id: vrChipText; anchors { left: parent.left; leftMargin: 12; verticalCenter: parent.verticalCenter } color: Theme.text; font.pixelSize: 12; font.weight: Font.DemiBold
+                        text: root.vrFormatLabel(win.st.vrFormat) }
+                    Text { anchors { right: parent.right; rightMargin: 8; verticalCenter: parent.verticalCenter } text: "\u2304"; color: Theme.dim; font.pixelSize: 11 }
+                    MouseArea { id: vrChipArea; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                        onClicked: root.togglePopup("vrfmt", vrChip) }
                 }
                 Rectangle {
                     implicitWidth: coreText.implicitWidth + 16; implicitHeight: 22; radius: 6
@@ -569,12 +586,22 @@ Window {
                     }
                     Text { visible: win.st.core !== "mpv"; Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.muted; font.pixelSize: 12
                         text: "Upscaling needs the MPV engine (Settings \u203A Playback)." }
-                    // a 3D / VR video: look around in one eye (VR) or the left eye flat (3D film), or both eyes untouched
+                    // 3D / VR: what format the video is (picked here when its name does not say), then how to view it
                     RowLayout {
-                        visible: win.st.vr === true
+                        visible: win.st.canVr === true
                         Layout.fillWidth: true; Layout.topMargin: 8
-                        Head { text: win.st.vrLabel || "VR"; Layout.fillWidth: true }
+                        Head { text: "3D / VR"; Layout.fillWidth: true }
                         Text { visible: win.st.vrLook === true; text: "R faces forward"; color: Theme.faint; font.pixelSize: 11 }
+                    }
+                    Rectangle {
+                        id: vrFmtBtn
+                        visible: win.st.canVr === true
+                        Layout.fillWidth: true; implicitHeight: 38; radius: 10
+                        color: Theme.fillHover; border.color: root.popup === "vrfmt" ? Theme.blue : Theme.line
+                        Text { anchors { left: parent.left; leftMargin: 12; verticalCenter: parent.verticalCenter }
+                            text: root.vrFormatLabel(win.st.vrFormat); color: Theme.text; font.pixelSize: 13; font.weight: Font.Medium }
+                        Text { anchors { right: parent.right; rightMargin: 12; verticalCenter: parent.verticalCenter } text: "\u2304"; color: Theme.dim; font.pixelSize: 14 }
+                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.togglePopup("vrfmt", vrFmtBtn) }
                     }
                     Flow {
                         visible: win.st.vr === true && (win.st.vrViews || []).length > 1
@@ -635,6 +662,40 @@ Window {
                         checked: Backend.setting("auto_credits") !== "0"; onToggled: Backend.setSetting("auto_credits", checked ? "1" : "0") }
                 }
             }
+            }
+        }
+
+        // ---------------------------------------------------------------- 3D / VR format picker
+        // Grows out of the VR chip in the top bar (or the 3D / VR row of the Audio & Video panel). Remembered per file.
+        Rectangle {
+            id: vrMenu
+            property real shown: root.popup === "vrfmt" ? 1 : 0
+            Behavior on shown { NumberAnimation { duration: (vrMenu.shown < 0.5 ? 260 : 180) * Theme.motion; easing.type: Easing.OutCubic } }
+            visible: shown > 0.01
+            width: 300
+            height: Math.min(vrCol.implicitHeight + 20, parent.height - 120)
+            readonly property bool fromTop: root.originY < parent.height / 2
+            x: Math.max(16, Math.min(root.anchorRight - width, parent.width - width - 16))
+            y: fromTop ? root.originY + 24 : Math.max(16, root.originY - height - 24)
+            z: 5
+            radius: 14
+            color: Theme.panel
+            border.color: Theme.edge
+            opacity: Math.min(1, shown * 1.6)
+            transform: Scale { origin.x: root.originX - vrMenu.x; origin.y: root.originY - vrMenu.y; xScale: 0.08 + 0.92 * vrMenu.shown; yScale: xScale }
+            MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onWheel: (w) => w.accepted = true }
+            ColumnLayout {
+                id: vrCol
+                x: 10; y: 10; width: parent.width - 20
+                spacing: 2
+                Head { text: "WHAT THIS VIDEO IS"; Layout.topMargin: 0; leftPadding: 10 }
+                Repeater {
+                    model: win.st.vrFormats || []
+                    Row2 { label: modelData.label; on: win.st.vrFormat === modelData.code
+                        onPicked: { if (win.st.vrFormat !== modelData.code) Player.setVrFormat(modelData.code); root.popup = "" } }
+                }
+                Text { Layout.fillWidth: true; Layout.leftMargin: 10; Layout.topMargin: 6; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 11
+                    text: "Remembered for this file. 180\u00B0, 360\u00B0 and fisheye open in the look-around view: drag to look." }
             }
         }
 

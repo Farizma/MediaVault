@@ -218,6 +218,7 @@ Item {
     Keys.onPressed: (e) => pageKey(e)
     // a folder-cards tab (Artists): its cards first; a card opens that folder's videos
     readonly property bool folderHome: Backend.folderMode && Backend.subtab === ""
+    property int folderCardW: Math.max(110, Math.min(340, Number(Backend.setting("folder_card_size")) || 180))
     function subName(rel) { return rel === "*" ? "All videos" : rel === "~" ? "Unsorted" : rel }
     function openFolder(rel) {
         dash.selClear(); dash.stagger = true; staggerOff.restart()
@@ -743,6 +744,24 @@ Item {
                                 Pill { height: 32; label: modelData[1]; accent: Theme.blue
                                     selected: Backend.folderSort === modelData[0]; onClicked: Backend.setFolderSort(modelData[0]) }
                             }
+                            // card size: small squares to see many folders at once, big ones to see the pictures
+                            Row {
+                                visible: dash.folderHome
+                                spacing: 8
+                                leftPadding: 10
+                                anchors.verticalCenter: parent.verticalCenter
+                                Rectangle { width: 10; height: 10; radius: 2; color: "transparent"; border.color: "#99FFFFFF"; anchors.verticalCenter: parent.verticalCenter }
+                                Slider {
+                                    id: folderSize
+                                    width: 140
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    from: 110; to: 340; stepSize: 10
+                                    value: dash.folderCardW
+                                    onMoved: dash.folderCardW = value
+                                    onPressedChanged: if (!pressed) Backend.setSetting("folder_card_size", String(Math.round(value)))
+                                }
+                                Rectangle { width: 16; height: 16; radius: 3; color: "transparent"; border.color: "#99FFFFFF"; anchors.verticalCenter: parent.verticalCenter }
+                            }
                         }
                         // sort and filters on the left (they wrap on a narrow window); the view switch and search stay on the right
                         // plain anchors, not a RowLayout: a wrapping Flow inside a layout makes Qt re-lay out forever
@@ -827,15 +846,16 @@ Item {
                             id: folderGrid
                             visible: dash.folderHome
                             width: parent.width
-                            columns: grid.columns
-                            columnSpacing: grid.gap
+                            // as many columns as fit, their outer edges in line with the page
+                            columns: Math.max(1, Math.floor((width + 20) / (dash.folderCardW + 20)))
+                            columnSpacing: columns > 1 ? Math.floor((width - columns * dash.folderCardW) / (columns - 1)) : 0
                             rowSpacing: 22
                             readonly property var shownCards: (Backend.folderCards || []).filter(function(c) {
                                 return dash.query === "" || c.kind !== "folder" || c.name.toLowerCase().indexOf(dash.query.toLowerCase()) >= 0 })
                             readonly property int shown: shownCards.filter(function(c) { return c.kind === "folder" }).length
                             Repeater {
                                 model: dash.folderHome ? folderGrid.shownCards : []
-                                FolderCard { width: dash.cardW; info: modelData
+                                FolderCard { width: dash.folderCardW; info: modelData
                                     onOpen: dash.openFolder(modelData.rel)
                                     onMenu: (item, x, y) => folderMenu.show(modelData, item, x, y) }
                             }
@@ -1334,6 +1354,8 @@ Item {
     FolderSheet { id: folderSheet; anchors.fill: parent }
     InsightsSheet { id: insightsSheet; anchors.fill: parent }
     RenameSheet { id: renameSheet; anchors.fill: parent; onDone: dash.selClear() }
+    ArtCropper { id: folderCrop; anchors.fill: parent }       // a folder card's picture: frame it, or fit it whole
+    Connections { target: Backend; function onFolderPicturePicked(rel, url, path) { folderCrop.open(rel, "folder", url, path) } }
     ActorSheet { id: actorSheet; anchors.fill: parent; onAdded: if (detail.visible) detail.refresh() }
     ResumeAsk { id: resumeAsk; anchors.fill: parent }
     Connections { target: Backend; function onFolderPicked(path, name) { folderSheet.open(path, name) } }
@@ -1476,7 +1498,7 @@ Item {
             Repeater {
                 model: [
                     { t: "Open", show: true, f: function() { dash.openFolder(folderMenu.info.rel) } },
-                    { t: "Choose a picture\u2026", show: folderMenu.info.kind === "folder", f: function() { Backend.setFolderPicture(folderMenu.info.rel) } },
+                    { t: "Choose a picture\u2026", show: folderMenu.info.kind === "folder", f: function() { Backend.pickFolderPicture(folderMenu.info.rel) } },
                     { t: "Remove the picture", show: folderMenu.info.kind === "folder" && folderMenu.info.picture !== "",
                       f: function() { Backend.clearFolderPicture(folderMenu.info.rel) } },
                     { t: folderMenu.info.fav ? "Unpin from the front" : "Pin to the front", show: folderMenu.info.kind === "folder",

@@ -594,7 +594,8 @@ def films_in_set(cid) -> list[dict]:
 # ---------------------------------------------------------------- box sets from names: "Title Part 1", "Title Ep 2"
 
 PART_SET_OFFSET = 5_000_000_000      # their ids: apart from TMDB, AniList, ThePornDB and your own sets
-_PART = re.compile(r"^(?P<base>.*?\w.*?)[\s._\-:,#(\[]*\b(?:part|pt|ep|episode|chapter|ch)\.?[\s._\-#]*(?P<n>\d{1,3})(?!\d)",
+# "Part 1", "Pt 1", "P1", "Episode 1", "Ep 1", "E1", "Chapter 1", "Ch 1" (a word of its own: "Trip 2" and "S01E02" are not)
+_PART = re.compile(r"^(?P<base>.*?\w.*?)[\s._\-:,#(\[]*\b(?:part|pt|p|episode|ep|e|chapter|ch)\.?[\s._\-#]*(?P<n>\d{1,3})(?!\d)",
                    re.I)
 
 

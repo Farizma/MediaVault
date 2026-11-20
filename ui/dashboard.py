@@ -21,7 +21,7 @@ from . import dvd_box, file_url, pick_folder, pick_image
 
 log = logging.getLogger(__name__)
 BILLBOARD_SIZE = 8  # titles in the recommended carousel
-SETTINGS = {"tmdb_key", "omdb_key", "tpdb_key", "night_mode", "reduce_motion", "upscale_level", "show_insights", "core", "theme",
+SETTINGS = {"tmdb_key", "omdb_key", "tpdb_key", "folder_card_size", "night_mode", "reduce_motion", "upscale_level", "show_insights", "core", "theme",
             "custom_accent", "custom_highlight", "custom_page", "custom_surface", "custom_card", "custom_text",
             "custom_muted", "custom_amber", "custom_red", "auto_credits", "auto_tags",
             "fanart_key", "animated_theme", "hover_preview", "detail_order", "title_language", "group_collections", "discord", "discord_detail", "discord_app_id",
@@ -92,7 +92,10 @@ def banner_for(card: dict):
     if own.exists():
         return own
     gallery = scraper.gallery_images(card)
-    return next((p for p in gallery if p.name.startswith("s-")), None) or (gallery[0] if gallery else None)
+    if gallery:
+        return next((p for p in gallery if p.name.startswith("s-")), None) or gallery[0]
+    thumb = scraper.thumb_path(card)            # no Gallery at all: the frame taken from the video
+    return thumb if thumb.exists() else None
 
 
 # Fix Scraped Data: what can be taken from which result, in the order the window lists them
@@ -133,6 +136,29 @@ def folder_picture_path(dir_id: int, rel: str) -> Path:
 
 
 FOLDER_COVERS = 4        # a folder card without your picture: a mosaic of its first covers
+FOLDER_PICTURE = 512
+
+
+def save_folder_picture(path: str, x: float, y: float, w: float, h: float, turns: int, dest: Path) -> None:
+    """Crop (x, y, w, h: fractions, possibly past the picture's edges) of the picture, turned a quarter `turns` times,
+    as a square; where the frame is past the picture, a blurred and darkened copy of it fills in."""
+    from PIL import ImageEnhance, ImageFilter
+    with Image.open(path) as src:
+        img = ImageOps.exif_transpose(src).convert("RGB")
+    img.thumbnail((2048, 2048))
+    W, H = img.size
+    left, top, cw, ch = x * W, y * H, max(1.0, w * W), max(1.0, h * H)
+    if cw < 8 or ch < 8:
+        raise ValueError("the crop is too small")
+    size = (round(cw), round(ch))
+    fill = ImageOps.fit(img, size, Image.Resampling.LANCZOS).filter(ImageFilter.GaussianBlur(max(size) / 25))
+    canvas = ImageEnhance.Brightness(fill).enhance(0.7)
+    canvas.paste(img, (round(-left), round(-top)))
+    if turns % 4:
+        canvas = canvas.rotate(-90 * (turns % 4), expand=True)
+    canvas = ImageOps.fit(canvas, (FOLDER_PICTURE, FOLDER_PICTURE), Image.Resampling.LANCZOS)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(dest, "WEBP", quality=88)
 
 
 def folder_cards(dir_id: int, root: str, items: list[dict], rows: list[dict], loose: bool, sort: str) -> list[dict]:
@@ -244,6 +270,17 @@ def missing_rows(folder: str, eps: list[dict]) -> list[dict]:
     return [{"uuid": "", "title": f"S{g['season']:02d}E{g['number']:02d}", "done": False, "progress": 0, "missing": True,
              "season": g["season"], "number": g["number"], "name": g["name"] or "", "synopsis": "", "length": "", "still": ""}
             for g in db.gaps(folder) if (g["season"], g["number"]) not in have]
+
+
+def gallery_rows(item: dict) -> list[dict]:
+    """View More's Gallery. With no images at all, the frame taken from the video stands in (auto: it cannot be
+    removed or made the banner from here; Choose thumbnail changes it)."""
+    rows = [{"url": file_url(p), "name": p.name, "custom": p.name.startswith("c-"), "size": image_size(p), "auto": False}
+            for p in scraper.gallery_images(item)]
+    thumb = scraper.thumb_path(item)
+    if not rows and thumb.exists():
+        rows.append({"url": file_url(thumb), "name": "", "custom": False, "size": image_size(thumb), "auto": True})
+    return rows
 
 
 def image_size(path) -> str:
@@ -1137,22 +1174,29 @@ class Dashboard(QObject):
         db.set_setting("folder_favs", json.dumps(favs))
         self._refresh_subtabs()
 
+    folderPicturePicked = Signal(str, str, str)       # folder (rel), image url, path: the crop editor opens on it
+
     @Slot(str)
-    def setFolderPicture(self, rel: str):
-        """Your own picture for a folder card (an artist's photo)."""
+    def pickFolderPicture(self, rel: str):
+        """Your own picture for a folder card (an artist's photo): choose a file, then frame it in the crop editor."""
         d = db.get_directory(self._tab) if self._tab >= 0 else None
         if not d:
             return
-        path = pick_image(os.path.join(d["folder_path"], rel), f"Choose a picture for {rel}")
-        if not path:
+
+        def run():
+            path = pick_image(os.path.join(d["folder_path"], rel), f"Choose a picture for {rel}")
+            if path:
+                self.folderPicturePicked.emit(rel, file_url(path, bust=False), path)
+        QTimer.singleShot(0, run)
+
+    @Slot(str, str, float, float, float, float, int)
+    def saveFolderPicture(self, rel: str, path: str, x: float, y: float, w: float, h: float, turns: int):
+        """The crop editor's square frame as fractions of the picture (it may reach past the edges when zoomed out
+        to fit the whole picture: that space is filled with a blurred, darker copy). Saved 512 x 512."""
+        if self._tab < 0:
             return
-        from PIL import Image, ImageOps
         try:
-            with Image.open(path) as img:
-                pic = ImageOps.fit(img.convert("RGB"), (512, 512), Image.Resampling.LANCZOS, centering=(0.5, 0.35))
-            dest = folder_picture_path(self._tab, rel)
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            pic.save(dest, "WEBP", quality=88)
+            save_folder_picture(path, x, y, w, h, turns, folder_picture_path(self._tab, rel))
         except Exception as e:
             log.warning("folder picture %s: %s", path, e)
             self.toast.emit("That file is not a picture Media Vault can read")
@@ -1233,7 +1277,12 @@ class Dashboard(QObject):
         if not todo or getattr(self, "_thumb_job", None):
             return
         tried.update(todo)
-        items = [(k, it) for k in todo if (it := self._target(k))]
+        self._make_thumbs([(k, it) for k in todo if (it := self._target(k))])
+
+    def _make_thumbs(self, items: list):
+        """[(key, item)]: a frame from each video as its thumbnail, in the background; the library refreshes after."""
+        if not items or getattr(self, "_thumb_job", None):
+            return
 
         def work():
             from utils import progress
@@ -1582,6 +1631,14 @@ class Dashboard(QObject):
     def _refresh_billboard(self, cards: list[dict]):
         deck = billboard_deck(cards, self._bb_keys)
         self._bb_keys = [i["key"] for i in deck["items"]]
+        # titles in the carousel with no wide picture at all (no banner, Gallery or fanart): a frame from the video
+        tried = self.__dict__.setdefault("_thumb_tried", set())
+        by_key = {c["key"]: c for c in cards}
+        bare = [k for k in self._bb_keys if k in by_key and not k.startswith(("set:", "show:")) and k not in tried
+                and not banner_for(by_key[k]) and not scraper.fanart_path(by_key[k]).exists()]
+        if bare and not getattr(self, "_thumb_job", None):
+            tried.update(bare)
+            self._make_thumbs([(k, it) for k in bare if (it := self._target(k))])
         if deck != self._billboard:         # unchanged: the carousel keeps its slide and timer
             self._billboard = deck
             self.billboardChanged.emit()
@@ -1717,8 +1774,7 @@ class Dashboard(QObject):
             "order": db.detail_order(),
             "slides": self._slides(key, art, films) if films else [],
             "cast": [] if films else self._cast_list(item),
-            "gallery": [] if films else [{"url": file_url(p), "name": p.name, "custom": p.name.startswith("c-"), "size": image_size(p)}
-                                         for p in scraper.gallery_images(item)],
+            "gallery": [] if films else gallery_rows(item),
             "boxSet": ({"key": f"set:{item['collection_id']}", "name": item.get("collection_name") or ""}
                        if not films and not eps and item.get("collection_id") is not None else {}),
             "canSet": not films and item["media_type"] == "movie",
@@ -3314,10 +3370,23 @@ class Dashboard(QObject):
             from PySide6.QtGui import QDesktopServices
             QDesktopServices.openUrl(QUrl(self.stream.base_url()))
 
-    # -- Library health
+    # -- Library health: only when you ask (Check library): on a big library with many gaps it takes a while
+    healthReady = Signal("QVariantMap")
+
     @Slot(result="QVariantMap")
     def health(self):
         return health.report(quality_of, self._ignored_now)
+
+    @Slot()
+    def checkHealth(self):
+        """In the background; healthReady(report) when done."""
+        def work():
+            try:
+                self.healthReady.emit(health.report(quality_of, self._ignored_now))
+            except Exception:
+                log.exception("library status")
+                self.healthReady.emit({"error": True})
+        threading.Thread(target=work, daemon=True, name="health").start()
 
     @Slot(str, str, bool)
     def ignoreIssue(self, kind: str, key: str, forever: bool):
