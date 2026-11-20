@@ -49,6 +49,9 @@ Item {
     property var lock: ({})                  // Privacy: what sign-ins are set up (never a secret)
     property var castDevices: []
     property bool searching: false
+    readonly property var remote: Backend.remoteInfo || ({})
+    readonly property var ts: remote.tailscale || ({})
+    property bool ffmpegBusy: false
     // Library Status runs only when you ask: on a big library with many gaps it takes a while
     property bool healthBusy: false
     property bool healthChecked: false
@@ -61,14 +64,14 @@ Item {
         report = r
     }
     onSectionNameChanged: {
-        if (sectionName === "Streaming") { castLibs = Backend.castSupport(); castDevices = Backend.devices() }
+        if (sectionName === "Streaming") { castLibs = Backend.castSupport(); castDevices = Backend.devices(); Backend.refreshRemote() }
         if (sectionName === "Privacy") lock = Backend.lockInfo()
         if (sectionName === "About & Updates") { comps = Backend.components(); checking = true; Backend.checkComponents() }
     }
     Connections {
         target: Backend
         function onDevicesFound(list) { root.castDevices = list; root.searching = false }
-        function onComponentsChecked(list) { root.comps = list; root.checking = false }
+        function onComponentsChecked(list) { root.comps = list; root.checking = false; if (root.sectionName === "Streaming") { root.ffmpegBusy = false; Backend.refreshRemote() } }
         function onAppUpdateProgress(p) { root.downloading = p }
         function onStreamChanged() { root.castLibs = Backend.castSupport() }
         function onHealthReady(r) { root.report = r; root.healthBusy = false; root.healthChecked = true }
@@ -1288,6 +1291,128 @@ Item {
                             GlassButton { small: true; label: "Copy link"; onClicked: Backend.copyText(Backend.streamUrl) }
                             GlassButton { small: true; label: "Open"; onClicked: Backend.openStream() }
                         }
+                    }
+
+                    // ---- away from home: your own devices through Tailscale, with the guide right here
+                    Caption { text: "AWAY FROM HOME (REMOTE ACCESS)" }
+                    Text { Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 12
+                        text: "Watch from your iPhone or another computer anywhere, through Tailscale: a free app that links your own devices into a private, encrypted network. Nothing is opened to the internet, and your router needs no changes. This PC must be on, with Media Vault open." }
+                    component Step: Rectangle {
+                        id: step
+                        property int n: 1
+                        property bool done: false
+                        property string title: ""
+                        property string body: ""
+                        default property alias extra: stepExtra.data
+                        Layout.fillWidth: true
+                        implicitHeight: stepCol.implicitHeight + 24
+                        radius: 12; color: Theme.slate; border.color: done ? "#4030D158" : Theme.line
+                        Behavior on border.color { ColorAnimation { duration: 200 * Theme.motion } }
+                        Rectangle {
+                            id: badge
+                            x: 12; y: 12; width: 26; height: 26; radius: 13
+                            color: step.done ? Theme.green : "transparent"; border.color: step.done ? Theme.green : Theme.muted; border.width: 1.5
+                            Behavior on color { ColorAnimation { duration: 200 * Theme.motion } }
+                            Text { anchors.centerIn: parent; text: step.done ? "\u2713" : step.n; color: step.done ? "#000000" : Theme.text
+                                font.pixelSize: 12; font.weight: Font.Bold }
+                        }
+                        ColumnLayout {
+                            id: stepCol
+                            anchors { left: badge.right; leftMargin: 12; right: parent.right; rightMargin: 12; top: parent.top; topMargin: 12 }
+                            spacing: 6
+                            Text { Layout.fillWidth: true; text: step.title; color: "#FFFFFF"; font.pixelSize: 13; font.weight: Font.Bold; wrapMode: Text.Wrap }
+                            Text { Layout.fillWidth: true; visible: step.body !== ""; text: step.body; color: Theme.faint; font.pixelSize: 12; wrapMode: Text.Wrap }
+                            ColumnLayout { id: stepExtra; Layout.fillWidth: true; spacing: 8
+                                visible: { for (var i = 0; i < children.length; i++) if (children[i].visible) return true; return false } }
+                        }
+                    }
+                    Step {
+                        n: 1; done: root.ts.installed === true
+                        title: "Install Tailscale on this PC"
+                        body: done ? "Installed." : "Download it from tailscale.com and run the installer."
+                        Row { visible: root.ts.installed !== true; spacing: 8
+                            GlassButton { small: true; label: "Get Tailscale for Windows"; onClicked: Backend.openLink("https://tailscale.com/download/windows") }
+                            GlassButton { small: true; label: "Check again"; onClicked: Backend.refreshRemote() } }
+                    }
+                    Step {
+                        n: 2; done: root.ts.running === true
+                        title: "Sign in to Tailscale on this PC"
+                        body: done ? "Signed in" + (root.ts.ip ? " \u00B7 this PC is " + (root.ts.name || root.ts.ip) : "") + "."
+                                   : "Click the Tailscale icon by the clock and sign in with Google, Microsoft, Apple or GitHub. It is free for personal use."
+                        Row { visible: root.ts.running !== true; spacing: 8
+                            GlassButton { small: true; label: "Check again"; onClicked: Backend.refreshRemote() } }
+                    }
+                    Step {
+                        n: 3
+                        title: "Install Tailscale on your iPhone (or other computer)"
+                        body: "Get Tailscale from the App Store (or tailscale.com for a computer) and sign in with the same account as on this PC. Leave it connected (the switch in the app)."
+                        Row { spacing: 8
+                            GlassButton { small: true; label: "App Store page"; onClicked: Backend.openLink("https://apps.apple.com/app/tailscale/id1470499037") }
+                            GlassButton { small: true; label: "Other devices"; onClicked: Backend.openLink("https://tailscale.com/download") } }
+                    }
+                    Step {
+                        n: 4; done: root.remote.passwordSet === true
+                        title: done ? "Password set" : "Set a password"
+                        body: "Your devices sign in with it once; they stay signed in. At least 8 characters. Five wrong tries lock that device out for 10 minutes."
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+                            Field { id: remotePass; Layout.fillWidth: true; echoMode: TextInput.Password
+                                placeholderText: root.remote.passwordSet ? "New password (to change it)" : "Password"
+                                onAccepted: savePass.clicked() }
+                            GlassButton { id: savePass; small: true; label: "Save"; enabled: remotePass.text.length > 0
+                                onClicked: { var err = Backend.setStreamPassword(remotePass.text); if (err === "") { remotePass.text = ""; passErr.text = "" } else passErr.text = err } }
+                        }
+                        Text { id: passErr; visible: text !== ""; color: Theme.red; font.pixelSize: 12 }
+                    }
+                    Step {
+                        n: 5; done: root.remote.on === true
+                        title: "Turn on Remote access"
+                        body: "Media Vault then listens for your Tailscale devices too, and starts doing so whenever it opens. If Windows asks whether Media Vault may use networks, allow it."
+                        Toggle { Layout.fillWidth: true; text: "Remote access"; enabled: root.remote.passwordSet === true
+                            hint: root.remote.passwordSet ? "Your Tailscale devices, after signing in" : "Set a password first (step 4)"
+                            checked: root.remote.wanted === true; onToggled: Backend.setRemoteAccess(checked) }
+                    }
+                    Step {
+                        n: 6; done: false
+                        title: "Open it on your phone"
+                        body: root.remote.url
+                              ? "Scan this with the iPhone's Camera (Tailscale connected), sign in, then Share \u203A Add to Home Screen: Media Vault opens like an app."
+                              : "The address appears here once Tailscale is signed in on this PC."
+                        RowLayout {
+                            visible: (root.remote.url || "") !== ""
+                            Layout.fillWidth: true
+                            spacing: 14
+                            Rectangle { Layout.preferredWidth: 132; Layout.preferredHeight: 132; radius: 10; color: "#FFFFFF"
+                                visible: (root.remote.qr || "") !== ""
+                                Image { anchors.fill: parent; anchors.margins: 6; source: root.remote.qr || ""; smooth: false; fillMode: Image.PreserveAspectFit } }
+                            ColumnLayout {
+                                Layout.fillWidth: true
+                                spacing: 6
+                                Text { Layout.fillWidth: true; text: root.remote.url || ""; color: "#FFFFFF"; font.family: Theme.mono; font.pixelSize: 12; elide: Text.ElideMiddle }
+                                Row { spacing: 8
+                                    GlassButton { small: true; label: "Copy address"; onClicked: Backend.copyText(root.remote.url) }
+                                    GlassButton { small: true; label: "New link"; tip: "Signs out every device; they sign in again with the password"
+                                        visible: root.remote.on === true; onClicked: Backend.newRemoteLink() } }
+                                Text { Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 11
+                                    text: root.remote.on ? "On a computer: open the address in any browser while Tailscale is connected." : "Turn on Remote access (step 5) for this address to work." }
+                            }
+                        }
+                    }
+
+                    // ---- converting: files a browser cannot play, or too big for a home upload
+                    Caption { text: "CONVERTING AS IT PLAYS" }
+                    Text { Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.faint; font.pixelSize: 12
+                        text: "An iPhone cannot play MKV and some sound formats, and a 4K file is too big for most home uploads. With ffmpeg, Media Vault converts such a video as it plays (with your graphics card when it can): pick Original, 1080p, 720p or 480p under the video. Away from home it starts at 720p; a file the phone cannot play starts at 1080p." }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 10
+                        Rectangle { width: 10; height: 10; radius: 5; color: root.remote.ffmpeg ? Theme.green : Theme.amber }
+                        Text { Layout.fillWidth: true; color: Theme.text; font.pixelSize: 13
+                            text: root.remote.ffmpeg ? "ffmpeg is installed: converting is on" : "ffmpeg is not installed (about 130 MB)" }
+                        Spinner { visible: root.ffmpegBusy; running: visible; size: 16; color: Theme.blue }
+                        GlassButton { small: true; visible: !root.remote.ffmpeg; enabled: !root.ffmpegBusy; label: root.ffmpegBusy ? "Downloading\u2026" : "Install ffmpeg"
+                            onClicked: { root.ffmpegBusy = true; Backend.updateComponent("ffmpeg") } }
                     }
 
                     Caption { text: "AIRPLAY AND CHROMECAST" }

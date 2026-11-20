@@ -369,6 +369,41 @@ def download_mpv(bin_dir: Path, log=print) -> None:
     (bin_dir / "mpv.version").write_text(asset["name"], encoding="utf-8")
 
 
+FFMPEG_RELEASES = "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest"
+FFMPEG_ASSET = re.compile(r"ffmpeg-n(\d+(?:\.\d+)*)-latest-win64-gpl-[\d.]+\.zip$")
+
+
+def _latest_ffmpeg() -> dict:
+    """The newest stable (release-branch, not master) 64-bit Windows GPL build of ffmpeg: it has NVENC, AMF,
+    Quick Sync and libx264."""
+    assets = json.loads(_fetch_text(FFMPEG_RELEASES))["assets"]
+    stable = [(tuple(int(x) for x in m[1].split(".")), a) for a in assets if (m := FFMPEG_ASSET.search(a["name"]))]
+    if not stable:
+        raise RuntimeError("no Windows build of ffmpeg found in the latest release")
+    return max(stable, key=lambda t: t[0])[1]
+
+
+def download_ffmpeg(bin_dir: Path, log=print) -> Path:
+    """ffmpeg for converting video as it streams (Settings > Streaming). Optional, about 130 MB; checked against
+    the SHA-256 GitHub publishes for the file when there is one."""
+    asset = _latest_ffmpeg()
+    digest = (asset.get("digest") or "").removeprefix("sha256:")
+    dest = bin_dir / "ffmpeg"
+    dest.mkdir(parents=True, exist_ok=True)
+    with _Scratch() as tmp:
+        archive = Path(tmp) / "ffmpeg.zip"
+        _download(asset["browser_download_url"], archive, log, digest or None, label="Downloading ffmpeg")
+        with zipfile.ZipFile(archive) as zf:
+            member = next((n for n in zf.namelist() if n.endswith("/bin/ffmpeg.exe")), None)
+            if not member:
+                raise RuntimeError("ffmpeg.exe is not in the download")
+            out = Path(tmp) / "out"
+            _safe_extract(zf, out)
+            _place(out / member, dest / "ffmpeg.exe")
+    (dest / "ffmpeg.version").write_text(asset["name"], encoding="utf-8")
+    return dest / "ffmpeg.exe"
+
+
 def download_shader(bin_dir: Path, log=print) -> Path:
     """FSRCNNX super-resolution shader for upscaling level 2+. Optional, so it is not part of setup.
     Fetched over HTTPS from the author's repository and checked against the release's known SHA-256."""

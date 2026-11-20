@@ -200,6 +200,15 @@ def folder_cards(dir_id: int, root: str, items: list[dict], rows: list[dict], lo
     return head + out
 
 
+def qr_data_uri(text: str) -> str:
+    """A QR code of text, as a PNG data: URL for an Image (scan it with the phone's camera). "" without segno."""
+    try:
+        import segno
+    except ImportError:
+        return ""
+    return segno.make(text, error="m").png_data_uri(scale=8, border=2, dark="#000000", light="#FFFFFF")
+
+
 def subtab_rows(root: str, items: list[dict]) -> list[dict]:
     """A folder tab's subtabs: its first-level subfolders that hold titles, A to Z, with how many files each.
     [] when there are none (files only at the top: no subtabs)."""
@@ -801,6 +810,9 @@ class Dashboard(QObject):
         self._ignored_now: dict[str, set] = {}   # Library health: hidden until Media Vault restarts
         self._offline: list[str] = []
         self.stream = streaming.StreamServer()
+        self._remote_info: dict = {}
+        if streaming.StreamServer.remote_on():        # Remote access: your devices reach the library whenever it runs
+            QTimer.singleShot(2500, lambda: self.setStreaming(True))
         self._devices: list = []
         self._insights_visible = False
         self._recent: list = []
@@ -3234,6 +3246,60 @@ class Dashboard(QObject):
         else:
             self.stream.stop()
         self.streamChanged.emit()
+
+    # -- Remote access: your own devices anywhere, through Tailscale (Settings > Streaming, with its guide)
+    remoteChanged = Signal()
+
+    @Property("QVariantMap", notify=remoteChanged)
+    def remoteInfo(self):
+        return self._remote_info
+
+    @Slot()
+    def refreshRemote(self):
+        """In the background (asking Tailscale takes a moment): remoteChanged when remoteInfo is fresh.
+        {on, passwordSet, tailscale: {installed, running, ip, name}, url, qr, lanUrl, ffmpeg, running}"""
+        def work():
+            from utils import transcode
+            ts = streaming.tailscale()
+            host = ts["name"] or ts["ip"]
+            url = f"http://{host}:{self.stream.port}/" if host else ""
+            info = {"on": streaming.StreamServer.remote_on(), "wanted": db.get_setting("remote_access", "") == "1",
+                    "passwordSet": bool(db.get_setting("stream_password", "")), "tailscale": ts, "url": url,
+                    "qr": qr_data_uri(url) if url else "", "lanUrl": self.stream.base_url(),
+                    "ffmpeg": transcode.ffmpeg_path() is not None, "running": self.stream.running}
+            self._remote_info = info
+            self.remoteChanged.emit()
+        threading.Thread(target=work, daemon=True, name="remote-info").start()
+
+    @Slot(str, result=str)
+    def setStreamPassword(self, password: str) -> str:
+        """The password your other devices sign in with. Returns "" or what is wrong with it."""
+        if len(password) < 8:
+            return "Use at least 8 characters"
+        db.set_setting("stream_password", streaming.hash_password(password))
+        self.stream.restart()
+        self.refreshRemote()
+        return ""
+
+    @Slot(bool)
+    def setRemoteAccess(self, on: bool):
+        db.set_setting("remote_access", "1" if on else "")
+        if on and not db.get_setting("stream_password", ""):
+            self.toast.emit("Set a password first")
+        self.stream.stop()                          # it comes back on every address (on), or this network's only (off)
+        if on and streaming.StreamServer.remote_on():
+            self.setStreaming(True)
+        self.streamChanged.emit()
+        self.refreshRemote()
+
+    @Slot()
+    def newRemoteLink(self):
+        """A new secret: every device signed in until now must sign in again."""
+        db.set_setting("remote_token", "")
+        self.stream.restart()
+        self.streamChanged.emit()
+        self.refreshRemote()
+        self.toast.emit("New link made. Your devices sign in again with the password.")
 
     @Slot(result="QVariantMap")
     def castSupport(self):

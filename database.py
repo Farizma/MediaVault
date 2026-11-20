@@ -1064,7 +1064,7 @@ def move_item(uid: str, new_path: str) -> str:
 
 # ---------------------------------------------------------------- settings
 
-SECRET_SETTINGS = {"tmdb_key", "omdb_key", "fanart_key", "opensubtitles_key", "tpdb_key"}     # API keys: encrypted with Windows DPAPI at rest
+SECRET_SETTINGS = {"tmdb_key", "omdb_key", "fanart_key", "opensubtitles_key", "tpdb_key", "remote_token"}     # API keys: encrypted with Windows DPAPI at rest
 
 
 def get_setting(key: str, default=None):

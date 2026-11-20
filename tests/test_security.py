@@ -51,7 +51,10 @@ class StreamServerTests(unittest.TestCase):
         self.assertIn("&lt;script&gt;", page)
         csp = r.headers["Content-Security-Policy"]
         self.assertIn("default-src 'none'", csp)
-        self.assertNotIn("script-src", csp)                # no scripts at all
+        # 1.4.0: the player page loads hls.js and player.js from this PC; never inline code, never anyone else's
+        self.assertRegex(csp, r"script-src 'self';")
+        self.assertNotIn("unsafe-inline';", csp.split("script-src")[1].split(";")[0] + ";")
+        self.assertNotIn("<script", page)                   # the library page itself has none
         self.assertEqual(r.headers["X-Content-Type-Options"], "nosniff")
         self.assertEqual(r.headers["Referrer-Policy"], "no-referrer")
         self.assertNotIn("Python", r.headers["Server"])

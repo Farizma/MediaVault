@@ -54,6 +54,8 @@ def command() -> list[str]:
            "--collect-all", "pychromecast", "--collect-all", "pyatv", "--exclude-module", "numpy",
            # Privacy lock: Windows' WebAuthn prompt (imported only when a sign-in is used, so name it)
            "--collect-submodules", "fido2",
+           # Remote access: the QR code to scan with the phone (imported only when the Streaming page asks)
+           "--collect-submodules", "segno",
            "--hidden-import", "PySide6.QtMultimedia",
            "--hidden-import", "PySide6.QtQuickControls2", "--hidden-import", "PySide6.QtWidgets",
            "--add-data", f"{ROOT / 'ui'}{os.pathsep}ui",          # QML files

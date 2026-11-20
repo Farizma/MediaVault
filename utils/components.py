@@ -92,6 +92,12 @@ def inventory() -> list[dict]:
     shader = bin_dir() / "shaders" / SHADER
     rows.append({"id": "shader", "name": "FSRCNNX shader", "role": "High-quality upscaling (MPV)",
                  "installed": "1.1" if shader.is_file() else "", "kind": "runtime", "optional": True})
+    ff = bin_dir() / "ffmpeg" / "ffmpeg.version"
+    ff_name = ff.read_text(encoding="utf-8").strip() if ff.exists() else ""
+    ff_ver = re.search(r"ffmpeg-n([\d.]+)", ff_name)
+    rows.append({"id": "ffmpeg", "name": "ffmpeg", "role": "Converts video as it streams (iPhone, away from home)",
+                 "installed": (ff_ver[1] if ff_ver else "installed") if (bin_dir() / "ffmpeg" / "ffmpeg.exe").is_file() else "",
+                 "kind": "runtime", "optional": True})
     for pid, name, role, dist, optional in PACKAGES:
         installed = _dist_version(dist)
         if pid == "pyside6" and qt:
@@ -222,7 +228,7 @@ def update(component: str, log=print) -> str:
     try:
         return _update(component, log)
     except PermissionError as e:
-        if component not in ("libmpv", "libvlc", "shader"):
+        if component not in ("libmpv", "libvlc", "shader", "ffmpeg"):
             raise
         log(f"{e}: using your own bin folder instead")
         writable_bin(force=True)
@@ -244,6 +250,9 @@ def _update(component: str, log=print) -> str:
     if component == "libvlc":
         setup.download_vlc(writable_bin(), log)
         return "libVLC updated. Restart Media Vault to use it."
+    if component == "ffmpeg":
+        setup.download_ffmpeg(writable_bin(), log)
+        return "ffmpeg installed: video converts as it streams."
     if component == "shader":
         setup.download_shader(writable_bin(), log)
         return "Upscaling shader installed."

@@ -5,3 +5,4 @@ watchdog
 pillow
 py7zr
 fido2
+segno
