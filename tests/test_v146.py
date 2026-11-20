@@ -196,6 +196,16 @@ class TranscodeTests(unittest.TestCase):
         transcode._encoder_cache.clear()
 
 
+class CleanupTests(unittest.TestCase):
+    def test_leftovers_go_and_a_pause_is_not_cut_short(self):
+        root = Path(tempfile.gettempdir()) / "MediaVault-stream" / "old"
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "seg0.ts").write_bytes(b"x")
+        transcode.Transcoder()
+        self.assertFalse(root.exists())                       # a crash's leftovers are cleared at start
+        self.assertGreaterEqual(transcode.IDLE, 10 * 60)      # a long pause keeps what is converted
+
+
 class SetupTests(unittest.TestCase):
     def test_newest_stable_ffmpeg(self):
         import setup

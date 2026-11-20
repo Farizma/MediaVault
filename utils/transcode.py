@@ -4,7 +4,9 @@ connection too slow for it (watching away from home).
 ffmpeg makes an HLS stream (the format Safari plays natively, and every other browser through the page's player):
 H.264 video at the chosen height and AAC stereo sound, in 4-second pieces written to a scratch folder as fast as
 the PC can make them. The graphics card does the work when it can (NVIDIA NVENC, AMD AMF, Intel Quick Sync), else
-the processor (libx264). A conversion nobody has asked for in a minute is stopped and its folder removed.
+the processor (libx264). A conversion nobody has asked for in 15 minutes (a long pause) is stopped and its folder
+removed; all of them go when streaming stops or Media Vault closes, and anything a crash left behind is cleared at
+the next start. Nothing is ever written beside your videos.
 
 ffmpeg is an optional download (Settings > About & Updates, or the Streaming page's button), kept in bin/ffmpeg/.
 """
@@ -23,7 +25,7 @@ log = logging.getLogger(__name__)
 
 QUALITIES = {"1080": (1080, "6M", "12M"), "720": (720, "3M", "6M"), "480": (480, "1200k", "2400k")}  # height, rate, buffer
 SEGMENT = 4
-IDLE = 60                  # seconds without a request before a conversion is stopped
+IDLE = 15 * 60             # seconds without a request before a conversion is stopped (a pause can be long)
 MAX_SESSIONS = 2           # conversions running at once (each one keeps a GPU encoder or CPU cores busy)
 NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
 _FILE = re.compile(r"^(?:index\.m3u8|seg\d{1,6}\.ts)$")
@@ -103,6 +105,7 @@ class Transcoder:
         self._bad: set[str] = set()              # encoders that failed on this PC (no such graphics card)
         self._root = Path(tempfile.gettempdir()) / "MediaVault-stream"
         self._reaper = None
+        shutil.rmtree(self._root, ignore_errors=True)       # left by a crash or a power cut: nothing is running yet
 
     def available(self) -> bool:
         return ffmpeg_path() is not None
@@ -188,7 +191,7 @@ class Transcoder:
 
     def _reap(self):
         while True:
-            time.sleep(10)
+            time.sleep(30)
             with self._lock:
                 for k in [k for k, s in self._sessions.items() if time.monotonic() - s.used > IDLE]:
                     self._stop(k)
