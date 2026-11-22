@@ -181,11 +181,17 @@ Window {
             visible: opacity > 0
             Behavior on opacity { NumberAnimation { duration: 200 * Theme.motion; easing.type: Easing.OutCubic } }
             gradient: Gradient {
-                GradientStop { position: 0; color: "#CC000000" }
+                GradientStop { position: 0; color: Theme.glass ? "#59000000" : "#CC000000" }
                 GradientStop { position: 1; color: "transparent" }
             }
+            Glass {                        // Liquid Glass: the title floats in a capsule
+                visible: Theme.glass === true
+                anchors { fill: topRow; margins: -10 }
+                radius: height / 2
+            }
             RowLayout {
-                anchors { left: parent.left; right: parent.right; top: parent.top; margins: 28 }
+                id: topRow
+                anchors { left: parent.left; right: parent.right; top: parent.top; margins: 28; leftMargin: Theme.glass ? 34 : 28; rightMargin: Theme.glass ? 34 : 28 }
                 spacing: 14
                 GlassButton { tip: "Back to the library (Esc)"; label: "Back"; glyph: "\u2039"; small: true; onClicked: Player.stop() }
                 Text {
@@ -216,13 +222,11 @@ Window {
         }
 
         // ---------------------------------------------------------------- bottom control bar
-        Rectangle {
+        Glass {
             id: bar
             anchors { left: parent.left; right: parent.right; bottom: parent.bottom; margins: win.width < 1100 ? 16 : 28 }
             height: barCol.implicitHeight + 32
-            radius: 16
-            color: Theme.hud
-            border.color: Theme.line
+            radius: Theme.glass ? 26 : 16
             opacity: root.controlsOn && !root.cropping && !root.shrunk && !root.pip ? 1 : 0
             visible: opacity > 0
             Behavior on opacity { NumberAnimation { duration: 200 * Theme.motion; easing.type: Easing.OutCubic } }
@@ -268,8 +272,8 @@ Window {
                     // volume, right by the playback buttons: speaker (click = mute), slider, percentage
                     Rectangle {
                         Layout.leftMargin: 6
-                        implicitWidth: volRow.implicitWidth + 24; implicitHeight: 48; radius: 14
-                        color: Theme.fillHover; border.color: Theme.lineStrong
+                        implicitWidth: volRow.implicitWidth + 24; implicitHeight: 48; radius: Theme.glass ? 24 : 14
+                        color: Theme.glass ? "#14FFFFFF" : Theme.fillHover; border.color: Theme.glass ? "#2EFFFFFF" : Theme.lineStrong
                         Row {
                             id: volRow
                             anchors.centerIn: parent
@@ -365,6 +369,27 @@ Window {
                 width: 14; height: 14; radius: 7; color: Theme.text
                 scale: sl.pressed ? 1.2 : 1
                 Behavior on scale { NumberAnimation { duration: 120 * Theme.motion } }
+            }
+        }
+        // Liquid Glass surface (Settings: Liquid Glass player controls). Classic: the plain dark HUD panel.
+        // shortcut: tint + rim + shine, no blur (the video is another native window; see the top of this file)
+        component Glass: Rectangle {
+            id: g
+            readonly property bool on: Theme.glass === true
+            property color classic: Theme.hud
+            property color classicBorder: Theme.line
+            color: on ? "#7A0C0C10" : classic
+            border.color: on ? "#3DFFFFFF" : classicBorder
+            Rectangle {                    // shine across the top, as light catches the glass
+                visible: g.on
+                anchors { left: parent.left; right: parent.right; top: parent.top; margins: 1 }
+                height: Math.min(parent.height * 0.55, 44); radius: Math.max(0, g.radius - 1)
+                gradient: Gradient { GradientStop { position: 0; color: "#26FFFFFF" } GradientStop { position: 1; color: "#00FFFFFF" } }
+            }
+            Rectangle {                    // inner rim: the edge of the glass
+                visible: g.on
+                anchors { fill: parent; margins: 1 }
+                radius: Math.max(0, g.radius - 1); color: "transparent"; border.color: "#12FFFFFF"
             }
         }
         component Head: Text { color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10; Layout.topMargin: 8 }
@@ -840,7 +865,14 @@ Window {
             property real drop: 0          // 0 = above the screen, 1 = resting
             property real grow: 0          // 0 = dot, 1 = full pill
             readonly property bool active: drop > 0 || grow > 0
-            function ping() { hideVol.stop(); idleVol.restart(); if (grow < 1 && !showVol.running) showVol.restart() }
+            property real squish: 0        // Liquid Glass: a quick stretch each time the volume changes
+            function ping() { hideVol.stop(); idleVol.restart(); if (grow < 1 && !showVol.running) showVol.restart()
+                              else if (Theme.glass && Theme.motion > 0) wobble.restart() }
+            SequentialAnimation {
+                id: wobble
+                NumberAnimation { target: volPill; property: "squish"; to: 1; duration: 90; easing.type: Easing.OutCubic }
+                NumberAnimation { target: volPill; property: "squish"; to: 0; duration: 420; easing.type: Easing.OutElastic; easing.amplitude: 1.1; easing.period: 0.45 }
+            }
             Timer { id: idleVol; interval: 900; onTriggered: { showVol.stop(); hideVol.restart() } }
             SequentialAnimation {
                 id: showVol
@@ -852,17 +884,27 @@ Window {
                 NumberAnimation { target: volPill; property: "grow"; to: 0; duration: 240 * Theme.motion; easing.type: Easing.InOutCubic }
                 NumberAnimation { target: volPill; property: "drop"; to: 0; duration: 200 * Theme.motion; easing.type: Easing.InCubic }
             }
-            width: 12 + 228 * grow
-            height: 12 + 28 * Math.min(1, grow)
+            width: 12 + 228 * grow + 14 * squish
+            height: 12 + 28 * Math.min(1, grow) - 4 * squish
             x: (parent.width - width) / 2
-            y: -height - 6 + (height + 6 + 20) * drop
+            readonly property real rest: Theme.glass && top.visible ? top.y + topRow.y + topRow.height + 22 : 20   // below the title capsule
+            y: -height - 6 + (height + 6 + rest) * drop
             visible: active
             Rectangle {
+                id: volGlass
                 anchors.fill: parent
                 radius: height / 2
-                // a bright dot that darkens into glass as it opens
-                color: Qt.rgba(1 - 0.93 * Math.min(1, volPill.grow), 1 - 0.93 * Math.min(1, volPill.grow), 1 - 0.93 * Math.min(1, volPill.grow), 0.95)
-                border.color: Qt.rgba(1, 1, 1, 0.18 * Math.min(1, volPill.grow))
+                readonly property real k: Math.min(1, volPill.grow)
+                // a bright dot that darkens into glass as it opens (Liquid Glass: see-through, with a rim and a shine)
+                color: Qt.rgba(1 - 0.95 * k, 1 - 0.95 * k, 1 - 0.94 * k, Theme.glass ? 0.95 - 0.43 * k : 0.95)
+                border.color: Qt.rgba(1, 1, 1, (Theme.glass ? 0.26 : 0.18) * k)
+                Rectangle {
+                    visible: Theme.glass === true
+                    anchors { left: parent.left; right: parent.right; top: parent.top; margins: 1 }
+                    height: parent.height / 2; radius: height
+                    opacity: volGlass.k
+                    gradient: Gradient { GradientStop { position: 0; color: "#2EFFFFFF" } GradientStop { position: 1; color: "#00FFFFFF" } }
+                }
             }
             Row {
                 anchors.centerIn: parent

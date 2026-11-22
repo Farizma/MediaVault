@@ -489,6 +489,13 @@ Item {
                     }
                     Toggle {
                         Layout.fillWidth: true
+                        text: "Liquid Glass player controls"
+                        hint: "Frosted glass title bar, controls and volume. Off: the classic dark controls."
+                        checked: Backend.setting("hud_style") !== "classic"
+                        onToggled: Backend.setSetting("hud_style", checked ? "glass" : "classic")
+                    }
+                    Toggle {
+                        Layout.fillWidth: true
                         text: "Reduce motion"
                         hint: "Applies next launch. Windows' own animation switch is honoured too."
                         checked: Backend.setting("reduce_motion") === "1"

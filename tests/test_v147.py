@@ -166,6 +166,29 @@ class PhoneTests(unittest.TestCase):
         self.assertEqual(self.get(f"/{self.t}/wide/{self.u['Arrival']}")[0].status, 200)
 
 
+class GlassHudTests(unittest.TestCase):
+    def test_switch_changes_the_player_at_once(self):
+        from types import SimpleNamespace
+        import ui
+        from ui import dashboard
+        ctx = mock.Mock()
+        fake = SimpleNamespace(app=SimpleNamespace(engine=SimpleNamespace(), qml_context=ctx))
+        db.init_db()
+        try:
+            dashboard.Dashboard.setSetting(fake, "hud_style", "classic")
+            self.assertFalse(ui.THEME["glass"])
+            ctx.setContextProperty.assert_called_with("Theme", ui.THEME)
+            dashboard.Dashboard.setSetting(fake, "hud_style", "glass")
+            self.assertTrue(ui.THEME["glass"])
+        finally:
+            ui.THEME["glass"] = True
+        hud = (ROOT / "player" / "Hud.qml").read_text(encoding="utf-8")
+        self.assertIn("component Glass: Rectangle", hud)
+        self.assertIn("Glass {\n            id: bar", hud)
+        sv = (ROOT / "ui" / "SettingsView.qml").read_text(encoding="utf-8")
+        self.assertIn('Backend.setSetting("hud_style", checked ? "glass" : "classic")', sv)
+
+
 class VttTests(unittest.TestCase):
     def test_srt_to_vtt(self):
         self.assertEqual(webui.srt_to_vtt("﻿1\r\n00:00:01,500 --> 00:00:02,000\r\nHi\r\n"),

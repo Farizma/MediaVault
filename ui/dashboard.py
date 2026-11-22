@@ -21,7 +21,7 @@ from . import dvd_box, file_url, pick_folder, pick_image
 
 log = logging.getLogger(__name__)
 BILLBOARD_SIZE = 8  # titles in the recommended carousel
-SETTINGS = {"tmdb_key", "omdb_key", "tpdb_key", "folder_card_size", "night_mode", "reduce_motion", "upscale_level", "show_insights", "core", "theme",
+SETTINGS = {"tmdb_key", "omdb_key", "tpdb_key", "folder_card_size", "night_mode", "reduce_motion", "hud_style", "upscale_level", "show_insights", "core", "theme",
             "custom_accent", "custom_highlight", "custom_page", "custom_surface", "custom_card", "custom_text",
             "custom_muted", "custom_amber", "custom_red", "auto_credits", "auto_tags",
             "fanart_key", "animated_theme", "hover_preview", "detail_order", "title_language", "group_collections", "discord", "discord_detail", "discord_app_id",
@@ -2767,6 +2767,11 @@ class Dashboard(QObject):
             engine.core_pref = value
         elif key == "auto_credits":
             engine.auto_credits = value != "0"
+        elif key == "hud_style":       # "glass" or "classic": the player controls change at once
+            import ui
+            ui.THEME["glass"] = value != "classic"
+            if self.app.qml_context:
+                self.app.qml_context.setContextProperty("Theme", ui.THEME)
         elif key == "gpu_high_performance":
             from utils import gpu_pref
             try:

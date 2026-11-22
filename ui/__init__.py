@@ -23,6 +23,7 @@ THEME = {  # matches the web app (media-vault-googleAI): Tailwind white/NN overl
     "green": "#34C759", "blue": "#007AFF", "amber": "#FCD34D", "red": "#FF453A",
     "text": "#F5F5F7", "muted": "#8E8E93", "faint": "#80FFFFFF",      # faint = white/50
     "font": "Plus Jakarta Sans", "mono": "JetBrains Mono",            # bundled in ui/fonts
+    "glass": True,  # player HUD: Liquid Glass (False = Classic, Settings > Playback)
     "motion": 1,  # multiplier for every animation duration; 0 = reduced motion
     "panel": "#F2121212", "theme": "midnight",                        # modal sheets; current colourway id
     "onBlue": "#FFFFFF", "onGreen": "#000000",                        # text on highlight / accent fills

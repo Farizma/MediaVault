@@ -458,6 +458,7 @@ def main() -> int:
         db.init_db()
         reduced = reduced or db.get_setting("reduce_motion") == "1"  # ... or our own setting
     ui.THEME["motion"] = 0 if reduced else 1
+    ui.THEME["glass"] = not db.db_exists() or db.get_setting("hud_style") != "classic"
     try:                                   # the interface on the fast GPU of a two-GPU laptop (from the next start)
         from utils import gpu_pref
         logging.info("high-performance GPU: %s",
