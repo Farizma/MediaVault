@@ -14,6 +14,8 @@ Item {
     property url back
     property url spine                     // empty: a spine is drawn from the title and year
     property url disc                      // disc art (else the poster is used for the disc)
+    property bool instant: false           // load pictures at once (the View More carousel: a box whose film changes must
+                                           // never show blank for a frame while its new cover loads)
     property string title: ""
     property string year: ""
     property real yaw: -28
@@ -122,7 +124,7 @@ Item {
             Disc { anchors.fill: parent; source: root.disc; spin: 540 * root.opened }
         }
         Face { g: root.geo.back; width: 426; height: 600
-            Image { anchors.fill: parent; source: root.back; fillMode: Image.PreserveAspectCrop; asynchronous: true }   // kept at the chosen image resolution: shown at full size
+            Image { anchors.fill: parent; source: root.back; fillMode: Image.PreserveAspectCrop; asynchronous: !root.instant }   // kept at the chosen image resolution: shown at full size
         }
         Face { g: root.geo.top; width: 426; height: 44; Rectangle { anchors.fill: parent; color: "#2C2C2E" } }
         Face { g: root.geo.bottom; width: 426; height: 44; Rectangle { anchors.fill: parent; color: "#232325" } }
@@ -131,7 +133,7 @@ Item {
             Rectangle { x: 20; width: 4; height: parent.height; color: "#1F1F22" }
         }
         Face { g: root.geo.spine; width: 44; height: 600
-            Image { id: spineArt; anchors.fill: parent; source: root.spine; visible: status === Image.Ready; fillMode: Image.Stretch; asynchronous: true }
+            Image { id: spineArt; anchors.fill: parent; source: root.spine; visible: status === Image.Ready; fillMode: Image.Stretch; asynchronous: !root.instant }
             Rectangle {                     // no spine art: title and year, like a shelf of real cases
                 anchors.fill: parent; visible: !spineArt.visible; color: "#0E0E10"
                 Rectangle { width: parent.width; height: 10; color: Theme.blue }
@@ -152,7 +154,7 @@ Item {
         // the cover: outside (poster) and inside (liner); only the side facing you is drawn
         Face { g: root.geo.liner; width: 426; height: 600; Rectangle { anchors.fill: parent; color: "#1C1C1E" } }
         Face { g: root.geo.front; width: 426; height: 600
-            Image { anchors.fill: parent; source: root.front; fillMode: Image.PreserveAspectCrop; asynchronous: true }   // kept at the chosen image resolution: shown at full size
+            Image { anchors.fill: parent; source: root.front; fillMode: Image.PreserveAspectCrop; asynchronous: !root.instant }   // kept at the chosen image resolution: shown at full size
             Rectangle {                     // the sleeve's gloss slides across as the box turns
                 width: parent.width * 0.7; height: parent.height * 1.4; y: -parent.height * 0.2
                 x: parent.width * (0.15 + 0.9 * Math.sin(root.yaw * Math.PI / 180)) - width / 2

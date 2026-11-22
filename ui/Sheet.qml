@@ -12,6 +12,8 @@ Item {
     property int maxWidth: 820
     property int maxHeight: 760
     property bool scrolls: true                 // false: the content fills the panel and handles its own scrolling
+    // a big window: the window and everything in it drawn bigger (laid out for the window / zoom, then scaled up)
+    readonly property real zoom: Math.max(1, Math.min(1.6, Math.min(width / 1600, height / 1000)))
     property rect from: Qt.rect(width / 2, height / 2, 0, 0)
     property real shown: 0
     default property alias content: holder.data
@@ -34,15 +36,16 @@ Item {
     Rectangle {
         id: panel
         anchors.centerIn: parent
-        width: Math.min(root.maxWidth, root.width - 48)
-        height: Math.min(root.maxHeight, root.height - 48)
+        width: Math.min(root.maxWidth, root.width / root.zoom - 48)
+        height: Math.min(root.maxHeight, root.height / root.zoom - 48)
         radius: 18
         color: Theme.panel
         border.color: Theme.lineStrong
         clip: true
         opacity: Math.min(1, root.shown * 1.6)
-        transform: Scale { origin.x: root.from.x + root.from.width / 2 - panel.x; origin.y: root.from.y + root.from.height / 2 - panel.y
-                           xScale: 0.05 + 0.95 * root.shown; yScale: 0.05 + 0.95 * root.shown }
+        transform: [Scale { origin.x: panel.width / 2; origin.y: panel.height / 2; xScale: root.zoom; yScale: root.zoom },
+                    Scale { origin.x: root.from.x + root.from.width / 2 - panel.x; origin.y: root.from.y + root.from.height / 2 - panel.y
+                           xScale: 0.05 + 0.95 * root.shown; yScale: 0.05 + 0.95 * root.shown }]
         Keys.onEscapePressed: root.close()
         // a remapped Back key (Settings > Controls), or a controller's Back button, closes it too
         Keys.onPressed: (e) => { if (Backend.keyAction(e.key, e.modifiers) === "back") { root.close(); e.accepted = true } }

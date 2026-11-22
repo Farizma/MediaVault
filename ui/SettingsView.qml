@@ -126,14 +126,17 @@ Item {
     Rectangle {
         id: sheet
         anchors.centerIn: parent
-        width: Math.min(root.width - 48, Math.max(980, Math.min(1500, root.width * 0.7)))
-        height: Math.min(root.height - 48, Math.max(680, Math.min(1100, root.height * 0.82)))
+        // grows with the window; on a big one, its text and controls grow too (laid out for window / zoom, drawn zoomed)
+        readonly property real zoom: Math.max(1, Math.min(1.6, Math.min(root.width / 1600, root.height / 1000)))
+        width: Math.min(root.width / zoom - 48, Math.max(980, Math.min(1500, root.width / zoom * 0.7)))
+        height: Math.min(root.height / zoom - 48, Math.max(680, Math.min(1100, root.height / zoom * 0.82)))
         radius: 16
         color: Theme.graphite
         border.color: Theme.line
         clip: true
         opacity: Math.min(1, root.shown * 1.5)
-        transform: Scale { origin.x: root.originX - sheet.x; origin.y: root.originY - sheet.y; xScale: 0.06 + 0.94 * root.shown; yScale: xScale }
+        transform: [Scale { origin.x: sheet.width / 2; origin.y: sheet.height / 2; xScale: sheet.zoom; yScale: sheet.zoom },
+                    Scale { origin.x: root.originX - sheet.x; origin.y: root.originY - sheet.y; xScale: 0.06 + 0.94 * root.shown; yScale: xScale }]
         MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }
 
         // ---- section list

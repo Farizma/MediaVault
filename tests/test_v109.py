@@ -169,8 +169,8 @@ class GridSettleTests(unittest.TestCase):
 class DetailViewTests(unittest.TestCase):
     def test_box_fits_its_pane(self):
         qml = (ROOT / "ui" / "DetailView.qml").read_text(encoding="utf-8")
-        self.assertIn("root.fitFaceW / faceWPerH + 24", qml)
-        self.assertIn("stage.width / 2 - 12 - 0.62 * 0.6 * faceW", qml)
+        self.assertIn("root.fitFaceW / faceWPerH + 24 * root.zoom", qml)          # 1.4.1: margins grow with the zoom
+        self.assertIn("stageVW / 2 - 12 * zoom - 0.62 * 0.6 * faceW", qml)
         self.assertNotIn("1.35", qml)
 
     def test_long_text_scrolls_and_film_edits_the_set(self):

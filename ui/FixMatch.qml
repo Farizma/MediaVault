@@ -153,14 +153,16 @@ Item {
     Rectangle {
         id: panel
         anchors.centerIn: parent
-        width: Math.min(parent.width - 64, 1180)
-        height: Math.min(parent.height - 64, 860)
+        // a big window: drawn bigger, contents and all (laid out for window / zoom)
+        readonly property real zoom: Math.max(1, Math.min(1.6, Math.min(parent.width / 1600, parent.height / 1000)))
+        width: Math.min(parent.width / zoom - 64, 1180)
+        height: Math.min(parent.height / zoom - 64, 860)
         radius: 16
         color: Theme.panel
         border.color: Theme.lineStrong
         clip: true
         opacity: root.shown
-        scale: 0.96 + 0.04 * root.shown
+        scale: (0.96 + 0.04 * root.shown) * zoom
         MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onWheel: (w) => w.accepted = false }    // clicks inside stay inside
 
         // ---- header

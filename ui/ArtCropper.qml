@@ -51,9 +51,10 @@ Item {
     Rectangle {
         id: panel
         anchors.centerIn: parent
-        width: Math.min(parent.width - 48, 980); height: Math.min(parent.height - 48, 760)
+        readonly property real zoom: Math.max(1, Math.min(1.6, Math.min(parent.width / 1600, parent.height / 1000)))
+        width: Math.min(parent.width / zoom - 48, 980); height: Math.min(parent.height / zoom - 48, 760)
         radius: 18; color: Theme.graphite; border.color: Theme.lineStrong
-        opacity: crop.shown; scale: 0.94 + 0.06 * crop.shown
+        opacity: crop.shown; scale: (0.94 + 0.06 * crop.shown) * zoom
         focus: true
         Keys.onEscapePressed: crop.close()
         // a remapped Back key (Settings > Controls), or a controller's Back button, closes it too

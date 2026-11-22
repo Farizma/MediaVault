@@ -272,10 +272,17 @@ Item {
     readonly property real sideScale: 0.5 + 0.12 * spread
     // the films beside the one in focus: as far out as the left pane allows, never over the text on the right
     readonly property real faceW: Math.max(0, box.height - 24) * box.faceWPerH
-    readonly property real sideX: Math.max(0, stage.width / 2 - 12 - 0.62 * 0.6 * faceW)
+    // the sheet grows with a big window, contents and all (zoom); the box, which lives outside it, measures the
+    // sheet as it is seen: these are its visible place and size
+    readonly property real zoom: Math.max(1, Math.min(1.6, Math.min(width / 1600, height / 1000)))
+    readonly property real sheetVX: sheet.x + sheet.width * (1 - zoom) / 2
+    readonly property real sheetVY: sheet.y + sheet.height * (1 - zoom) / 2
+    readonly property real sheetVH: sheet.height * zoom
+    readonly property real stageVW: stage.width * zoom
+    readonly property real sideX: Math.max(0, stageVW / 2 - 12 * zoom - 0.62 * 0.6 * faceW)
     // the box's size: the front face (turned and spinning, so with room to spare) fits the left pane's width, and in
     // a box set with half a neighbour showing either side of it
-    readonly property real fitFaceW: count > 1 ? (stage.width - 24) / 1.85 : (stage.width - 48) / 1.25
+    readonly property real fitFaceW: count > 1 ? (stageVW - 24 * zoom) / 1.85 : (stageVW - 48 * zoom) / 1.25
     SequentialAnimation {
         id: carousel
         ParallelAnimation {
@@ -348,16 +355,20 @@ Item {
         id: sheet
         anchors.centerIn: parent
         // grows with the window (up to a comfortable maximum) instead of staying a fixed card on a big screen
-        width: Math.min(root.width - 48, Math.max(1120, Math.min(1900, root.width * 0.84)))
-        height: Math.min(root.height - 48, Math.max(720, Math.min(1240, root.height * 0.88)))
+        // laid out for the window divided by the zoom, then drawn that much bigger (text and all)
+        width: Math.min(root.width / root.zoom - 48, Math.max(1120, Math.min(1900, root.width / root.zoom * 0.84)))
+        height: Math.min(root.height / root.zoom - 48, Math.max(720, Math.min(1240, root.height / root.zoom * 0.88)))
         radius: 16
         color: Theme.panel
         border.color: Theme.lineStrong
         clip: true
         opacity: root.sheetIn
         // grows out of whatever opened it (the card or the button) and shrinks back into it
-        transform: Scale { origin.x: root.from.x + root.from.width / 2 - sheet.x; origin.y: root.from.y + root.from.height / 2 - sheet.y
-                           xScale: 0.06 + 0.94 * root.sheetIn; yScale: xScale }
+        transform: [
+            Scale { origin.x: sheet.width / 2; origin.y: sheet.height / 2; xScale: root.zoom; yScale: root.zoom },
+            Scale { origin.x: root.from.x + root.from.width / 2 - sheet.x; origin.y: root.from.y + root.from.height / 2 - sheet.y
+                    xScale: 0.06 + 0.94 * root.sheetIn; yScale: xScale }
+        ]
         MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons }            // clicks on the sheet must not close the view
 
         // left pane: the box lands here (the box itself lives above the sheet, see DvdBox below)
@@ -392,7 +403,7 @@ Item {
             // under the box, fixed in the pane: it does not ride along with the box in focus as the carousel turns
             Text {
                 anchors.horizontalCenter: parent.horizontalCenter
-                y: box.restY - sheet.y + box.height - height
+                y: (box.restY - root.sheetVY + box.height) / root.zoom - height
                 text: root.discMode ? "Drag the disc to turn it over" : "Drag to spin \u00B7 scroll to zoom"; color: Theme.faint; font.family: Theme.mono; font.pixelSize: 10
                 opacity: root.f === 1 && !root.launching ? 1 : 0
                 Behavior on opacity { NumberAnimation { duration: 200 * Theme.motion } }
@@ -1159,9 +1170,11 @@ Item {
     // While the carousel turns: the one on the side the films come from slides forward into the middle, the one on
     // the other side drifts further back and fades, and a new one (below) fades in behind on the coming side.
     Repeater {
-        model: root.count > 2 ? [-1, 1] : root.count === 2 ? [root.turning ? root.turnDir : root.twoSide] : []
+        // a number, not a list: a list made anew when a turn starts or ends rebuilt these boxes (a blink)
+        model: root.count > 2 ? 2 : root.count === 2 ? 1 : 0
         DvdBox {
-            readonly property int dir: modelData
+            readonly property int dir: root.count > 2 ? (index === 0 ? -1 : 1) : root.twoSide
+            instant: true
             readonly property bool incoming: root.turning && dir === root.turnDir
             readonly property bool leaving: root.turning && dir === -root.turnDir
             readonly property real p: root.turnP
@@ -1183,14 +1196,16 @@ Item {
             transform: [
                 Scale { origin.x: box.width / 2; origin.y: box.faceCY; xScale: k; yScale: k },
                 // out of the set: sideways to its place, lifted a little on the way (an arc), then the wave
+                // the bob: a beat behind on each side; the one coming in catches up with the middle's beat as it comes
                 Translate { x: side
-                            y: -28 * Math.sin(Math.PI * Math.min(1, root.spread)) + root.spread * 5 * Math.sin(root.wave - dir * 1.1) * (incoming ? 1 - p : 1) }
+                            y: -28 * Math.sin(Math.PI * Math.min(1, root.spread)) + root.spread * 5 * Math.sin(root.wave - dir * 1.1 * (incoming ? 1 - p : 1)) }
             ]
         }
     }
     // the film that becomes the new neighbour on the coming side: fades in from further back while the carousel turns
     DvdBox {
         id: newcomer
+        instant: true
         readonly property real p: root.turnP
         readonly property int dir: root.turnDir
         readonly property var s: root.slides[root.wrap(root.turnTarget + dir)] || ({})
@@ -1206,15 +1221,16 @@ Item {
         readonly property real k: root.sideScale * (0.7 + 0.3 * p)
         transform: [
             Scale { origin.x: box.width / 2; origin.y: box.faceCY; xScale: newcomer.k; yScale: newcomer.k },
-            Translate { x: root.turnDir * root.sideX * (1.12 - 0.12 * root.turnP); y: -28 * Math.sin(Math.PI * Math.min(1, root.spread)) }
+            Translate { x: root.turnDir * root.sideX * (1.12 - 0.12 * root.turnP)
+                        y: -28 * Math.sin(Math.PI * Math.min(1, root.spread)) + root.spread * 5 * Math.sin(root.wave - root.turnDir * 1.1) }
         ]
     }
 
     DvdBox {
         id: box
         // as big as the stage allows: from under the film label down to just above the box-art buttons
-        height: Math.max(240, Math.min(sheet.height - 150, root.fitFaceW / faceWPerH + 24))
-        width: Math.min(stage.width - 24, height * 0.92)
+        height: Math.max(240, Math.min(root.sheetVH - 150 * root.zoom, root.fitFaceW / faceWPerH + 24 * root.zoom))
+        width: Math.min(root.stageVW - 24 * root.zoom, height * 0.92)
         front: root.cur.cover || ""
         back: root.cur.back || ""
         spine: root.cur.spine || ""
@@ -1222,15 +1238,19 @@ Item {
         title: root.cur.title || ""
         year: root.cur.year || ""
         property real swipe: 0                 // carousel: sideways slide while turning to the next film
-        readonly property real bob: root.spread * 5 * Math.sin(root.wave)   // idle wave, in step with the films beside it
+        instant: true
+        // idle wave, in step with the films beside it; turning out to a side it falls into that side's beat, so it
+        // lands exactly where the box that takes its place is (no jump when the turn ends)
+        readonly property real bob: root.spread * 5 * Math.sin(root.wave + root.turnDir * 1.1 * root.turnP)
         hint: false                            // the pane draws it, so it stays put while the box turns and slides
         spinning: root.f === 1 && !root.closing && !root.launching && !root.turning && !root.discMode
         enabled: root.f === 1 && !root.closing && !root.launching && !root.turning && !root.discMode
         discOut: root.discOut > 0
         // resting place: centred in the left pane, above the box-art buttons
-        readonly property real restX: sheet.x + (stage.width - width) / 2
+        readonly property real restX: root.sheetVX + (root.stageVW - width) / 2
         // between the film label at the top and the box-art buttons at the bottom, centred when it is smaller
-        readonly property real restY: sheet.y + Math.max(56, sheet.height - 80 - height - Math.max(0, (sheet.height - 136 - height) / 2))
+        readonly property real restY: root.sheetVY + Math.max(56 * root.zoom, root.sheetVH - 80 * root.zoom - height
+                                                              - Math.max(0, (root.sheetVH - 136 * root.zoom - height) / 2))
         readonly property real restCx: restX + width / 2
         readonly property real restCy: restY + faceCY
         // start: the card's poster (or, without a card, a smaller box in the same place)
@@ -1259,9 +1279,9 @@ Item {
         readonly property real d0: box.focal * 172 / (box.camZ + 260 + box.boxD / 2 - 3)
         readonly property real cx0: box.x + box.width / 2
         readonly property real cy0: box.y + box.faceCY + box.bob
-        readonly property real d1: Math.max(160, Math.min(stage.width - 96, sheet.height - 250))
-        readonly property real cx1: sheet.x + stage.width / 2
-        readonly property real cy1: sheet.y + 64 + d1 / 2
+        readonly property real d1: Math.max(160, Math.min(root.stageVW - 96 * root.zoom, root.sheetVH - 250 * root.zoom))
+        readonly property real cx1: root.sheetVX + root.stageVW / 2
+        readonly property real cy1: root.sheetVY + 64 * root.zoom + d1 / 2
         readonly property real t: root.discOut
         visible: root.visible && t > 0.001
         z: 8
@@ -1306,8 +1326,9 @@ Item {
     GlassButton {
         z: 9
         visible: root.visible && root.f === 1 && !root.launching && !root.closing
-        x: sheet.x + stage.width - width - 16
-        y: sheet.y + 16
+        x: root.sheetVX + root.stageVW - width * root.zoom - 16 * root.zoom
+        y: root.sheetVY + 16 * root.zoom
+        transform: Scale { xScale: root.zoom; yScale: root.zoom }
         small: true
         glyph: root.discMode ? "\u2190" : "\u25CE"
         label: root.discMode ? "Back to box" : "View disc"
@@ -1323,7 +1344,7 @@ Item {
             readonly property int dir: modelData
             z: 22
             width: 34; height: 34; radius: 17
-            x: dir < 0 ? sheet.x + 12 : sheet.x + stage.width - width - 12
+            x: dir < 0 ? root.sheetVX + 12 * root.zoom : root.sheetVX + root.stageVW - width - 12 * root.zoom
             y: box.restY + box.faceCY - height / 2
             opacity: root.sheetIn * (arrowArea.containsMouse ? 1 : 0.7)
             visible: root.visible && !root.launching
