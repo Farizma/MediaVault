@@ -1,33 +1,32 @@
-## Media Vault 1.0.8
+## Media Vault 1.4.2
 
 **Install or update:** Settings › About & Updates › Download & install (it installs inside Media Vault and reopens),
-or download `MediaVault_v1.0.8_setup.exe` below.
+or download `MediaVault_v1.4.2_setup.exe` below.
 
 **Windows SmartScreen:** this build is not code-signed yet, so Windows may say it "protected your PC".
 Choose *More info* › *Run anyway*. The SHA-256 of the setup file is listed below.
 
+This release includes 1.4.0, 1.4.1 and 1.4.2.
+
 ### New
-- **Opening animation.** Media Vault starts on its logo: the vault dial spins for as long as the library takes to
-  load, then clicks into place, the door swings open to show the dashboard inside, and the view zooms in through the
-  opening until the dashboard fills the window (under 3 seconds when nothing needs waiting for). With reduced motion
-  it is a short fade.
-- **Cards move with filters.** Adding a filter fades out the cards that no longer match and slides the rest together
-  to close the gaps; taking a filter away first opens gaps where the cards return, then fades them in, rising, one
-  after another. Switching tabs always plays a quick entrance: every card fades in and rises, in sequence.
-- **Banners.** Every title, box set and OVA box set gets a banner: the highest-rated TMDB backdrop without text
-  (TMDB's "no language" backdrops, best rating first). AniList box sets are looked up on TMDB by their English,
-  romanized or original name; if TMDB has nothing, AniList's own banner is used. The banner is now the picture on
-  the dashboard's recommended carousel, and it runs across the top of View More, fading into the panel. The title
-  sits lower on its fading edge, with soft bubbles behind the text that sits on the picture. Box sets already in your
-  library get their banners on the first start of 1.0.8.
-- **Paste a link into Fix Scraped Data.** A TMDB page (film or series; an episode or season page counts as its
-  series), an AniList page, a MyAnimeList page (found on AniList) or an IMDb page (through OMDb) brings up exactly
-  that title as the only result. Pick it to re-scrape from it. A TMDB link decides film or series by itself.
-- **Episode images in series Galleries.** A TMDB series' Gallery now has its episode stills (the "Episode Images"
-  on TMDB) after its backdrops, from the first three seasons, up to 18 images. New series get them when scanned; for
-  series already in your library, Fix Scraped Data (with the title or its TMDB link) refreshes the Gallery.
+- **Watch away from home.** Settings › Streaming › Remote access lets your iPhone or another computer reach Media
+  Vault through Tailscale, with a password, a link that stays the same, a QR code and a step-by-step guide. On an
+  iPhone, *Add to Home Screen* makes it an app.
+- **Videos convert as they stream.** Files a phone or browser cannot play (MKV, HEVC, surround Opus...) are converted
+  on the fly to 1080p, 720p or 480p, on your graphics card when it can. Add ffmpeg in Settings › About & Updates ›
+  Components. Converted pieces live in a temporary folder and are deleted on their own.
+- **The phone pages, redone in Liquid Glass.** Frosted header, tabs and panels over the cover art.
+  - Resume where you stopped, on the phone or on the PC: your place is saved as you watch, and a video counts as
+    watched at 92 %, just like on the PC. Tabs that do not track watched videos stay that way.
+  - Continue Watching row, search, series and box-set pages with every episode, and the next episode starts by itself.
+  - Folder tabs such as Artists show a card per folder, with your folder pictures.
+  - Subtitles: .srt and .vtt files next to the video, and text subtitles inside the file (with ffmpeg).
+- **Liquid Glass player controls.** The title floats in a glass capsule, the control bar and volume are glass, and
+  the volume that drops down from the top stretches like liquid as you change it. Prefer the old look? Settings ›
+  Playback › *Liquid Glass player controls* switches back to Classic at once.
+- **Pop-up windows grow with the window.** Settings, View More and the other sheets scale up, contents and all, on a
+  big window or screen.
 
 ### Fixed
-- **Front… always opens the crop editor** and changes only the front cover, whatever the shape of the picture. A wide
-  picture picked as the Front used to be split like a whole sleeve. Splitting a sleeve into back, spine and front is
-  only done by **Whole cover…** (and a picture that is not a whole sleeve opens in the crop editor as the front).
+- The View More DVD carousel turns smoothly: the box leaving the middle no longer blinks.
+- A converted stream survives a pause of up to 15 minutes, and leftovers from a crash are cleared at the next start.
