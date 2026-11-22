@@ -15,7 +15,6 @@ MKV and AVI play in some browsers and on Chromecast only partly; Apple TV refuse
 import asyncio
 import hashlib
 import hmac
-import html
 import ipaddress
 import json
 import logging
@@ -52,42 +51,10 @@ def lan_ip() -> str:
         s.close()
 
 
-_STYLE = """body{margin:0;background:#000;color:#F5F5F7;font:15px -apple-system,system-ui,'Segoe UI',sans-serif;
--webkit-text-size-adjust:100%}
-header{position:sticky;top:0;z-index:2;padding:14px 18px;padding-top:max(14px,env(safe-area-inset-top));
-background:rgba(28,28,30,.82);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);font-weight:800;display:flex;gap:14px;align-items:center}
-header a{font-weight:600;color:#8E8E93;font-size:14px} header a.on{color:#fff}
-.tabs{display:flex;gap:6px;overflow-x:auto;padding:12px 18px 0;scrollbar-width:none}
-.tabs a{flex:none;padding:7px 13px;border-radius:999px;background:#1C1C1E;font-size:13px;font-weight:600;color:#C7C7CC}
-.tabs a.on{background:#fff;color:#000}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:16px;padding:18px}
-a{color:inherit;text-decoration:none} .c img{width:100%;aspect-ratio:2/3;object-fit:cover;border-radius:12px;background:#1C1C1E;display:block}
-.c p{margin:8px 2px 0;font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-video{width:100%;max-height:78vh;background:#000;display:block} .w{padding:0 0 30px} .w .t{padding:0 18px}
-.m{color:#8E8E93;font-size:13px} .q{display:flex;gap:6px;flex-wrap:wrap;padding:12px 18px 0}
-.q a{padding:6px 12px;border-radius:9px;background:#1C1C1E;font-size:13px;font-weight:600}.q a.on{background:#0A84FF}
-form{max-width:320px;margin:18vh auto 0;padding:0 24px;display:flex;flex-direction:column;gap:12px}
-input{font:inherit;padding:13px 14px;border-radius:12px;border:1px solid #38383A;background:#1C1C1E;color:#fff}
-button{font:inherit;font-weight:700;padding:13px;border:0;border-radius:12px;background:#fff;color:#000}
-.err{color:#FF453A;font-size:13px;text-align:center} h1{font-size:28px;margin:0 0 4px;text-align:center}"""
-
-
-def _page(title: str, body: str, header: str = "Media Vault", script: bool = False) -> bytes:
-    return (f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"><meta name="apple-mobile-web-app-title" content="Media Vault">
-<meta name="theme-color" content="#000000"><link rel="manifest" href="/manifest.webmanifest">
-<link rel="apple-touch-icon" href="/icon.png"><link rel="icon" href="/icon.png">
-<title>{html.escape(title)}</title><style>{_STYLE}</style>"""
-            + ("<script src=\"/hls.min.js\" defer></script><script src=\"/player.js\" defer></script>" if script else "")
-            + f"</head><body><header>{header}</header>{body}</body></html>").encode("utf-8")
-
-
-# No outside resources, frames or inline scripts: the pages are links, posters, a sign-in form and one <video>
-# (whose player, for converted streams, is hls.js served from this PC).
+# No outside resources, frames or inline scripts or styles: the pages (utils/webui.py) are links, posters, a search
+# box, a sign-in form and one <video>, styled by /style.css and played by /player.js (with hls.js), all from this PC.
 SECURITY_HEADERS = {
-    "Content-Security-Policy": "default-src 'none'; img-src 'self'; media-src 'self' blob:; style-src 'unsafe-inline'; "
+    "Content-Security-Policy": "default-src 'none'; img-src 'self'; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; "
                                "script-src 'self'; connect-src 'self'; manifest-src 'self'; "
                                "base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
     "X-Content-Type-Options": "nosniff",
@@ -102,13 +69,7 @@ ICON = Path(__file__).resolve().parent.parent / "ui" / "brand" / "icon-256.png"
 _MANIFEST = json.dumps({"name": "Media Vault", "short_name": "Media Vault", "start_url": "/", "display": "standalone",
                         "background_color": "#000000", "theme_color": "#000000",
                         "icons": [{"src": "/icon.png", "sizes": "256x256", "type": "image/png"}]}).encode()
-_PLAYER_JS = b"""document.querySelectorAll('video[data-src]').forEach(function (v) {
-  var src = v.getAttribute('data-src');
-  if (!/\\.m3u8$/.test(src) || v.canPlayType('application/vnd.apple.mpegurl')) { v.src = src; return; }
-  if (window.Hls && Hls.isSupported()) { var h = new Hls({ enableWorker: false }); h.loadSource(src); h.attachMedia(v); }
-  else { v.src = src; }
-});"""
-QUALITY_NAMES = {"orig": "Original", "1080": "1080p", "720": "720p", "480": "480p"}
+
 
 # Tailscale: a private network between your own devices (100.64.0.0/10 and fd7a:115c:a1e0::/48)
 _TAILSCALE = (ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("fd7a:115c:a1e0::/48"))
@@ -183,7 +144,11 @@ class _Handler(BaseHTTPRequestHandler):
         self._deny()
 
     def do_POST(self):  # noqa: N802
-        if not self._allowed_client() or self.path != "/login" or not self.server.password:
+        if not self._allowed_client():
+            return self._deny()
+        if self.path != "/login":
+            return self._progress()
+        if not self.server.password:
             return self._deny()
         ip = self.client_address[0]
         now = time.monotonic()
@@ -204,13 +169,38 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def _progress(self):
+        """POST /<secret>/progress/<id> {"pos", "dur"}: where the phone is in a video. Saved like the player's own
+        progress, so Continue Watching and resume follow; nearly to the end counts as watched."""
+        parts = [unquote(p) for p in self.path.split("?")[0].strip("/").split("/")]
+        if len(parts) != 3 or parts[1] != "progress" or not _UUID.match(parts[2]) \
+                or not hmac.compare_digest(parts[0].encode(), self.server.token.encode()) \
+                or (self._remote() and not self._cookie_ok()):
+            return self._deny()
+        try:
+            n = min(int(self.headers.get("Content-Length") or 0), 512)
+            data = json.loads(self.rfile.read(n) or b"{}")
+            pos, dur = float(data.get("pos") or 0), float(data.get("dur") or 0)
+        except (ValueError, TypeError, AttributeError):
+            return self._deny(400)
+        try:
+            item = db.get_media(parts[2])
+            if not item or item.get("parent_directory_id") in db.private_dirs() \
+                    or item.get("parent_directory_id") in set(db.hidden("nowatch_dirs")):
+                return self._deny()
+            dur = dur or float(item.get("duration") or 0)
+            if pos < 0 or (dur and pos > dur + 60):
+                return self._deny(400)
+            from utils import webui
+            done = bool(dur) and pos >= dur * webui.DONE_AT
+            db.save_progress(item["uuid"], 0 if done else pos, done)
+            self._deny(204)
+        finally:
+            db.close_thread_connection()
+
     def _login(self, error: str = "", code: int = 200):
-        body = ('<form method="post" action="/login"><h1>Media Vault</h1><p class="m" style="text-align:center">'
-                'Enter the password you set in Settings \u203A Streaming.</p>'
-                '<input type="password" name="password" autocomplete="current-password" placeholder="Password" autofocus required>'
-                '<button type="submit">Open library</button>'
-                + (f'<p class="err">{html.escape(error)}</p>' if error else "") + "</form>")
-        data = _page("Media Vault", body)
+        from utils import webui
+        data = webui.login(error)
         self.send_response(code)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
@@ -229,8 +219,11 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._send(_MANIFEST, "application/manifest+json")
             if path == "/icon.png":
                 return self._file(str(ICON), "image/png") if ICON.exists() else self._deny()
-            if path in ("/hls.min.js", "/player.js"):
-                data = (WEB / "hls.min.js").read_bytes() if path == "/hls.min.js" else _PLAYER_JS
+            if path in ("/hls.min.js", "/player.js", "/style.css"):
+                from utils import webui
+                if path == "/style.css":
+                    return self._send(webui.CSS.encode(), "text/css; charset=utf-8", cache=True)
+                data = (WEB / "hls.min.js").read_bytes() if path == "/hls.min.js" else webui.PLAYER_JS
                 return self._send(data, "text/javascript", cache=True)
             if path in ("/", ""):                  # the address to remember: signs you in, then opens the library
                 if self._cookie_ok():
@@ -241,9 +234,17 @@ class _Handler(BaseHTTPRequestHandler):
                 return self._deny()
             if self._remote() and not self._cookie_ok():
                 return self._redirect("/")
+            from utils import webui
+            pages = webui.Pages(self.server.token)
+            arg = lambda k: (q.get(k) or [""])[0][:200]
             if len(parts) == 1:
-                return self._library((q.get("tab") or [""])[0])
+                return self._html(pages.library(arg("tab"), arg("q"), arg("folder")))
             kind, uid = parts[1], parts[2] if len(parts) > 2 else ""
+            if kind == "set" and re.fullmatch(r"-?\d{1,12}", uid):
+                data = pages.box_set(int(uid))
+                return self._html(data) if data else self._deny()
+            if kind == "folderpic" and uid.isdigit() and len(parts) == 4:
+                return self._folder_picture(int(uid), parts[3])
             if not _UUID.match(uid):
                 return self._deny()
             item = db.get_media(uid)
@@ -255,14 +256,25 @@ class _Handler(BaseHTTPRequestHandler):
                 from utils import scraper
                 p = scraper.cover_path(item)
                 return self._file(str(p), "image/webp") if p.exists() else self._send(_BLANK, "image/svg+xml")
-            if kind == "hls" and len(parts) == 5:
-                f = self.server.transcoder.file((uid, parts[3]), item["file_path"], parts[3], parts[4])
+            if kind == "wide":                     # a wide picture: banner, Gallery, the video's frame, else the cover
+                return self._wide(item)
+            if kind == "hls" and len(parts) == 6 and parts[4].isdigit():
+                start = int(parts[4])
+                f = self.server.transcoder.file((uid, parts[3], start), item["file_path"], parts[3], parts[5], start)
                 if not f:
                     return self._deny()
                 return self._file(str(f), "application/vnd.apple.mpegurl" if f.suffix == ".m3u8" else "video/mp2t",
                                   cache=f.suffix == ".ts")
+            if kind == "sub" and len(parts) == 4 and parts[3].isdigit():
+                subs = webui.subtitles(item)
+                n = int(parts[3])
+                data = webui.subtitle_vtt(subs[n], item["file_path"]) if n < len(subs) else None
+                return self._send(data, "text/vtt; charset=utf-8") if data else self._deny()
+            if kind == "series" and item["media_type"] == "show":
+                return self._html(pages.series(item))
             if kind == "watch":
-                return self._watch(item, (q.get("q") or [""])[0])
+                return self._html(pages.watch(item, arg("q"), arg("t"), self._remote(),
+                                              self.server.transcoder.available(), webui.subtitles(item)))
             return self._deny()
         except (BrokenPipeError, ConnectionResetError):
             pass
@@ -283,49 +295,26 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _header(self, current: str = "") -> str:
-        return f'<a href="/{self.server.token}/" class="on">Media Vault</a>'
+    def _html(self, data: bytes):
+        self._send(data, "text/html; charset=utf-8")
 
-    def _library(self, tab: str):
-        t = self.server.token
-        hidden = set(db.private_dirs())                     # private tabs never show here
-        dirs = [d for d in db.list_directories() if d["id"] not in hidden]
-        tab_id = int(tab) if tab.isdigit() and any(d["id"] == int(tab) for d in dirs) else None
-        tabs = [f'<a href="/{t}/"{" class=on" if tab_id is None else ""}>All</a>'] + [
-            f'<a href="/{t}/?tab={d["id"]}"{" class=on" if d["id"] == tab_id else ""}>{html.escape(d["tab_name"])}</a>'
-            for d in dirs]
-        cards = []
-        for c in db.list_library(tab_id, sets=False):
-            if c.get("parent_directory_id") in hidden:
-                continue
-            uid = c["uuid"]
-            cards.append(f'<a class="c" href="/{t}/watch/{uid}"><img loading="lazy" alt="" src="/{t}/poster/{uid}">'
-                         f'<p>{html.escape(c["title"])}</p></a>')
-        self._send(_page("Media Vault", f'<nav class="tabs">{"".join(tabs)}</nav><div class="grid">{"".join(cards)}</div>',
-                         self._header()), "text/html; charset=utf-8")
+    def _wide(self, item: dict):
+        from ui.dashboard import banner_for
+        from utils import scraper
+        for p in (banner_for({**item, "key": item["uuid"]}), scraper.thumb_path(item), scraper.fanart_path(item),
+                  scraper.cover_path(item)):
+            if p is not None and p.exists():
+                return self._file(str(p), "image/webp" if p.suffix == ".webp" else "image/jpeg", cache=True)
+        return self._send(_BLANK, "image/svg+xml")
 
-    def _watch(self, item: dict, quality: str):
-        """The player: the file itself, or converted (1080p / 720p / 480p) when ffmpeg is here. Away from home the
-        default is 720p (a home upload is slow); a file an iPhone cannot play converts at 1080p."""
-        from utils import transcode
-        t, uid = self.server.token, item["uuid"]
-        can = self.server.transcoder.available()
-        direct = transcode.plays_directly(item)
-        if quality not in QUALITY_NAMES or (quality != "orig" and not can):
-            quality = ("720" if self._remote() else "orig" if direct else "1080") if can else "orig"
-        src = f"/{t}/v/{uid}" if quality == "orig" else f"/{t}/hls/{uid}/{quality}/index.m3u8"
-        choices = "".join(f'<a href="/{t}/watch/{uid}?q={k}"{" class=on" if k == quality else ""}>{v}</a>'
-                          for k, v in QUALITY_NAMES.items() if k == "orig" or can)
-        note = ""
-        if quality == "orig" and not direct:
-            note = ('<p class="m">This file may not play in this browser. ' + (
-                "Pick 1080p or 720p to convert it as it plays." if can else
-                "Install ffmpeg in Media Vault (Settings \u203A Streaming) to convert it as it plays.") + "</p>")
-        body = (f'<div class="w"><video controls autoplay playsinline data-src="{src}"></video>'
-                f'<div class="q">{choices}</div><div class="t"><h2>{html.escape(item["title"])}</h2>{note}'
-                f'<p class="m">{html.escape(item["synopsis"] or "")}</p>'
-                f'<p><a href="/{t}/">\u2039 Library</a></p></div></div>')
-        self._send(_page(item["title"], body, self._header(), script=True), "text/html; charset=utf-8")
+    def _folder_picture(self, dir_id: int, rel: str):
+        """A folder card's own picture: only for a folder of a tab you can see, by its name in that folder."""
+        from ui.dashboard import folder_picture_path
+        d = db.get_directory(dir_id)
+        if not d or dir_id in db.private_dirs() or "/" in rel or "\\" in rel or rel in ("", ".", ".."):
+            return self._deny()
+        p = folder_picture_path(dir_id, rel)
+        return self._file(str(p), "image/webp", cache=True) if p.exists() else self._deny()
 
     def _file(self, path: str, ctype: str, cache: bool = False):
         """Range requests, so players can seek."""

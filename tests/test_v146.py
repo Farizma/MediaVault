@@ -145,11 +145,11 @@ class ServerTests(unittest.TestCase):
         with mock.patch.object(self.srv.transcoder, "available", return_value=True), \
                 mock.patch.object(self.srv.transcoder, "file", return_value=playlist) as f:
             r, body = self.req("GET", f"/{self.srv.token}/watch/{self.film}", headers={"Cookie": cookie})
-            self.assertIn(f"/hls/{self.film}/720/index.m3u8".encode(), body)     # away from home: 720p
+            self.assertIn(f"/hls/{self.film}/720/0/index.m3u8".encode(), body)   # away from home: 720p, from the start
             self.assertIn(b'src="/hls.min.js"', body)
-            r, body = self.req("GET", f"/{self.srv.token}/hls/{self.film}/720/index.m3u8", headers={"Cookie": cookie})
+            r, body = self.req("GET", f"/{self.srv.token}/hls/{self.film}/720/0/index.m3u8", headers={"Cookie": cookie})
         self.assertEqual((r.status, r.getheader("Content-Type")), (200, "application/vnd.apple.mpegurl"))
-        self.assertEqual(f.call_args[0][2:], ("720", "index.m3u8"))
+        self.assertEqual(f.call_args[0][2:], ("720", "index.m3u8", 0))
 
 
 class TranscodeTests(unittest.TestCase):
