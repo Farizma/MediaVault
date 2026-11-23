@@ -154,10 +154,16 @@ _local = threading.local()
 
 # ---------------------------------------------------------------- paths / ids
 
+_made_dirs: dict[str, Path] = {}
+
+
 def data_dir() -> Path:
     base = os.environ.get("LOCALAPPDATA") or str(Path.home() / ".local" / "share")
-    path = Path(base) / "MediaVault"
-    path.mkdir(parents=True, exist_ok=True)
+    path = _made_dirs.get(base)
+    if path is None:                   # made once: this is called for every picture of every card
+        path = Path(base) / "MediaVault"
+        path.mkdir(parents=True, exist_ok=True)
+        _made_dirs[base] = path
     return path
 
 

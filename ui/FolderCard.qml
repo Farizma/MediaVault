@@ -7,6 +7,7 @@ import QtQuick.Effects
 Item {
     id: root
     property var info: ({})
+    property bool load: true           // false: no pictures yet (a long list loads them as they scroll near)
     signal open()
     signal menu(var item, real x, real y)
     height: tile.height + 52
@@ -29,7 +30,7 @@ Item {
             anchors.fill: parent
             visible: false
             // your picture
-            Image { anchors.fill: parent; visible: root.info.picture !== ""; source: root.info.picture || ""
+            Image { anchors.fill: parent; visible: root.info.picture !== ""; source: root.load ? (root.info.picture || "") : ""
                 fillMode: Image.PreserveAspectCrop; asynchronous: true; sourceSize.width: 360; sourceSize.height: 360 }
             // a mosaic of covers: one fills the card, two split it, three or four make a 2 x 2
             Grid {
@@ -38,7 +39,7 @@ Item {
                 columns: root.covers.length > 1 ? 2 : 1
                 spacing: 2
                 Repeater {
-                    model: root.covers.length === 3 ? root.covers.concat([root.covers[0]]) : root.covers
+                    model: !root.load ? [] : root.covers.length === 3 ? root.covers.concat([root.covers[0]]) : root.covers
                     Image {
                         width: root.covers.length > 1 ? (art.width - 2) / 2 : art.width
                         height: root.covers.length > 2 ? (art.height - 2) / 2 : art.height
@@ -51,7 +52,7 @@ Item {
         Item { id: mask; anchors.fill: parent; visible: false; layer.enabled: true
             Rectangle { anchors.fill: parent; radius: tile.radius } }
         MultiEffect { source: art; anchors.fill: art; maskEnabled: true; maskSource: mask
-            visible: root.info.picture !== "" || root.covers.length > 0 }
+            visible: root.load && (root.info.picture !== "" || root.covers.length > 0) }
         // a soft shade at the bottom for All videos / Unsorted over their mosaic
         Rectangle { anchors.fill: parent; radius: tile.radius; visible: root.special
             gradient: Gradient { GradientStop { position: 0; color: "#33000000" } GradientStop { position: 1; color: "#B3000000" } } }

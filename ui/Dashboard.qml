@@ -853,9 +853,18 @@ Item {
                             readonly property var shownCards: (Backend.folderCards || []).filter(function(c) {
                                 return dash.query === "" || c.kind !== "folder" || c.name.toLowerCase().indexOf(dash.query.toLowerCase()) >= 0 })
                             readonly property int shown: shownCards.filter(function(c) { return c.kind === "folder" }).length
+                            // where this grid sits in the scrolling content (read again on every scroll): the cards
+                            // load their pictures only once they come near the screen, not all 100+ at once
+                            readonly property real topInView: { grid.contentY; grid.height; return folderGrid.mapToItem(grid.contentItem, 0, 0).y }
                             Repeater {
                                 model: dash.folderHome ? folderGrid.shownCards : []
-                                FolderCard { width: dash.folderCardW; info: modelData
+                                FolderCard { id: fcard; width: dash.folderCardW; info: modelData
+                                    property bool seen: false
+                                    readonly property bool near: folderGrid.topInView + y < grid.contentY + grid.height + 600
+                                                                 && folderGrid.topInView + y + height > grid.contentY - 600
+                                    onNearChanged: if (near) seen = true
+                                    Component.onCompleted: if (near) seen = true
+                                    load: seen
                                     onOpen: dash.openFolder(modelData.rel)
                                     onMenu: (item, x, y) => folderMenu.show(modelData, item, x, y) }
                             }
@@ -987,7 +996,7 @@ Item {
                         readonly property bool wideMissing: dash.landscape && thumb === ""
                         Image {    // a little larger than the card, and shifted against the tilt: depth inside the frame
                             anchors { fill: parent; margins: -10 }
-                            source: dash.landscape && thumb !== "" ? thumb : poster
+                            source: (dash.landscape && thumb ? thumb : poster) || ""     // a recycled card has no data for a moment
                             asynchronous: true
                             fillMode: Image.PreserveAspectCrop
                             opacity: art.wideMissing ? 0.35 : 1
@@ -997,7 +1006,7 @@ Item {
                         Image {
                             visible: art.wideMissing && poster !== ""
                             anchors { fill: parent; topMargin: 8; bottomMargin: 8 }
-                            source: visible ? poster : ""; asynchronous: true
+                            source: visible ? poster || "" : ""; asynchronous: true
                             fillMode: Image.PreserveAspectFit
                             sourceSize.height: 340
                         }

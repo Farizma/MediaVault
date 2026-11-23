@@ -37,7 +37,8 @@ class LandscapeTests(unittest.TestCase):
         self.d = make_dashboard()
 
     def thumbs(self):
-        return {r["key"]: r["thumb"] for r in self.d.library._rows}
+        lib = self.d.library
+        return {r["key"]: lib.art_of(i)["thumb"] for i, r in enumerate(lib._rows)}
 
     def test_layout_is_per_tab(self):
         self.d.reload()

@@ -557,9 +557,13 @@ class LibraryModel(QAbstractListModel):
               BADGE: "badge", VIDEO: "video", DURATION: "duration_ms", OFFLINE: "offline", SPINE: "spine", YEAR: "year",
               DISC: "disc", SUBTITLE: "subtitle", FAV: "fav", WATCH: "watch", THUMB: "thumb"}
 
+    ART = {POSTER: "poster", SPINE: "spine", DISC: "disc", THUMB: "thumb"}   # looked up when a card is first drawn
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._rows: list[dict] = []
+        self._art: dict[str, dict] = {}   # key -> its pictures, filled as the grid asks (GridView asks only for what it shows)
+        self._files = FolderIndex()
         self.view: dict = {}           # search / sort / filters (Dashboard.setView)
         self.spines = False            # look up spine art only while the shelf view is on (it costs file checks)
         self.landscape = False         # a Landscape tab: look up each card's 16:9 thumbnail (it costs file checks)
@@ -587,6 +591,8 @@ class LibraryModel(QAbstractListModel):
     def data(self, index, role=Qt.DisplayRole):
         if not index.isValid() or not 0 <= index.row() < len(self._rows):
             return None
+        if role in self.ART:
+            return self.art_of(index.row())[self.ART[role]]
         field = self.FIELDS.get(role)
         value = self._rows[index.row()][field] if field else None
         return scraper.untag(value) if isinstance(value, str) else value     # titles from before 1.0.6 too
@@ -599,11 +605,30 @@ class LibraryModel(QAbstractListModel):
         row["watch"] = card["key"] in self._marks.get("watchlist", ())
         return row
 
-    def _card_row(self, card: dict, online: bool, files: "FolderIndex") -> dict:
+    def art_of(self, i: int) -> dict:
+        """Row i's pictures (poster, spine, disc, thumb), found on the first ask: building a 6,000-card tab no
+        longer means checking 30,000 files before the grid can draw."""
+        row = self._rows[i]
+        if "_card" not in row:             # a row that brings its own pictures
+            return {k: row.get(k) or "" for k in self.ART.values()}
+        got = self._art.get(row["key"])
+        if got is None:
+            got = self._art[row["key"]] = self._find_art(row["_card"], not row["offline"], self._files)
+        return got
+
+    def _find_art(self, card: dict, online: bool, files: "FolderIndex") -> dict:
+        if not online:
+            return {"poster": "", "spine": "", "disc": "", "thumb": ""}
         art = art_item(card)
         poster = scraper.cover_path(art, files.has)
         if art is not card and not files.has(poster):
             poster = scraper.cover_path(card, files.has)        # box set without its own poster: the first film's
+        spine = scraper.spine_path(art, files.has) if self.spines else None
+        t = wide_picture(card, art, files) if self.landscape else None
+        return {"poster": files.url(poster) if files.has(poster) else "", "spine": files.url(spine) if spine else "",
+                "disc": self._disc(art, files), "thumb": files.url(t) if t else ""}
+
+    def _card_row(self, card: dict, online: bool, files: "FolderIndex") -> dict:
         shows, films = card["episodes"], card.get("films", 0)
         if films:
             progress = card["watched"] / films
@@ -613,15 +638,11 @@ class LibraryModel(QAbstractListModel):
             progress = card["watched"] / shows if shows else 0.0
         meta = " · ".join(x for x in ((card["release_date"] or "")[:4], card["resolution"] if not films else "",
                                       duration_label(card["duration"]) if not (shows or films) else "") if x)
-        spine = scraper.spine_path(art, files.has) if (self.spines and online) else None
         title, subtitle = display_titles(card, self.title_pref)
-        return {"key": card["key"], "title": title, "subtitle": subtitle, "meta": meta,
-                "poster": files.url(poster) if online and files.has(poster) else "", "progress": progress,
+        return {"key": card["key"], "title": title, "subtitle": subtitle, "meta": meta, "_card": card, "progress": progress,
                 "done": bool(card["is_completed"]), "badge": f"{shows} episodes" if shows else f"{films} films" if films else "",
                 "video": file_url(card["file_path"], bust=False), "duration_ms": int((card["duration"] or 0) * 1000),
-                "offline": not online, "spine": files.url(spine) if spine else "", "year": (card["release_date"] or "")[:4],
-                "disc": self._disc(art, files) if online else "",
-                "thumb": files.url(t) if (self.landscape and online and (t := wide_picture(card, art, files))) else ""}
+                "offline": not online, "year": (card["release_date"] or "")[:4]}
 
     @staticmethod
     def _disc(card, files: "FolderIndex") -> str:
@@ -654,13 +675,15 @@ class LibraryModel(QAbstractListModel):
         shown = library_view(shown, index, **self.view, marked=marked) if (self.view or marked is not None) else shown
         files = FolderIndex()               # one listing per art folder instead of several file checks per card
         rows = [self._row(c, online.get(c["parent_directory_id"], True), files) for c in shown]
-        if not fresh and rows == self._rows:
-            return cards                   # nothing changed (View More or Settings closed without an edit)
+        old_art = self._art
+        self._files, self._art = files, {}  # pictures are looked up again, as the grid draws (new art shows)
         if not fresh and [r["key"] for r in rows] == [r["key"] for r in self._rows]:
             changed = [i for i, (a, b) in enumerate(zip(rows, self._rows)) if a != b]
             self._rows = rows  # same cards: refresh in place so the grid keeps its scroll position
+            # cards whose pictures were already drawn: look again, a cover may be new (only those, not all 6,000)
+            changed += [i for i, r in enumerate(rows) if r["key"] in old_art and self.art_of(i) != old_art[r["key"]]]
             if changed:        # only the cards that changed redraw
-                self.dataChanged.emit(self.index(changed[0]), self.index(changed[-1]))
+                self.dataChanged.emit(self.index(min(changed)), self.index(max(changed)))
             return cards
         # another change while the last one is still animating: interrupted view transitions can strand cards
         # half-faded or out of place, so rebuild the list at once instead
@@ -1284,12 +1307,20 @@ class Dashboard(QObject):
         if not self.library.landscape:
             return
         tried = self.__dict__.setdefault("_thumb_tried", set())
-        todo = [r["key"] for r in self.library._rows if not r["thumb"] and not r["offline"]
-                and not r["key"].startswith("set:") and r["key"] not in tried]
-        if not todo or getattr(self, "_thumb_job", None):
+        cards = [r["_card"] for r in self.library._rows if not r["offline"] and not r["key"].startswith("set:")
+                 and r["key"] not in tried]
+        if not cards or getattr(self, "_thumb_job", None):
             return
-        tried.update(todo)
-        self._make_thumbs([(k, it) for k in todo if (it := self._target(k))])
+        tried.update(c["key"] for c in cards)     # each card is checked once a session
+
+        def find():       # thousands of file checks: off the interface's thread, so the tab opens at once
+            try:
+                files = FolderIndex()
+                todo = [c["key"] for c in cards if not wide_picture(c, art_item(c), files)]
+                self._make_thumbs([(k, it) for k in todo if (it := self._target(k))])
+            except Exception:
+                log.warning("looking for missing thumbnails", exc_info=True)
+        threading.Thread(target=find, daemon=True, name="thumb-check").start()
 
     def _make_thumbs(self, items: list):
         """[(key, item)]: a frame from each video as its thumbnail, in the background; the library refreshes after."""
