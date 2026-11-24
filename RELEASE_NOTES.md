@@ -1,12 +1,23 @@
-## Media Vault 1.4.2
+## Media Vault 1.4.3
 
 **Install or update:** Settings › About & Updates › Download & install (it installs inside Media Vault and reopens),
-or download `MediaVault_v1.4.2_setup.exe` below.
+or download `MediaVault_v1.4.3_setup.exe` below.
 
 **Windows SmartScreen:** this build is not code-signed yet, so Windows may say it "protected your PC".
 Choose *More info* › *Run anyway*. The SHA-256 of the setup file is listed below.
 
-This release includes 1.4.0, 1.4.1 and 1.4.2.
+### 1.4.3: fast with big libraries
+- **Tabs open at once, even with thousands of videos.** A 6,000-video tab used to freeze the window for about a
+  second on every switch; the cards are now built without looking up every picture first, and the pictures of the
+  cards on screen are found as they are drawn.
+- **Pictures are ready before you get to them.** After updating, Media Vault prepares a card-sized copy of every
+  cover and thumbnail in the background (a "Preparing pictures" bar shows the first time; it takes a few minutes for a
+  big library) and keeps the first screen of every tab in memory. Cards show up almost at once as you scroll, and going back
+  to a tab is instant. Up to about 1 GB of memory is used for pictures.
+- **Artists and other folder-card tabs** load each folder's pictures as it scrolls near, not all at once.
+- The log notes how long each tab took to build, to track down any slowness.
+
+1.4.2 also brought everything from 1.4.0 and 1.4.1:
 
 ### New
 - **Watch away from home.** Settings › Streaming › Remote access lets your iPhone or another computer reach Media

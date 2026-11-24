@@ -68,3 +68,66 @@ class BigLibraryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CardCacheTests(unittest.TestCase):
+    def setUp(self):
+        from PySide6.QtGui import QGuiApplication
+        QGuiApplication.instance() or QGuiApplication([])
+        from PIL import Image
+        self.dir = Path(tempfile.mkdtemp()) / "アーティスト 100%"
+        self.dir.mkdir()
+        self.cover = self.dir / "cover.webp"
+        Image.new("RGB", (1200, 1800), (200, 30, 60)).save(self.cover, "WEBP")
+        self.wide = self.dir / "wide.webp"
+        Image.new("RGB", (1440, 810), (20, 30, 160)).save(self.wide, "WEBP")
+
+    def test_address_round_trip(self):
+        from utils import cardcache
+        u = cardcache.url(self.cover)
+        self.assertTrue(u.startswith("image://card/"))
+        self.assertNotIn("/", u[len("image://card/"):])                  # one segment, no escaping trouble
+        self.assertEqual(cardcache.local_path(u), str(self.cover))
+        from PySide6.QtCore import QUrl
+        self.assertEqual(cardcache.local_path(QUrl.fromLocalFile(str(self.cover)).toString()), str(self.cover).replace(os.sep, "/"))
+
+    def test_card_sized_copy_then_memory(self):
+        from PySide6.QtCore import QSize
+        from utils import cardcache
+        cache = cardcache.Cache()
+        path, mtime = cardcache.parse(cardcache.url(self.cover)[len("image://card/"):])
+        img = cache.get(path, mtime, 600, 900)                            # 400 x 600 at 150 % scaling
+        self.assertEqual((img.width(), img.height()), (600, 900))
+        self.assertTrue(cache.has_copy(path, mtime, 600, 900))
+        with mock.patch.object(cardcache, "decode") as dec:
+            self.assertIs(cache.get(path, mtime, 600, 900), img)          # memory: no disk, no decode
+            cache.clear()
+            again = cache.get(path, mtime, 600, 900)                      # the small copy: no decode of the original
+            dec.assert_not_called()
+        self.assertEqual(again.size(), QSize(600, 900))
+        wide = cache.get(str(self.wide), 0, 400, 600)                     # covers the card, shape kept
+        self.assertEqual((wide.width(), wide.height()), (1067, 600))
+        big = cache.get(path, mtime, 0, 0)                                # View More: the original, no copy
+        self.assertEqual(big.width(), 1200)
+
+    def test_memory_budget(self):
+        from utils import cardcache
+        cache = cardcache.Cache(budget=3 * 400 * 600 * 4)
+        for i in range(6):
+            cache.get(str(self.cover), i, 400, 600)
+        self.assertLessEqual(cache._bytes, cache.budget)
+        self.assertEqual(len(cache._ram), 3)
+
+    def test_provider_and_warm(self):
+        from PySide6.QtCore import QSize
+        from utils import cardcache
+        u = cardcache.url(self.cover)
+        img = cardcache.CardProvider().requestImage(u[len("image://card/"):], QSize(), QSize(400, 600))
+        self.assertEqual((img.width(), img.height()), (400, 600))
+        bad = cardcache.CardProvider().requestImage("nonsense", QSize(), QSize(400, 600))
+        self.assertEqual(bad.width(), 1)
+        p, m = cardcache.parse(cardcache.url(self.wide)[len("image://card/"):])
+        got = cardcache.warm([(p, m, 640, 360, True), (p, m, 960, 540, False)], workers=2)
+        self.assertEqual(got["made"], 2)
+        self.assertEqual(got["in_memory"], 1)
+        self.assertEqual(cardcache.warm([(p, m, 640, 360, False)])["made"], 0)

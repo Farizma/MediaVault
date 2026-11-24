@@ -14,7 +14,7 @@ from pathlib import Path
 from PySide6.QtCore import Property, QAbstractListModel, QModelIndex, QObject, Qt, QTimer, QUrl, Signal, Slot
 
 import database as db
-from utils import alttitles, backup_manager, health, hw_accelerator, media_probe, scraper, streaming
+from utils import alttitles, backup_manager, cardcache, health, hw_accelerator, media_probe, scraper, streaming
 from PIL import Image, ImageOps
 
 from . import dvd_box, file_url, pick_folder, pick_image
@@ -176,7 +176,7 @@ def folder_cards(dir_id: int, root: str, items: list[dict], rows: list[dict], lo
         for it in sorted(its, key=lambda i: (i.get("added_at") or "", i["title"].lower()), reverse=True):
             for p in (scraper.cover_path(it, files.has), scraper.thumb_path(it)):
                 if files.has(p):
-                    out.append(files.url(p))
+                    out.append(files.card(p))
                     break
             if len(out) >= FOLDER_COVERS:
                 break
@@ -185,7 +185,7 @@ def folder_cards(dir_id: int, root: str, items: list[dict], rows: list[dict], lo
     def card(rel, name, its, kind):
         pic = folder_picture_path(dir_id, rel)
         return {"rel": rel, "name": name, "count": len(its), "fav": rel in favs, "kind": kind,
-                "picture": file_url(pic) if pic.exists() else "", "covers": covers(its),
+                "picture": cardcache.url(pic) if pic.exists() else "", "covers": covers(its),
                 "recent": max((i.get("added_at") or "" for i in its), default="")}
     out = [card(r["rel"], r["name"], by_top.get(r["rel"], []), "folder") for r in rows]
     out.sort(key=lambda c: c["name"].casefold())
@@ -198,6 +198,55 @@ def folder_cards(dir_id: int, root: str, items: list[dict], rows: list[dict], lo
     if loose:
         head.append(card("~", "Unsorted", by_top.get("~", []), "loose"))
     return head + out
+
+
+def card_jobs(dpr: float, first: int = cardcache.FIRST_SCREEN) -> list[tuple]:
+    """Every card picture of every tab at the size its card draws it (sourceSize x display scaling), for
+    cardcache.warm: (path, mtime, w, h, into_memory). The first `first` cards of each tab go into memory."""
+    land, fold = set(db.hidden("landscape_dirs")), set(db.hidden("folders_dirs"))
+    files, jobs, seen = FolderIndex(), [], {}
+
+    def add(path, w, h, keep):
+        if not path or not files.has(path):
+            return
+        p = os.fspath(path)
+        k = (p, w, h)
+        if k in seen:                       # one job per picture and size; into memory if any tab wants it there
+            if keep and not jobs[seen[k]][4]:
+                jobs[seen[k]] = jobs[seen[k]][:4] + (True,)
+            return
+        seen[k] = len(jobs)
+        mtime = files._listing(os.path.dirname(p)).get(os.path.normcase(os.path.basename(p)), 0)
+        jobs.append((p, mtime, round(w * dpr), round(h * dpr), keep))
+
+    index = db.search_index()
+    for d in [None] + db.list_directories():
+        tab = -1 if d is None else d["id"]
+        cards = db.list_library(None if d is None else tab)
+        if d is None:
+            cards = db.visible_in_all(cards, index)
+        cards = sorted(cards, key=lambda c: (c["title"] or "").casefold())   # the grid's default order (A-Z)
+        if d is not None and tab in fold:   # folder cards: your picture, else a mosaic of covers
+            root = d["folder_path"]
+            tops = sorted({os.path.relpath(c["file_path"], root).split(os.sep, 1)[0]
+                           for c in cards if os.sep in os.path.relpath(c["file_path"], root)}, key=str.casefold)
+            for n, fc in enumerate(folder_cards(tab, root, cards, [{"rel": t, "name": t} for t in tops], True, "name")):
+                keep = n < first
+                add(cardcache.local_path(fc["picture"]), 360, 360, keep) if fc["picture"] else None
+                for u in fc["covers"]:
+                    add(cardcache.local_path(u), 200, 200, keep)
+        for n, c in enumerate(cards):
+            art, keep = art_item(c), n < first
+            if tab in land:
+                wide = wide_picture(c, art, files)
+                if wide:
+                    add(wide, 640, 360, keep)
+                    continue
+            poster = scraper.cover_path(art, files.has)
+            if art is not c and not files.has(poster):
+                poster = scraper.cover_path(c, files.has)
+            add(poster, 400, 600, keep)
+    return jobs
 
 
 def qr_data_uri(text: str) -> str:
@@ -538,6 +587,11 @@ class FolderIndex:
         p = os.fspath(path)
         return os.path.normcase(os.path.basename(p)) in self._listing(os.path.dirname(p))
 
+    def card(self, path) -> str:
+        """image://card/ address (a card-sized, cached copy; see utils/cardcache), from the listing."""
+        p = os.fspath(path)
+        return cardcache.url(p, self._listing(os.path.dirname(p)).get(os.path.normcase(os.path.basename(p)), 0))
+
     def url(self, path) -> str:
         """file:/// URL with ?v=<mtime>, like file_url, from the listing (no extra disk check)."""
         p = os.fspath(path)
@@ -625,8 +679,8 @@ class LibraryModel(QAbstractListModel):
             poster = scraper.cover_path(card, files.has)        # box set without its own poster: the first film's
         spine = scraper.spine_path(art, files.has) if self.spines else None
         t = wide_picture(card, art, files) if self.landscape else None
-        return {"poster": files.url(poster) if files.has(poster) else "", "spine": files.url(spine) if spine else "",
-                "disc": self._disc(art, files), "thumb": files.url(t) if t else ""}
+        return {"poster": files.card(poster) if files.has(poster) else "", "spine": files.card(spine) if spine else "",
+                "disc": self._disc(art, files), "thumb": files.card(t) if t else ""}
 
     def _card_row(self, card: dict, online: bool, files: "FolderIndex") -> dict:
         shows, films = card["episodes"], card.get("films", 0)
@@ -649,7 +703,7 @@ class LibraryModel(QAbstractListModel):
         """Disc art only (your own or scraped); the card falls back to its poster itself."""
         for p in (scraper.custom_disc_path(card), scraper.disc_path(card)):
             if files.has(p):
-                return files.url(p)
+                return files.card(p)
         return ""
 
     def reload(self, dir_id, fresh: bool = False) -> list[dict]:
@@ -1377,12 +1431,14 @@ class Dashboard(QObject):
             return
         self._tab = tab_id
         self._bb_keys = []  # new tab, new random picks
+        t = time.perf_counter()
         self._apply_layout()
         self._refresh_subtabs()
         cards = self.library.reload(None if tab_id < 0 else tab_id, fresh=True)
         self._auto_thumbs()
         self._refresh_billboard(cards)
         self._refresh_continue(cards)
+        log.info("tab %s: %d cards, built in %d ms", tab_id, self.library.rowCount(), (time.perf_counter() - t) * 1000)
 
     # -- Continue Watching: what you stopped part-way, newest first (off in Settings, or per tab in its Configure)
     @Property("QVariantList", notify=continueChanged)
@@ -1403,7 +1459,7 @@ class Dashboard(QObject):
                 dur, pos = c["duration"] or 0, c["last_position"] or 0
                 left = duration_label(max(0, dur - pos)) if pos > 10 and dur else ""
                 what = db.episode_suffix(c["title"]).strip() if c["episodes"] else ""
-                rows.append({"key": c["key"], "title": display_titles(c, pref)[0], "poster": files.url(poster) if files.has(poster) else "",
+                rows.append({"key": c["key"], "title": display_titles(c, pref)[0], "poster": files.card(poster) if files.has(poster) else "",
                              "progress": min(1.0, pos / dur) if dur and pos > 10 else 0.0,
                              "note": " \u00B7 ".join(x for x in (what or ("Next up" if pos <= 10 else ""), f"{left} left" if left else "") if x)})
         if rows != self._continue:
@@ -1429,7 +1485,7 @@ class Dashboard(QObject):
                     break
                 poster = scraper.cover_path(art_item(c), files.has)
                 rows.append({"key": c["key"], "title": display_titles(c, pref)[0], "progress": 0.0, "note": age,
-                             "poster": files.url(poster) if files.has(poster) else ""})
+                             "poster": files.card(poster) if files.has(poster) else ""})
         if rows != self._recent:
             self._recent = rows
             self.recentChanged.emit()
@@ -1668,8 +1724,43 @@ class Dashboard(QObject):
         self._insights_visible = db.get_setting("show_insights") == "1"
         self.insightsVisibleChanged.emit()
         self.needsSetup = False  # switches Main.qml from the wizard to the dashboard
+        t = time.perf_counter()
         self.reload()
+        log.info("library: %d cards on screen, built in %d ms", self.library.rowCount(), (time.perf_counter() - t) * 1000)
         self.mark_ready()        # the cards and the carousel are in: the opening vault can open
+        self.warm_cards()
+
+    def warm_cards(self):
+        """Every card picture made card-sized (once; kept in cache/cards) and the first screen of every tab loaded
+        into memory, in the background, so browsing never waits for a picture to shrink."""
+        if getattr(self, "_warming", False):
+            return
+        self._warming = True
+        try:
+            from PySide6.QtGui import QGuiApplication
+            screen = QGuiApplication.primaryScreen()
+            dpr = screen.devicePixelRatio() if screen else 1.0
+        except Exception:
+            dpr = 1.0
+
+        def work():
+            from utils import progress
+            try:
+                t = time.perf_counter()
+                jobs = card_jobs(dpr)
+                missing = sum(1 for j in jobs if not cardcache.CACHE.has_copy(*j[:4]))
+                listed = time.perf_counter() - t
+                if missing > 50:            # the first start after updating (or a big new folder): show it
+                    with progress.task("Preparing pictures", total=len(jobs)) as task:
+                        got = cardcache.warm(jobs, task)
+                else:
+                    got = cardcache.warm(jobs)
+                log.info("card pictures ready: %s (listed in %.1f s, %d new, display scaling %.2f)", got, listed, missing, dpr)
+            except Exception:
+                log.warning("preparing card pictures", exc_info=True)
+            finally:
+                self._warming = False
+        threading.Thread(target=work, daemon=True, name="warm-cards").start()
 
     def _refresh_billboard(self, cards: list[dict]):
         deck = billboard_deck(cards, self._bb_keys)
@@ -3261,8 +3352,7 @@ class Dashboard(QObject):
     @Slot(str, result=str)
     def tintOf(self, url: str) -> str:
         """Animated themes: the colour of a poster / fanart (a file:// URL from the model)."""
-        from PySide6.QtCore import QUrl
-        path = QUrl(url).toLocalFile()
+        path = cardcache.local_path(url)
         return tint_of(path) if path else ""
 
     # -- Streaming: browsers on the Wi-Fi, Chromecast, AirPlay

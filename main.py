@@ -485,6 +485,8 @@ def main() -> int:
     QQuickStyle.setStyle("Basic")  # the only style that lets every control be re-skinned
     engine = QQmlApplicationEngine()
     engine.addImageProvider("frames", app.frames)
+    from utils import cardcache
+    engine.addImageProvider("card", cardcache.CardProvider())     # card-sized covers, cached (see utils/cardcache)
     ctx = engine.rootContext()
     app.qml_context = ctx
     for name, obj in (("Theme", ui.THEME), ("Backend", app.dashboard), ("Library", app.library),
